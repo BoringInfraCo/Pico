@@ -1,0 +1,7 @@
+//! End-to-end integration tests: the init/scan golden path and the
+//! offline guarantee.
+
+#[path = "integration/empty_scan_test.rs"]
+mod empty_scan_test;
+#[path = "integration/offline_test.rs"]
+mod offline_test;

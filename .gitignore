@@ -1,0 +1,4 @@
+/target
+.pico/
+.history/
+docs/internal/

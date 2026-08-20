@@ -1,0 +1,19 @@
+[package]
+name = "pico"
+version = "0.1.0"
+edition = "2021"
+description = "Pico discovers the dangerous paths your AI agents create."
+license = "Apache-2.0"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
