@@ -1,4 +1,6 @@
 /target
 .pico/
 .history/
-docs/internal/
+docs/internal/**
+!docs/internal/sprints/
+!docs/internal/sprints/**
