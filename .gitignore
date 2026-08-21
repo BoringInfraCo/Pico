@@ -2,5 +2,9 @@
 .pico/
 .history/
 docs/internal/**
+!docs/internal/PRODUCT_DEFINITION.md
+!docs/internal/TECHNICAL.md
+!docs/internal/ARCHITECTURE.md
+!docs/internal/ROADMAP.md
 !docs/internal/sprints/
 !docs/internal/sprints/**
