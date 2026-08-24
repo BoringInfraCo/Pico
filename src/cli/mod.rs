@@ -72,5 +72,16 @@ fn run_scan() -> Result<(), PicoError> {
     if let Some(permission) = result.bash_permission {
         println!("Effective Bash: {permission}");
     }
+    println!(
+        "GitHub MCP:    {}",
+        if result.github_mcp_observed {
+            "OBSERVED"
+        } else {
+            "NOT OBSERVED"
+        }
+    );
+    if let Some(strength) = result.influence_strength {
+        println!("Influence:     {strength}");
+    }
     Ok(())
 }

@@ -1,0 +1,10 @@
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "type": "remote",
+        "url": "https://example.invalid/github-mcp-server"
+      }
+    }
+  }
+}

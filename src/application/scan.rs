@@ -25,6 +25,8 @@ pub struct ScanResult {
     pub evidence_count: u64,
     pub finding_count: u64,
     pub bash_permission: Option<String>,
+    pub github_mcp_observed: bool,
+    pub influence_strength: Option<String>,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -164,6 +166,215 @@ impl ScanService {
             bash_permission = Some(capability.permission.as_str().to_string());
         }
 
+        let mut github_mcp_observed = false;
+        let mut influence_strength = None;
+        if let Some(actor) = actor_resource.as_ref() {
+            for surface in &discovered.github_surfaces {
+                github_mcp_observed = true;
+                let server_key = "mcp:github:official".to_string();
+                let mut server_resource = match resource_repo.get_by_canonical_key(&server_key)? {
+                    Some(resource) => resource,
+                    None => Resource::new(&server_key, "mcp_server", "github", "GitHub MCP")?,
+                };
+                server_resource.last_observed_at = chrono::Utc::now();
+                server_resource.metadata = Some(serde_json::json!({
+                    "transport": surface.server.transport.as_str(),
+                    "enabled": surface.server.enabled,
+                    "identity": surface.server.safe_identity,
+                    "endpoint": surface.server.safe_endpoint,
+                    "environment_keys": surface.server.environment_keys,
+                    "discovery": "opencode_v2_static",
+                }));
+                resource_repo.upsert(&server_resource)?;
+                observe_resource(
+                    &observation_repo,
+                    &scan.id,
+                    &server_resource,
+                    "github_mcp_adapter",
+                )?;
+                evidence_for_subject(
+                    &evidence_repo,
+                    &scan.id,
+                    EvidenceClass::Direct,
+                    "opencode_mcp_config",
+                    &surface.server.source_locator,
+                    &server_key,
+                    if surface.server.enabled {
+                        "supported GitHub MCP server configured and enabled"
+                    } else {
+                        "supported GitHub MCP server configured but disabled"
+                    },
+                    serde_json::json!({
+                        "transport": surface.server.transport.as_str(),
+                        "identity": surface.server.safe_identity,
+                        "endpoint": surface.server.safe_endpoint,
+                        "environment_keys": surface.server.environment_keys,
+                    }),
+                )?;
+                persist_influence_relationship(
+                    &relationship_repo,
+                    &evidence_repo,
+                    &observation_repo,
+                    &scan.id,
+                    actor,
+                    &server_resource,
+                    &format!("agent:opencode|configured_with|{server_key}"),
+                    "configured_with",
+                    if surface.server.enabled {
+                        RelationshipState::Derived
+                    } else {
+                        RelationshipState::Blocked
+                    },
+                    serde_json::json!({"enabled": surface.server.enabled, "transport": surface.server.transport.as_str()}),
+                    if surface.server.enabled {
+                        "OpenCode is configured with the supported GitHub MCP server"
+                    } else {
+                        "OpenCode has a supported GitHub MCP server configured but disabled"
+                    },
+                    &surface.server.source_locator,
+                )?;
+
+                if !surface.server.enabled {
+                    continue;
+                }
+
+                for tool in &surface.tools {
+                    let tool_key = format!("{server_key}:tool:{}", tool.name);
+                    let mut tool_resource = match resource_repo.get_by_canonical_key(&tool_key)? {
+                        Some(resource) => resource,
+                        None => Resource::new(&tool_key, "mcp_tool", "github", &tool.name)?,
+                    };
+                    tool_resource.last_observed_at = chrono::Utc::now();
+                    tool_resource.metadata = Some(serde_json::json!({
+                        "content_class": tool.content_class,
+                        "trust": tool.trust,
+                        "influence_strength": tool.influence_strength,
+                        "discovery_tier": tool.discovery_tier,
+                        "permission": tool.permission.as_str(),
+                        "permission_pattern": tool.permission_pattern,
+                    }));
+                    resource_repo.upsert(&tool_resource)?;
+                    observe_resource(
+                        &observation_repo,
+                        &scan.id,
+                        &tool_resource,
+                        "github_mcp_adapter",
+                    )?;
+                    evidence_for_subject(
+                        &evidence_repo,
+                        &scan.id,
+                        if tool.discovery_tier == "DECLARED" {
+                            EvidenceClass::Declared
+                        } else {
+                            EvidenceClass::Derived
+                        },
+                        "github_mcp_tool_contract",
+                        &surface.server.source_locator,
+                        &tool_key,
+                        &format!("GitHub MCP exposes relevant retrieval tool {}", tool.name),
+                        serde_json::json!({
+                            "tool": tool.name,
+                            "discovery_tier": tool.discovery_tier,
+                            "content_class": tool.content_class,
+                        }),
+                    )?;
+                    persist_influence_relationship(
+                        &relationship_repo,
+                        &evidence_repo,
+                        &observation_repo,
+                        &scan.id,
+                        &server_resource,
+                        &tool_resource,
+                        &format!("{server_key}|exposes|{tool_key}"),
+                        "exposes",
+                        RelationshipState::Derived,
+                        serde_json::json!({"discovery_tier": tool.discovery_tier}),
+                        &format!("GitHub MCP exposes {}", tool.name),
+                        &surface.server.source_locator,
+                    )?;
+                    let call_state = match tool.permission {
+                        discovery::PermissionAction::Allow | discovery::PermissionAction::Ask => {
+                            RelationshipState::Derived
+                        }
+                        discovery::PermissionAction::Deny => RelationshipState::Blocked,
+                        discovery::PermissionAction::Unknown => RelationshipState::Unknown,
+                    };
+                    persist_influence_relationship(
+                        &relationship_repo,
+                        &evidence_repo,
+                        &observation_repo,
+                        &scan.id,
+                        actor,
+                        &tool_resource,
+                        &format!("agent:opencode|can_call|{tool_key}"),
+                        "can_call",
+                        call_state,
+                        serde_json::json!({
+                            "permission": tool.permission.as_str(),
+                            "permission_pattern": tool.permission_pattern,
+                            "runtime_mode": "UNKNOWN",
+                        }),
+                        &format!(
+                            "OpenCode MCP permission for {} is {}",
+                            tool.name,
+                            tool.permission.as_str()
+                        ),
+                        &surface.server.source_locator,
+                    )?;
+                    let content_key = format!("source:{}", tool.content_class);
+                    let content_name = match tool.content_class {
+                        "github:public:issue-content" => "Public GitHub issue content",
+                        "github:public:pull-request-content" => {
+                            "Public GitHub pull-request content"
+                        }
+                        _ => "GitHub repository content",
+                    };
+                    let mut content_resource = match resource_repo
+                        .get_by_canonical_key(&content_key)?
+                    {
+                        Some(resource) => resource,
+                        None => {
+                            Resource::new(&content_key, "external_content", "github", content_name)?
+                        }
+                    };
+                    content_resource.last_observed_at = chrono::Utc::now();
+                    content_resource.metadata = Some(serde_json::json!({
+                        "trust": tool.trust,
+                        "influence_strength": tool.influence_strength,
+                        "content_class": tool.content_class,
+                    }));
+                    resource_repo.upsert(&content_resource)?;
+                    observe_resource(
+                        &observation_repo,
+                        &scan.id,
+                        &content_resource,
+                        "github_mcp_adapter",
+                    )?;
+                    influence_strength = Some(tool.influence_strength.to_string());
+                    persist_influence_relationship(
+                        &relationship_repo,
+                        &evidence_repo,
+                        &observation_repo,
+                        &scan.id,
+                        &tool_resource,
+                        &content_resource,
+                        &format!("{tool_key}|can_retrieve|{content_key}"),
+                        "can_retrieve",
+                        RelationshipState::Derived,
+                        serde_json::json!({
+                            "trust": tool.trust,
+                            "influence_strength": tool.influence_strength,
+                        }),
+                        &format!(
+                            "{} can retrieve externally controlled GitHub content",
+                            tool.name
+                        ),
+                        &surface.server.source_locator,
+                    )?;
+                }
+            }
+        }
+
         let completed = if discovered.problems.is_empty() {
             scan.complete()?
         } else {
@@ -186,6 +397,93 @@ impl ScanService {
             evidence_count,
             finding_count: 0,
             bash_permission,
+            github_mcp_observed,
+            influence_strength,
         })
     }
+}
+
+fn observe_resource(
+    observations: &ObservationRepo<'_>,
+    scan_id: &str,
+    resource: &Resource,
+    source: &str,
+) -> Result<(), PicoError> {
+    observations.insert(&Observation::new(
+        scan_id,
+        "resource",
+        &resource.id,
+        "present",
+        source,
+    )?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evidence_for_subject(
+    evidence: &EvidenceRepo<'_>,
+    scan_id: &str,
+    class: EvidenceClass,
+    source_type: &str,
+    locator: &str,
+    subject: &str,
+    observation: &str,
+    metadata: serde_json::Value,
+) -> Result<(), PicoError> {
+    let mut item = Evidence::new(
+        scan_id,
+        class,
+        source_type,
+        locator,
+        subject,
+        observation,
+        Sensitivity::Internal,
+    )?;
+    item.metadata = Some(metadata);
+    evidence.insert(&item)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_influence_relationship(
+    relationships: &RelationshipRepo<'_>,
+    evidence: &EvidenceRepo<'_>,
+    observations: &ObservationRepo<'_>,
+    scan_id: &str,
+    from: &Resource,
+    to: &Resource,
+    key: &str,
+    kind: &str,
+    state: RelationshipState,
+    metadata: serde_json::Value,
+    explanation: &str,
+    locator: &str,
+) -> Result<(), PicoError> {
+    let mut relationship = match relationships.get_by_canonical_key(key)? {
+        Some(relationship) => relationship,
+        None => Relationship::new(key, &from.id, &to.id, kind, state)?,
+    };
+    relationship.state = state;
+    relationship.last_observed_at = chrono::Utc::now();
+    relationship.metadata = Some(metadata.clone());
+    relationships.upsert(&relationship)?;
+    let mut item = Evidence::new(
+        scan_id,
+        EvidenceClass::Derived,
+        "github_mcp_influence",
+        locator,
+        key,
+        explanation,
+        Sensitivity::Internal,
+    )?;
+    item.metadata = Some(metadata);
+    evidence.insert(&item)?;
+    relationships.link_evidence(&relationship.id, &item.id)?;
+    let mut observation = Observation::new(
+        scan_id,
+        "relationship",
+        &relationship.id,
+        "observed",
+        "github_mcp_adapter",
+    )?;
+    observation.metadata = Some(serde_json::json!({"state": state.as_str()}));
+    observations.insert(&observation)
 }

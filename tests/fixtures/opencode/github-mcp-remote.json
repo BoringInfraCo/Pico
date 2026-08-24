@@ -1,0 +1,14 @@
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "type": "remote",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "headers": {"Authorization": "Bearer TEST_SECRET_SHOULD_NOT_PERSIST"}
+      }
+    }
+  },
+  "permissions": [
+    {"resource": "github_issue_read", "effect": "deny"}
+  ]
+}

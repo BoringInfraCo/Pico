@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::discovery::{
-    CapabilityScope, DiscoveryResult, ObservedActor, ObservedBashCapability, PermissionAction,
+    CapabilityScope, DiscoveryResult, McpTransport, ObservedActor, ObservedBashCapability,
+    ObservedMcpServer, PermissionAction,
 };
 use crate::shared::PicoError;
 
@@ -61,8 +62,156 @@ pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult
             }),
             Err(problem) => result.problems.push(problem),
         }
+        match parse_mcp_servers(&effective, &locators) {
+            Ok(servers) => {
+                result.mcp_servers = servers;
+                result.github_surfaces =
+                    crate::discovery::mcp::github::classify(&result.mcp_servers);
+            }
+            Err(problem) => result.problems.push(problem),
+        }
+        for surface in &mut result.github_surfaces {
+            for tool in &mut surface.tools {
+                let permission_name = format!("{}_{}", surface.server.name, tool.name);
+                let (permission, pattern) = resolve_mcp_permission(&effective, &permission_name);
+                tool.permission = permission;
+                tool.permission_pattern = pattern;
+            }
+        }
     }
     Ok(result)
+}
+
+fn parse_mcp_servers(
+    config: &Value,
+    locators: &[String],
+) -> Result<Vec<ObservedMcpServer>, String> {
+    let Some(mcp) = config.get("mcp") else {
+        return Ok(Vec::new());
+    };
+    let servers = mcp
+        .get("servers")
+        .and_then(Value::as_object)
+        .or_else(|| mcp.as_object());
+    let Some(servers) = servers else {
+        return Err("mcp must be an object".to_string());
+    };
+    let mut output = Vec::new();
+    for (name, value) in servers {
+        let Some(server) = value.as_object() else {
+            // V2 requires server objects. Legacy scalar values are ignored so
+            // an unrelated `mcp` setting cannot create an actor.
+            continue;
+        };
+        if !server.contains_key("type")
+            && !server.contains_key("command")
+            && !server.contains_key("url")
+        {
+            continue;
+        }
+        let transport = match server.get("type").and_then(Value::as_str) {
+            Some("local") | Some("stdio") => McpTransport::Stdio,
+            Some("remote") | Some("http") => McpTransport::Http,
+            _ if server.contains_key("command") => McpTransport::Stdio,
+            _ if server.contains_key("url") => McpTransport::Http,
+            _ => McpTransport::Unknown,
+        };
+        let enabled = server.get("disabled").and_then(Value::as_bool) != Some(true)
+            && server.get("enabled").and_then(Value::as_bool) != Some(false);
+        let (safe_command, safe_identity) = normalize_command(server.get("command"));
+        let safe_endpoint = server
+            .get("url")
+            .and_then(Value::as_str)
+            .map(normalize_endpoint);
+        let environment_keys = server
+            .get("environment")
+            .or_else(|| server.get("env"))
+            .and_then(Value::as_object)
+            .map(|env| env.keys().cloned().collect())
+            .unwrap_or_default();
+        let tool_declaration = extract_declaration(server, "tools");
+        let toolset_declaration = extract_declaration(server, "toolsets");
+        output.push(ObservedMcpServer {
+            name: name.clone(),
+            transport,
+            enabled,
+            source_locator: locators.join(","),
+            safe_identity,
+            safe_endpoint,
+            safe_command,
+            environment_keys,
+            tool_declaration,
+            toolset_declaration,
+        });
+    }
+    Ok(output)
+}
+
+fn normalize_command(value: Option<&Value>) -> (Option<String>, Option<String>) {
+    let parts = match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        Some(Value::String(command)) => vec![command.clone()],
+        _ => Vec::new(),
+    };
+    if parts.is_empty() {
+        return (None, None);
+    }
+    let identity = parts.iter().find_map(|part| {
+        let normalized = part.trim_end_matches('/');
+        let image = normalized.split(':').next().unwrap_or(normalized);
+        if image == "ghcr.io/github/github-mcp-server" || image == "github-mcp-server" {
+            Some(image.to_string())
+        } else {
+            None
+        }
+    });
+    let safe = parts
+        .iter()
+        .filter(|part| !looks_secret(part))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (Some(safe), identity)
+}
+
+fn normalize_endpoint(url: &str) -> String {
+    url.split('?')
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn extract_declaration(server: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    server.get(key).and_then(|value| match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Array(items) => Some(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        _ => None,
+    })
+}
+
+fn looks_secret(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "token",
+        "secret",
+        "password",
+        "apikey",
+        "authorization",
+        "bearer",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 fn project_candidates(workspace: &Path) -> Vec<(PathBuf, String)> {
@@ -256,6 +405,104 @@ fn parse_action(action: &str) -> Result<PermissionAction, String> {
         "deny" => Ok(PermissionAction::Deny),
         _ => Err(format!("unsupported permission action: {action}")),
     }
+}
+
+/// Resolve the current OpenCode V2 ordered MCP permission rules. A small
+/// legacy object form is accepted only for compatibility with documented V1
+/// configurations; the default remains V2's approval-gated ASK.
+pub fn resolve_mcp_permission(config: &Value, permission_name: &str) -> (PermissionAction, String) {
+    let mut result = (PermissionAction::Ask, "<default>".to_string());
+    if let Some(rules) = config.get("permissions").and_then(Value::as_array) {
+        for rule in rules {
+            if let Some((pattern, action)) = permission_rule(rule) {
+                if wildcard_match(&pattern, permission_name) {
+                    result = (action, pattern);
+                }
+            }
+        }
+    }
+    if let Some(permission) = config.get("permission") {
+        if let Some(object) = permission.as_object() {
+            for (pattern, value) in object {
+                if let Some(action) = value.as_str().and_then(parse_action_lossy) {
+                    if wildcard_match(pattern, permission_name) {
+                        result = (action, pattern.clone());
+                    }
+                }
+            }
+        }
+    }
+    let agent_name = config
+        .get("default_agent")
+        .and_then(Value::as_str)
+        .unwrap_or("build");
+    if let Some(agent) = config
+        .get("agents")
+        .and_then(Value::as_object)
+        .and_then(|agents| agents.get(agent_name))
+    {
+        if let Some(rules) = agent.get("permissions").and_then(Value::as_array) {
+            for rule in rules {
+                if let Some((pattern, action)) = permission_rule(rule) {
+                    if wildcard_match(&pattern, permission_name) {
+                        result = (action, pattern);
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+fn permission_rule(rule: &Value) -> Option<(String, PermissionAction)> {
+    let object = rule.as_object()?;
+    let pattern = object
+        .get("resource")
+        .or_else(|| object.get("permission"))
+        .or_else(|| object.get("action"))
+        .and_then(Value::as_str)?;
+    let action = object
+        .get("effect")
+        .or_else(|| object.get("value"))
+        .or_else(|| object.get("action"))
+        .and_then(Value::as_str)
+        .and_then(parse_action_lossy)?;
+    Some((pattern.to_string(), action))
+}
+
+fn parse_action_lossy(value: &str) -> Option<PermissionAction> {
+    match value.to_ascii_lowercase().as_str() {
+        "allow" => Some(PermissionAction::Allow),
+        "ask" => Some(PermissionAction::Ask),
+        "deny" => Some(PermissionAction::Deny),
+        _ => None,
+    }
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let (mut p, mut v, mut star, mut mark) = (0usize, 0usize, None, 0usize);
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    while v < value.len() {
+        if p < pattern.len() && (pattern[p] == value[v] || pattern[p] == b'?') {
+            p += 1;
+            v += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            mark = v;
+            p += 1;
+        } else if let Some(star_pos) = star {
+            p = star_pos + 1;
+            mark += 1;
+            v = mark;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
 }
 
 /// Remove JSONC comments and trailing commas without inspecting values.

@@ -3,6 +3,8 @@
 
 #[path = "integration/empty_scan_test.rs"]
 mod empty_scan_test;
+#[path = "integration/github_mcp_scan_test.rs"]
+mod github_mcp_scan_test;
 #[path = "integration/offline_test.rs"]
 mod offline_test;
 #[path = "integration/opencode_scan_test.rs"]
