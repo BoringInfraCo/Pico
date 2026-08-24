@@ -277,6 +277,14 @@ fn merge_json(base: &mut Value, overlay: Value) {
     match (base, overlay) {
         (Value::Object(base), Value::Object(overlay)) => {
             for (key, value) in overlay {
+                if key == "mcp" {
+                    merge_mcp_config(
+                        base.entry(key)
+                            .or_insert_with(|| Value::Object(Default::default())),
+                        value,
+                    );
+                    continue;
+                }
                 match base.get_mut(&key) {
                     Some(existing) => merge_json(existing, value),
                     None => {
@@ -286,6 +294,44 @@ fn merge_json(base: &mut Value, overlay: Value) {
             }
         }
         (base, overlay) => *base = overlay,
+    }
+}
+
+/// OpenCode V2 replaces a matching project MCP server entry rather than
+/// recursively retaining fields from a lower-precedence user entry.
+fn merge_mcp_config(base: &mut Value, overlay: Value) {
+    let overlay = match overlay {
+        Value::Object(overlay) => overlay,
+        other => {
+            *base = other;
+            return;
+        }
+    };
+    let Some(base) = base.as_object_mut() else {
+        *base = Value::Object(overlay);
+        return;
+    };
+    for (key, value) in overlay {
+        if key == "servers" {
+            match value {
+                Value::Object(overlay_servers) => {
+                    if let Some(base_servers) =
+                        base.get_mut("servers").and_then(Value::as_object_mut)
+                    {
+                        for (name, server) in overlay_servers {
+                            base_servers.insert(name, server);
+                        }
+                    } else {
+                        base.insert(key, Value::Object(overlay_servers));
+                    }
+                }
+                other => {
+                    base.insert(key, other);
+                }
+            }
+        } else {
+            base.insert(key, value);
+        }
     }
 }
 
