@@ -1830,7 +1830,8 @@ Do not begin it here.
 
 **Baseline:** `9feb704`
 
-**Implementation commit:** `396de75 feat(discovery): observe Cloudflare credential reachability`
+**Implementation commits:** `396de75 feat(discovery): observe Cloudflare credential reachability`;
+`2afd8b4 fix(discovery): isolate transient credential material`
 
 **Authoritative Cloudflare credential contract:** Sprint 005 supports only the
 non-empty `CLOUDFLARE_API_TOKEN` source. Cloudflare documents `CF_API_TOKEN` as
@@ -1858,7 +1859,7 @@ adapter long enough to determine non-empty presence and derive the safe
 fingerprint. `ObservedCredential` contains no value field and is not a secret
 handle or credential export.
 
-**Tests:** `cargo test` — 99 passed / 0 failed.
+**Tests:** `cargo test` — 100 passed / 0 failed.
 
 **cargo check:** PASS
 
