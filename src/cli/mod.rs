@@ -83,5 +83,17 @@ fn run_scan() -> Result<(), PicoError> {
     if let Some(strength) = result.influence_strength {
         println!("Influence:     {strength}");
     }
+    println!(
+        "Cloudflare Credential: {}",
+        if result.cloudflare_credential_observed {
+            "OBSERVED"
+        } else {
+            "NOT OBSERVED"
+        }
+    );
+    if let Some(reachability) = result.credential_reachability {
+        println!("Credential Reachability: {reachability}");
+    }
+    println!("Credential Value Stored: NO");
     Ok(())
 }

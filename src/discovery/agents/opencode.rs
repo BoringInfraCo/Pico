@@ -10,17 +10,28 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::discovery::{
-    CapabilityScope, DiscoveryResult, McpTransport, ObservedActor, ObservedBashCapability,
-    ObservedMcpServer, PermissionAction,
+    CapabilityScope, DiscoveryResult, EnvironmentReachability, McpTransport, ObservedActor,
+    ObservedBashCapability, ObservedCredential, ObservedMcpServer, PermissionAction,
 };
 use crate::shared::PicoError;
 
 const CONFIG_NAMES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
+const CLOUDFLARE_TOKEN_ENV: &str = "CLOUDFLARE_API_TOKEN";
 
 /// Discover a configured OpenCode actor from exact documented locations.
 pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult, PicoError> {
+    discover_with_environment(workspace, home, None, EnvironmentReachability::Unknown)
+}
+
+pub fn discover_with_environment(
+    workspace: &Path,
+    home: Option<&Path>,
+    explicit_environment: Option<&[(&str, &str)]>,
+    environment_reachability: EnvironmentReachability,
+) -> Result<DiscoveryResult, PicoError> {
     let mut result = DiscoveryResult::default();
     let mut candidates = Vec::new();
     if let Some(home) = home {
@@ -78,8 +89,97 @@ pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult
                 tool.permission_pattern = pattern;
             }
         }
+        let environment = explicit_environment
+            .map(|pairs| {
+                pairs
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                    .collect()
+            })
+            .unwrap_or_else(|| std::env::vars().collect::<Vec<_>>());
+        if let Some((_, value)) = environment
+            .iter()
+            .find(|(key, _)| key == CLOUDFLARE_TOKEN_ENV)
+        {
+            if !value.is_empty()
+                && !result
+                    .credentials
+                    .iter()
+                    .any(|credential| credential.fingerprint == fingerprint(value))
+            {
+                result.credentials.push(ObservedCredential {
+                    provider: "cloudflare",
+                    credential_type: "api_token",
+                    source_type: "environment",
+                    source_locator: CLOUDFLARE_TOKEN_ENV.to_string(),
+                    fingerprint: fingerprint(value),
+                    environment: environment_reachability,
+                });
+            }
+        }
+        if let Some(value) = project_dotenv_token(workspace) {
+            let value_fingerprint = fingerprint(&value);
+            if !result
+                .credentials
+                .iter()
+                .any(|credential| credential.fingerprint == value_fingerprint)
+            {
+                result.credentials.push(ObservedCredential {
+                    provider: "cloudflare",
+                    credential_type: "api_token",
+                    source_type: "project_dotenv",
+                    source_locator: ".env:CLOUDFLARE_API_TOKEN".to_string(),
+                    fingerprint: value_fingerprint,
+                    environment: EnvironmentReachability::Proven,
+                });
+            }
+        }
     }
     Ok(result)
+}
+
+/// Read only the exact project-root dotenv file. This is deliberately not a
+/// recursive dotenv search or a shell-profile evaluator.
+fn project_dotenv_token(workspace: &Path) -> Option<String> {
+    let root = workspace
+        .ancestors()
+        .find(|candidate| candidate.join(".git").exists())
+        .unwrap_or(workspace);
+    let contents = fs::read_to_string(root.join(".env")).ok()?;
+    contents.lines().find_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let (key, value) = line.split_once('=')?;
+        if key.trim() != CLOUDFLARE_TOKEN_ENV {
+            return None;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .or_else(|| {
+                value
+                    .strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+            })
+            .unwrap_or(value)
+            .trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn fingerprint(value: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"pico:credential:cloudflare:api_token:v1:");
+    digest.update(value.as_bytes());
+    let bytes = digest.finalize();
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn parse_mcp_servers(

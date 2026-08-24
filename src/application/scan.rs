@@ -27,6 +27,8 @@ pub struct ScanResult {
     pub bash_permission: Option<String>,
     pub github_mcp_observed: bool,
     pub influence_strength: Option<String>,
+    pub cloudflare_credential_observed: bool,
+    pub credential_reachability: Option<String>,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -43,6 +45,23 @@ impl ScanService {
     /// Runs discovery with an explicit home directory, primarily enabling
     /// deterministic local-fixture tests without inspecting a real user home.
     pub fn run_with_home(workspace: &Path, home: Option<&Path>) -> Result<ScanResult, PicoError> {
+        Self::run_with_home_and_environment(
+            workspace,
+            home,
+            None,
+            discovery::EnvironmentReachability::Unknown,
+        )
+    }
+
+    /// Runs discovery with a controlled synthetic execution environment. This
+    /// is used by fixtures to prove inheritance without reading process-global
+    /// secrets or claiming that Pico's own environment is OpenCode's.
+    pub fn run_with_home_and_environment(
+        workspace: &Path,
+        home: Option<&Path>,
+        environment: Option<&[(&str, &str)]>,
+        environment_reachability: discovery::EnvironmentReachability,
+    ) -> Result<ScanResult, PicoError> {
         let mut db = Database::open_existing(&workspace.join(".pico").join("pico.db"))?;
         db.migrate()?;
 
@@ -50,7 +69,12 @@ impl ScanService {
         let scan = Scan::start(PICO_VERSION)?;
         scan_repo.insert(&scan)?;
 
-        let discovered = discovery::discover(workspace, home)?;
+        let discovered = discovery::discover_with_environment(
+            workspace,
+            home,
+            environment,
+            environment_reachability,
+        )?;
         let resource_repo = ResourceRepo::new(db.connection());
         let evidence_repo = EvidenceRepo::new(db.connection());
         let observation_repo = ObservationRepo::new(db.connection());
@@ -90,6 +114,7 @@ impl ScanService {
 
         let relationship_repo = RelationshipRepo::new(db.connection());
         let mut bash_permission = None;
+        let mut bash_resource = None;
         if let (Some(actor), Some(capability)) = (
             actor_resource.as_ref(),
             discovered.bash_capabilities.first(),
@@ -101,6 +126,7 @@ impl ScanService {
             bash.last_observed_at = chrono::Utc::now();
             bash.metadata = Some(serde_json::json!({"capability": "EXECUTE"}));
             resource_repo.upsert(&bash)?;
+            bash_resource = Some(bash.clone());
 
             let relationship_key = "agent:opencode|can_execute|shell:bash";
             let state = match capability.permission {
@@ -375,6 +401,119 @@ impl ScanService {
             }
         }
 
+        let mut cloudflare_credential_observed = false;
+        let mut credential_reachability = None;
+        for credential in &discovered.credentials {
+            cloudflare_credential_observed = true;
+            let credential_key = format!(
+                "credential:{}:{}",
+                credential.provider, credential.fingerprint
+            );
+            let mut resource = match resource_repo.get_by_canonical_key(&credential_key)? {
+                Some(resource) => resource,
+                None => Resource::new(
+                    &credential_key,
+                    "credential",
+                    credential.provider,
+                    "Cloudflare API Token",
+                )?,
+            };
+            resource.last_observed_at = chrono::Utc::now();
+            let resource_metadata = serde_json::json!({
+                "credential_type": credential.credential_type,
+                "source_type": credential.source_type,
+                "source_locator": credential.source_locator,
+                "presence": "PRESENT",
+                "validity": "UNKNOWN",
+                "authority_resolution": "UNKNOWN",
+                "environment_reachability": credential.environment.as_str(),
+                "secret_stored": false,
+                "fingerprint_version": "sha256:pico-credential-v1",
+            });
+            validate_secret_safe(&resource_metadata)?;
+            resource.metadata = Some(resource_metadata);
+            resource_repo.upsert(&resource)?;
+            observe_resource(
+                &observation_repo,
+                &scan.id,
+                &resource,
+                "cloudflare_credential_adapter",
+            )?;
+            let reference_metadata = serde_json::json!({
+                "provider": credential.provider,
+                "credential_type": credential.credential_type,
+                "source_type": credential.source_type,
+                "source_locator": credential.source_locator,
+                "presence": "PRESENT",
+                "secret_stored": false,
+            });
+            validate_secret_safe(&reference_metadata)?;
+            evidence_for_subject(
+                &evidence_repo,
+                &scan.id,
+                EvidenceClass::Direct,
+                "cloudflare_credential_reference",
+                &credential.source_locator,
+                &credential_key,
+                "supported Cloudflare credential reference is present",
+                reference_metadata,
+            )?;
+
+            if let Some(bash) = bash_resource.as_ref() {
+                let (state, reachability) = match (
+                    credential.environment,
+                    discovered
+                        .bash_capabilities
+                        .first()
+                        .map(|capability| capability.permission),
+                ) {
+                    (
+                        discovery::EnvironmentReachability::Proven,
+                        Some(discovery::PermissionAction::Allow),
+                    ) => (RelationshipState::Derived, "REACHABLE"),
+                    (
+                        discovery::EnvironmentReachability::Proven,
+                        Some(discovery::PermissionAction::Ask),
+                    ) => (RelationshipState::Derived, "APPROVAL_GATED"),
+                    (
+                        discovery::EnvironmentReachability::Proven,
+                        Some(discovery::PermissionAction::Deny),
+                    ) => (RelationshipState::Blocked, "BLOCKED"),
+                    _ => (RelationshipState::Unknown, "UNKNOWN"),
+                };
+                credential_reachability = Some(reachability.to_string());
+                let relationship_key = format!("shell:bash|can_access|{}", credential_key);
+                let relationship_metadata = serde_json::json!({
+                    "reachability": reachability,
+                    "effective_bash_permission": discovered
+                        .bash_capabilities
+                        .first()
+                        .map(|capability| capability.permission.as_str())
+                        .unwrap_or("UNKNOWN"),
+                    "environment_reachability": credential.environment.as_str(),
+                    "runtime_mode": "UNKNOWN",
+                    "validity": "UNKNOWN",
+                    "authority_resolution": "UNKNOWN",
+                });
+                validate_secret_safe(&relationship_metadata)?;
+                persist_credential_relationship(
+                    &relationship_repo,
+                    &evidence_repo,
+                    &observation_repo,
+                    &scan.id,
+                    bash,
+                    &resource,
+                    &relationship_key,
+                    state,
+                    relationship_metadata,
+                    &format!("Bash credential reachability is {reachability}"),
+                    &credential.source_locator,
+                )?;
+            } else {
+                credential_reachability = Some("UNKNOWN".to_string());
+            }
+        }
+
         let completed = if discovered.problems.is_empty() {
             scan.complete()?
         } else {
@@ -399,8 +538,84 @@ impl ScanService {
             bash_permission,
             github_mcp_observed,
             influence_strength,
+            cloudflare_credential_observed,
+            credential_reachability,
         })
     }
+}
+
+fn validate_secret_safe(value: &serde_json::Value) -> Result<(), PicoError> {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, nested) in object {
+                let lower = key.to_ascii_lowercase();
+                if lower.contains("raw")
+                    || lower.contains("password")
+                    || lower.contains("authorization")
+                    || lower.contains("private_key")
+                    || lower == "token_value"
+                {
+                    return Err(PicoError::scan(format!(
+                        "secret-safety validation rejected metadata field {key}"
+                    )));
+                }
+                validate_secret_safe(nested)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                validate_secret_safe(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_credential_relationship(
+    relationships: &RelationshipRepo<'_>,
+    evidence: &EvidenceRepo<'_>,
+    observations: &ObservationRepo<'_>,
+    scan_id: &str,
+    from: &Resource,
+    to: &Resource,
+    key: &str,
+    state: RelationshipState,
+    metadata: serde_json::Value,
+    explanation: &str,
+    locator: &str,
+) -> Result<(), PicoError> {
+    validate_secret_safe(&metadata)?;
+    let mut relationship = match relationships.get_by_canonical_key(key)? {
+        Some(relationship) => relationship,
+        None => Relationship::new(key, &from.id, &to.id, "can_access", state)?,
+    };
+    relationship.state = state;
+    relationship.last_observed_at = chrono::Utc::now();
+    relationship.metadata = Some(metadata.clone());
+    relationships.upsert(&relationship)?;
+    let mut item = Evidence::new(
+        scan_id,
+        EvidenceClass::Derived,
+        "cloudflare_credential_reachability",
+        locator,
+        key,
+        explanation,
+        Sensitivity::Internal,
+    )?;
+    item.metadata = Some(metadata.clone());
+    evidence.insert(&item)?;
+    relationships.link_evidence(&relationship.id, &item.id)?;
+    let mut observation = Observation::new(
+        scan_id,
+        "relationship",
+        &relationship.id,
+        "observed",
+        "cloudflare_credential_adapter",
+    )?;
+    observation.metadata = Some(metadata);
+    observations.insert(&observation)
 }
 
 fn observe_resource(

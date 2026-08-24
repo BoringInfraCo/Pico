@@ -114,6 +114,35 @@ pub struct ObservedGithubTool {
     pub influence_strength: &'static str,
 }
 
+/// Whether the scanner has authoritative evidence that the actor's Bash
+/// environment is the environment in which the credential was observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentReachability {
+    Proven,
+    Unknown,
+}
+
+impl EnvironmentReachability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Proven => "PROVEN",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+}
+
+/// Safe normalized Cloudflare credential facts. The raw value is intentionally
+/// absent from this type and is never part of DiscoveryResult.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedCredential {
+    pub provider: &'static str,
+    pub credential_type: &'static str,
+    pub source_type: &'static str,
+    pub source_locator: String,
+    pub fingerprint: String,
+    pub environment: EnvironmentReachability,
+}
+
 /// Results from the bounded set of discovery adapters enabled by this release.
 #[derive(Debug, Default)]
 pub struct DiscoveryResult {
@@ -121,6 +150,7 @@ pub struct DiscoveryResult {
     pub bash_capabilities: Vec<ObservedBashCapability>,
     pub mcp_servers: Vec<ObservedMcpServer>,
     pub github_surfaces: Vec<ObservedGithubSurface>,
+    pub credentials: Vec<ObservedCredential>,
     pub problems: Vec<String>,
 }
 
@@ -128,4 +158,15 @@ pub struct DiscoveryResult {
 /// plugin registry: Sprint 002 has one explicit adapter only.
 pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult, PicoError> {
     agents::opencode::discover(workspace, home)
+}
+
+/// Bounded discovery entrypoint used by deterministic fixtures. The optional
+/// environment pairs are consumed transiently and never returned to callers.
+pub fn discover_with_environment(
+    workspace: &Path,
+    home: Option<&Path>,
+    environment: Option<&[(&str, &str)]>,
+    reachability: EnvironmentReachability,
+) -> Result<DiscoveryResult, PicoError> {
+    agents::opencode::discover_with_environment(workspace, home, environment, reachability)
 }

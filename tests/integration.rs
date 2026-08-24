@@ -1,6 +1,8 @@
 //! End-to-end integration tests: the init/scan golden path and the
 //! offline guarantee.
 
+#[path = "integration/cloudflare_credential_scan_test.rs"]
+mod cloudflare_credential_scan_test;
 #[path = "integration/empty_scan_test.rs"]
 mod empty_scan_test;
 #[path = "integration/github_mcp_scan_test.rs"]
