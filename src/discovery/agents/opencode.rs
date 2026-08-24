@@ -21,6 +21,40 @@ use crate::shared::PicoError;
 const CONFIG_NAMES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
 const CLOUDFLARE_TOKEN_ENV: &str = "CLOUDFLARE_API_TOKEN";
 
+/// Raw credential material is kept behind this non-serializable, redacted
+/// handle and zeroized when the adapter releases it.
+struct TransientCredential(String);
+
+impl TransientCredential {
+    fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn fingerprint(&self) -> String {
+        fingerprint(&self.0)
+    }
+}
+
+impl std::fmt::Debug for TransientCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TransientCredential(REDACTED)")
+    }
+}
+
+impl Drop for TransientCredential {
+    fn drop(&mut self) {
+        let bytes = unsafe { self.0.as_bytes_mut() };
+        for byte in bytes {
+            unsafe { std::ptr::write_volatile(byte, 0) };
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Discover a configured OpenCode actor from exact documented locations.
 pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult, PicoError> {
     discover_with_environment(workspace, home, None, EnvironmentReachability::Unknown)
@@ -89,36 +123,34 @@ pub fn discover_with_environment(
                 tool.permission_pattern = pattern;
             }
         }
-        let environment = explicit_environment
-            .map(|pairs| {
+        let environment_value = explicit_environment
+            .and_then(|pairs| {
                 pairs
                     .iter()
-                    .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-                    .collect()
+                    .find(|(key, _)| *key == CLOUDFLARE_TOKEN_ENV)
+                    .map(|(_, value)| (*value).to_string())
             })
-            .unwrap_or_else(|| std::env::vars().collect::<Vec<_>>());
-        if let Some((_, value)) = environment
-            .iter()
-            .find(|(key, _)| key == CLOUDFLARE_TOKEN_ENV)
-        {
+            .or_else(|| std::env::var(CLOUDFLARE_TOKEN_ENV).ok())
+            .map(TransientCredential::new);
+        if let Some(value) = environment_value {
             if !value.is_empty()
                 && !result
                     .credentials
                     .iter()
-                    .any(|credential| credential.fingerprint == fingerprint(value))
+                    .any(|credential| credential.fingerprint == value.fingerprint())
             {
                 result.credentials.push(ObservedCredential {
                     provider: "cloudflare",
                     credential_type: "api_token",
                     source_type: "environment",
                     source_locator: CLOUDFLARE_TOKEN_ENV.to_string(),
-                    fingerprint: fingerprint(value),
+                    fingerprint: value.fingerprint(),
                     environment: environment_reachability,
                 });
             }
         }
         if let Some(value) = project_dotenv_token(workspace) {
-            let value_fingerprint = fingerprint(&value);
+            let value_fingerprint = value.fingerprint();
             if !result
                 .credentials
                 .iter()
@@ -140,7 +172,7 @@ pub fn discover_with_environment(
 
 /// Read only the exact project-root dotenv file. This is deliberately not a
 /// recursive dotenv search or a shell-profile evaluator.
-fn project_dotenv_token(workspace: &Path) -> Option<String> {
+fn project_dotenv_token(workspace: &Path) -> Option<TransientCredential> {
     let root = workspace
         .ancestors()
         .find(|candidate| candidate.join(".git").exists())
@@ -166,7 +198,7 @@ fn project_dotenv_token(workspace: &Path) -> Option<String> {
             })
             .unwrap_or(value)
             .trim();
-        (!value.is_empty()).then(|| value.to_string())
+        (!value.is_empty()).then(|| TransientCredential::new(value.to_string()))
     })
 }
 
@@ -864,5 +896,13 @@ mod tests {
         assert_eq!(result.actors.len(), 1);
         assert!(result.bash_capabilities.is_empty());
         assert_eq!(result.problems.len(), 1);
+    }
+
+    #[test]
+    fn transient_credential_debug_is_redacted() {
+        let credential = TransientCredential::new("TEST_SECRET_SHOULD_NOT_PERSIST".to_string());
+        let debug = format!("{credential:?}");
+        assert_eq!(debug, "TransientCredential(REDACTED)");
+        assert!(!debug.contains("TEST_SECRET_SHOULD_NOT_PERSIST"));
     }
 }
