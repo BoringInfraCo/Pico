@@ -1,6 +1,6 @@
 # Pico — Sprint 003: First Capability — OpenCode Bash
 
-**Status:** Ready
+**Status:** COMPLETE
 **Sprint:** 003
 **Phase:** v0.1 — Golden Path Proof
 **Type:** Implementation
@@ -472,7 +472,7 @@ Do not add dynamic adapter loading.
 Continue using the stable OpenCode Resource established by Sprint 002:
 
 ```text
-agent:opencode:default
+agent:opencode
 ```
 
 Represent Bash as a generic capability/tool Resource using the repository's existing canonical-key semantics.
@@ -507,10 +507,10 @@ The existing domain contract anticipates:
 
 ```text
 canonical_key:
-agent:opencode:default|can_execute|shell:bash
+agent:opencode|can_execute|shell:bash
 
 from:
-agent:opencode:default
+agent:opencode
 
 to:
 shell:bash
@@ -1314,6 +1314,117 @@ NO
 ```
 
 Also record the architecture pressure-test results.
+
+## Completion Record
+
+Baseline:
+`6d379a7`
+
+Implementation commit:
+`13e469a feat(discovery): resolve OpenCode Bash capability`
+
+Authoritative OpenCode contract:
+
+- OpenCode merges configuration layers, with later supported local project configuration overriding user configuration.
+- The built-in `build` agent starts with permissive defaults; top-level permission rules apply before per-agent overrides.
+- Bash accepts `allow`, `ask`, and `deny`, including ordered command-pattern rules; the last matching rule wins.
+- Auto mode can automatically approve `ask`, while explicit `deny` remains enforced.
+- Pico resolves the Sprint 002 supported user/project JSON/JSONC configuration boundary. Static scans record runtime mode as `UNKNOWN` and never describe `ASK` as observed automatic execution.
+
+Authoritative sources checked August 24, 2026:
+
+- `https://opencode.ai/docs/config/`
+- `https://opencode.ai/docs/permissions/`
+- `https://opencode.ai/docs/agents/`
+- `https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/permission/index.ts`
+- `https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/agent/agent.ts`
+
+Tests:
+`90 passed / 0 failed`
+
+`cargo check`:
+PASS
+
+`cargo clippy --all-targets -- -D warnings`:
+PASS
+
+`cargo fmt --check`:
+PASS
+
+`cargo build --release`:
+PASS
+
+ALLOW controlled scan:
+COMPLETE — 1 Agent, 2 Resources, 1 capability Relationship, 0 Findings, effective Bash `ALLOW`.
+
+ASK controlled scan:
+COMPLETE — 1 Agent, 2 Resources, 1 capability Relationship, 0 Findings, effective Bash `ASK`, runtime mode `UNKNOWN`.
+
+DENY controlled scan:
+COMPLETE — 1 Agent, 2 Resources, 1 blocked capability Relationship, 0 Findings, effective Bash `DENY`.
+
+UNKNOWN controlled scan:
+COMPLETE — mixed bounded command policy remains `UNKNOWN` / `BOUNDED`; no unrestricted Bash claim.
+
+OpenCode-absent controlled scan:
+COMPLETE — 0 Agents, 0 Resources, 0 Relationships, 0 Evidence, 0 Findings.
+
+Repeated-scan identity:
+PASS — 2 Scans preserve 1 `agent:opencode` Resource, 1 `shell:bash` Resource, and 1 stable `can_execute` Relationship.
+
+Permission-change history:
+PASS — `ASK` followed by `ALLOW` preserves scan-specific Evidence and Relationship Observations without duplicating stable identity.
+
+Evidence persistence:
+PASS — each capability Evidence record is scan-scoped and linked through `relationship_evidence` to the stable Relationship.
+
+Observation persistence:
+PASS — Bash Resource and capability Relationship observations are scan-scoped and preserve normalized permission metadata.
+
+Secret-sentinel persistence check:
+PASS — `TEST_SECRET_SHOULD_NOT_PERSIST` occurred 0 times in Pico-controlled persisted state.
+
+Relationships:
+1 capability-only Relationship when supported OpenCode is present; 0 when absent.
+
+Findings:
+0
+
+Network required at scan runtime:
+NO
+
+Credentials required:
+NO
+
+Raw OpenCode configuration persisted:
+NO
+
+Sprint 004+ functionality implemented:
+NO
+
+Architecture pressure test:
+
+- Effective permission resolution: PASS within the explicitly supported local configuration boundary.
+- Capability versus automatic execution: PASS.
+- `ASK` representation: PASS.
+- Bounded command-pattern honesty: PASS — mixed scope becomes `UNKNOWN` / `BOUNDED`.
+- Generic Resource/Relationship model: PASS.
+- Evidential state versus permission semantics: PASS.
+- Historical Evidence/Observation model: PASS.
+- Adapter boundary: PASS.
+- Secret safety: PASS.
+- Scope preservation: PASS.
+
+Validation tooling notes:
+
+- Agent CI reported no `.github/workflows` directory, so there was no local workflow to execute.
+- `vet` was invoked after each logical change unit. Its direct model review could not run because no Anthropic API credential is configured; elevated agentic fallback was not authorized. Required Rust verification and manual inspection passed independently.
+
+Follow-ups for the next authorized sprint:
+
+- Custom, inline, remote, managed, and live session permission layers remain outside the Sprint 002/003 supported local adapter contract. They must not be silently treated as resolved when that contract expands.
+- Live OpenCode auto-mode and session-persisted approvals remain runtime evidence questions. Static `ASK` evidence retains runtime mode `UNKNOWN`.
+- Bounded/mixed Bash policies intentionally remain `UNKNOWN` at the command-independent relationship level until Pico has a truthful generic scope representation.
 
 ---
 
