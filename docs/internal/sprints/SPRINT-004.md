@@ -1765,7 +1765,8 @@ Do not begin it here.
 
 **Baseline:** `558a36c`
 
-**Implementation commit:** `5fff8c5 feat(discovery): observe GitHub MCP influence`
+**Implementation commits:** `5fff8c5 feat(discovery): observe GitHub MCP influence`;
+`4a9f302 fix(discovery): preserve OpenCode MCP precedence`
 
 **Authoritative OpenCode MCP contract:** Current OpenCode V2 JSON/JSONC uses
 `mcp.servers`, `type: local|remote`, `disabled`, and ordered permission rules
