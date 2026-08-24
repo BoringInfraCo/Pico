@@ -1,0 +1,5 @@
+{
+  "provider": "irrelevant to Sprint 002",
+  "apiKey": "TEST_SECRET_SHOULD_NOT_PERSIST",
+  "permission": { "bash": "allow" }
+}

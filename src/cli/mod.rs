@@ -64,6 +64,7 @@ fn run_scan() -> Result<(), PicoError> {
     println!("Scan: {}", result.scan_id);
     println!("Status: {}", result.status);
     println!();
+    println!("Agents:        {}", result.agent_count);
     println!("Resources:     {}", result.resource_count);
     println!("Relationships: {}", result.relationship_count);
     println!("Evidence:      {}", result.evidence_count);

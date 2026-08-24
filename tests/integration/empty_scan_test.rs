@@ -33,7 +33,7 @@ fn empty_scan_completes_persists_and_accumulates_history() {
     let dir = tempdir().unwrap();
     InitService::run(dir.path()).unwrap();
 
-    let result = ScanService::run(dir.path()).unwrap();
+    let result = ScanService::run_with_home(dir.path(), None).unwrap();
     assert_eq!(result.status, ScanStatus::Complete);
     assert!(result.started_at.timestamp() > 0);
     assert!(result.completed_at.is_some());
@@ -52,7 +52,7 @@ fn empty_scan_completes_persists_and_accumulates_history() {
     assert!(scans[0].completed_at.is_some());
     let first_started_at = scans[0].started_at;
 
-    let second = ScanService::run(dir.path()).unwrap();
+    let second = ScanService::run_with_home(dir.path(), None).unwrap();
     assert_ne!(second.scan_id, result.scan_id);
     let scans = repo.list().unwrap();
     assert_eq!(scans.len(), 2);
