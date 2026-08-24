@@ -146,6 +146,55 @@ fn relationship_upsert_updates_state_by_canonical_key() {
     assert_eq!(repo.count().unwrap(), 1);
     let loaded = repo.get(&rel.id).unwrap().unwrap();
     assert_eq!(loaded.state, RelationshipState::Derived);
+    let by_key = repo
+        .get_by_canonical_key("agent:opencode:default|can_execute|shell:bash")
+        .unwrap()
+        .unwrap();
+    assert_eq!(by_key.id, rel.id);
+}
+
+#[test]
+fn relationship_links_supporting_evidence() {
+    let (_dir, db) = test_db();
+    let scan = stored_scan(&db);
+    let resources = ResourceRepo::new(db.connection());
+    let agent = Resource::new("agent:opencode", "agent", "opencode", "OpenCode").unwrap();
+    let bash = Resource::new("shell:bash", "shell", "local", "Bash").unwrap();
+    resources.upsert(&agent).unwrap();
+    resources.upsert(&bash).unwrap();
+    let relationship = Relationship::new(
+        "agent:opencode|can_execute|shell:bash",
+        &agent.id,
+        &bash.id,
+        "can_execute",
+        RelationshipState::Derived,
+    )
+    .unwrap();
+    let relationships = RelationshipRepo::new(db.connection());
+    relationships.upsert(&relationship).unwrap();
+    let evidence = Evidence::new(
+        &scan.id,
+        EvidenceClass::Derived,
+        "opencode_effective_permission",
+        "project:opencode.json",
+        "agent:opencode|can_execute|shell:bash",
+        "effective Bash permission: ALLOW",
+        Sensitivity::Internal,
+    )
+    .unwrap();
+    EvidenceRepo::new(db.connection())
+        .insert(&evidence)
+        .unwrap();
+    relationships
+        .link_evidence(&relationship.id, &evidence.id)
+        .unwrap();
+    let links: i64 = db
+        .connection()
+        .query_row("SELECT COUNT(*) FROM relationship_evidence", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(links, 1);
 }
 
 #[test]

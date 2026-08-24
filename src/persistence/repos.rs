@@ -290,6 +290,32 @@ impl<'a> RelationshipRepo<'a> {
             .map_err(db_err)
     }
 
+    /// Load a relationship by its stable canonical key.
+    pub fn get_by_canonical_key(&self, key: &str) -> Result<Option<Relationship>, PicoError> {
+        self.conn
+            .query_row(
+                "SELECT id, canonical_key, from_resource_id, to_resource_id,
+                        kind, state, metadata, first_observed_at, last_observed_at
+                 FROM relationships WHERE canonical_key = ?1",
+                [key],
+                row_to_relationship,
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Associate append-only evidence with the relationship it supports.
+    pub fn link_evidence(&self, relationship_id: &str, evidence_id: &str) -> Result<(), PicoError> {
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO relationship_evidence
+                 (relationship_id, evidence_id) VALUES (?1, ?2)",
+                params![relationship_id, evidence_id],
+            )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     /// Count all relationships.
     pub fn count(&self) -> Result<u64, PicoError> {
         let n: i64 = self

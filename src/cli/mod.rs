@@ -69,5 +69,8 @@ fn run_scan() -> Result<(), PicoError> {
     println!("Relationships: {}", result.relationship_count);
     println!("Evidence:      {}", result.evidence_count);
     println!("Findings:      {}", result.finding_count);
+    if let Some(permission) = result.bash_permission {
+        println!("Effective Bash: {permission}");
+    }
     Ok(())
 }

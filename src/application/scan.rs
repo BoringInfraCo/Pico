@@ -4,7 +4,8 @@ use std::path::Path;
 
 use crate::discovery;
 use crate::domain::{
-    Evidence, EvidenceClass, Observation, Resource, Scan, ScanStatus, Sensitivity,
+    Evidence, EvidenceClass, Observation, Relationship, RelationshipState, Resource, Scan,
+    ScanStatus, Sensitivity,
 };
 use crate::persistence::{
     Database, EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo,
@@ -23,6 +24,7 @@ pub struct ScanResult {
     pub relationship_count: u64,
     pub evidence_count: u64,
     pub finding_count: u64,
+    pub bash_permission: Option<String>,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -51,14 +53,16 @@ impl ScanService {
         let evidence_repo = EvidenceRepo::new(db.connection());
         let observation_repo = ObservationRepo::new(db.connection());
         let mut actor_seen = false;
+        let mut actor_resource = None;
         for actor in discovered.actors {
             if actor.provider != "opencode" {
                 continue;
             }
-            let resource = match resource_repo.get_by_canonical_key("agent:opencode")? {
+            let mut resource = match resource_repo.get_by_canonical_key("agent:opencode")? {
                 Some(resource) => resource,
                 None => Resource::new("agent:opencode", "agent", "opencode", "OpenCode")?,
             };
+            resource.last_observed_at = chrono::Utc::now();
             resource_repo.upsert(&resource)?;
             evidence_repo.insert(&Evidence::new(
                 &scan.id,
@@ -79,6 +83,85 @@ impl ScanService {
                 )?)?;
                 actor_seen = true;
             }
+            actor_resource = Some(resource);
+        }
+
+        let relationship_repo = RelationshipRepo::new(db.connection());
+        let mut bash_permission = None;
+        if let (Some(actor), Some(capability)) = (
+            actor_resource.as_ref(),
+            discovered.bash_capabilities.first(),
+        ) {
+            let mut bash = match resource_repo.get_by_canonical_key("shell:bash")? {
+                Some(resource) => resource,
+                None => Resource::new("shell:bash", "shell", "local", "Bash")?,
+            };
+            bash.last_observed_at = chrono::Utc::now();
+            bash.metadata = Some(serde_json::json!({"capability": "EXECUTE"}));
+            resource_repo.upsert(&bash)?;
+
+            let relationship_key = "agent:opencode|can_execute|shell:bash";
+            let state = match capability.permission {
+                discovery::PermissionAction::Allow | discovery::PermissionAction::Ask => {
+                    RelationshipState::Derived
+                }
+                discovery::PermissionAction::Deny => RelationshipState::Blocked,
+                discovery::PermissionAction::Unknown => RelationshipState::Unknown,
+            };
+            let mut relationship = match relationship_repo.get_by_canonical_key(relationship_key)? {
+                Some(relationship) => relationship,
+                None => {
+                    Relationship::new(relationship_key, &actor.id, &bash.id, "can_execute", state)?
+                }
+            };
+            relationship.state = state;
+            relationship.last_observed_at = chrono::Utc::now();
+            let capability_metadata = serde_json::json!({
+                "effective_permission": capability.permission.as_str(),
+                "scope": capability.scope.as_str(),
+                "runtime_mode": capability.runtime_mode,
+            });
+            relationship.metadata = Some(capability_metadata.clone());
+            relationship_repo.upsert(&relationship)?;
+
+            let mut evidence = Evidence::new(
+                &scan.id,
+                EvidenceClass::Derived,
+                "opencode_effective_permission",
+                &capability.source_locator,
+                relationship_key,
+                &format!(
+                    "effective Bash permission: {}; scope: {}; runtime mode: {}",
+                    capability.permission.as_str(),
+                    capability.scope.as_str(),
+                    capability.runtime_mode
+                ),
+                Sensitivity::Internal,
+            )?;
+            evidence.metadata = Some(capability_metadata.clone());
+            evidence_repo.insert(&evidence)?;
+            relationship_repo.link_evidence(&relationship.id, &evidence.id)?;
+
+            let mut bash_observation = Observation::new(
+                &scan.id,
+                "resource",
+                &bash.id,
+                "present",
+                "opencode_adapter",
+            )?;
+            bash_observation.metadata = Some(capability_metadata.clone());
+            observation_repo.insert(&bash_observation)?;
+
+            let mut relationship_observation = Observation::new(
+                &scan.id,
+                "relationship",
+                &relationship.id,
+                "effective_permission",
+                "opencode_adapter",
+            )?;
+            relationship_observation.metadata = Some(capability_metadata);
+            observation_repo.insert(&relationship_observation)?;
+            bash_permission = Some(capability.permission.as_str().to_string());
         }
 
         let completed = if discovered.problems.is_empty() {
@@ -89,7 +172,7 @@ impl ScanService {
         scan_repo.update(&completed)?;
 
         let resource_count = resource_repo.count()?;
-        let relationship_count = RelationshipRepo::new(db.connection()).count()?;
+        let relationship_count = relationship_repo.count()?;
         let evidence_count = evidence_repo.count()?;
 
         Ok(ScanResult {
@@ -102,6 +185,7 @@ impl ScanService {
             relationship_count,
             evidence_count,
             finding_count: 0,
+            bash_permission,
         })
     }
 }
