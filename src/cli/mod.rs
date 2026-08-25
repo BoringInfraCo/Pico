@@ -94,6 +94,17 @@ fn run_scan() -> Result<(), PicoError> {
     if let Some(reachability) = result.credential_reachability {
         println!("Credential Reachability: {reachability}");
     }
+    if let Some(status) = result.cloudflare_credential_status {
+        println!("Cloudflare Credential Status: {status}");
+    }
+    println!("Cloudflare Accounts: {}", result.cloudflare_account_count);
+    println!("Cloudflare Workers: {}", result.cloudflare_worker_count);
+    if let Some(authority) = result.worker_mutation_authority {
+        println!("Worker Mutation Authority: {authority}");
+    }
+    if let Some(resolution) = result.authority_resolution {
+        println!("Authority Resolution: {resolution}");
+    }
     println!("Credential Value Stored: NO");
     Ok(())
 }

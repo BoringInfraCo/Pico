@@ -4,6 +4,7 @@
 //! and persist those facts using Pico's generic domain types.
 
 pub mod agents;
+pub mod cloudflare;
 pub mod mcp;
 
 use std::path::Path;
@@ -151,6 +152,9 @@ pub struct DiscoveryResult {
     pub mcp_servers: Vec<ObservedMcpServer>,
     pub github_surfaces: Vec<ObservedGithubSurface>,
     pub credentials: Vec<ObservedCredential>,
+    /// Safe, normalized result from the bounded Cloudflare provider adapter.
+    /// Raw credentials and provider response bodies never enter this value.
+    pub cloudflare: Option<cloudflare::ProviderResult>,
     pub problems: Vec<String>,
 }
 

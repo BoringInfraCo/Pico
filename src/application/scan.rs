@@ -29,6 +29,11 @@ pub struct ScanResult {
     pub influence_strength: Option<String>,
     pub cloudflare_credential_observed: bool,
     pub credential_reachability: Option<String>,
+    pub cloudflare_credential_status: Option<String>,
+    pub cloudflare_account_count: u64,
+    pub cloudflare_worker_count: u64,
+    pub worker_mutation_authority: Option<String>,
+    pub authority_resolution: Option<String>,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -62,6 +67,26 @@ impl ScanService {
         environment: Option<&[(&str, &str)]>,
         environment_reachability: discovery::EnvironmentReachability,
     ) -> Result<ScanResult, PicoError> {
+        Self::run_with_home_and_environment_and_provider(
+            workspace,
+            home,
+            environment,
+            environment_reachability,
+            None,
+        )
+    }
+
+    /// Deterministic provider seam used by controlled fixtures. Production
+    /// scans use the bounded Cloudflare adapter emitted by local discovery;
+    /// tests may inject a safe normalized provider result produced by a fake
+    /// transport without introducing network access or raw credentials.
+    pub fn run_with_home_and_environment_and_provider(
+        workspace: &Path,
+        home: Option<&Path>,
+        environment: Option<&[(&str, &str)]>,
+        environment_reachability: discovery::EnvironmentReachability,
+        provider_result: Option<discovery::cloudflare::ProviderResult>,
+    ) -> Result<ScanResult, PicoError> {
         let mut db = Database::open_existing(&workspace.join(".pico").join("pico.db"))?;
         db.migrate()?;
 
@@ -69,12 +94,15 @@ impl ScanService {
         let scan = Scan::start(PICO_VERSION)?;
         scan_repo.insert(&scan)?;
 
-        let discovered = discovery::discover_with_environment(
+        let mut discovered = discovery::discover_with_environment(
             workspace,
             home,
             environment,
             environment_reachability,
         )?;
+        if provider_result.is_some() {
+            discovered.cloudflare = provider_result;
+        }
         let resource_repo = ResourceRepo::new(db.connection());
         let evidence_repo = EvidenceRepo::new(db.connection());
         let observation_repo = ObservationRepo::new(db.connection());
@@ -403,6 +431,11 @@ impl ScanService {
 
         let mut cloudflare_credential_observed = false;
         let mut credential_reachability = None;
+        let mut cloudflare_credential_status = None;
+        let mut cloudflare_account_count = 0;
+        let mut cloudflare_worker_count = 0;
+        let mut worker_mutation_authority = None;
+        let mut authority_resolution = None;
         for credential in &discovered.credentials {
             cloudflare_credential_observed = true;
             let credential_key = format!(
@@ -512,6 +545,41 @@ impl ScanService {
             } else {
                 credential_reachability = Some("UNKNOWN".to_string());
             }
+
+            // The provider adapter is invoked upstream of ScanService and
+            // emits only safe normalized facts. Persist those facts here once
+            // local reachability has been established; this keeps provider
+            // parsing and credential handling out of the application layer.
+            let provider_result = discovered
+                .cloudflare
+                .as_ref()
+                .filter(|result| {
+                    result.credential_fingerprint == credential.fingerprint
+                        && matches!(credential_reachability.as_deref(), Some("REACHABLE"))
+                })
+                .cloned();
+            if let Some(provider_result) = provider_result {
+                if !provider_result.problems.is_empty() {
+                    discovered
+                        .problems
+                        .extend(provider_result.problems.iter().cloned());
+                }
+                let summary = persist_cloudflare_provider_result(
+                    &provider_result,
+                    &credential_key,
+                    &resource,
+                    &scan.id,
+                    &resource_repo,
+                    &relationship_repo,
+                    &evidence_repo,
+                    &observation_repo,
+                )?;
+                cloudflare_credential_status = summary.credential_status;
+                cloudflare_account_count = summary.account_count;
+                cloudflare_worker_count = summary.worker_count;
+                worker_mutation_authority = summary.worker_mutation_authority;
+                authority_resolution = summary.authority_resolution;
+            }
         }
 
         let completed = if discovered.problems.is_empty() {
@@ -540,8 +608,265 @@ impl ScanService {
             influence_strength,
             cloudflare_credential_observed,
             credential_reachability,
+            cloudflare_credential_status,
+            cloudflare_account_count,
+            cloudflare_worker_count,
+            worker_mutation_authority,
+            authority_resolution,
         })
     }
+}
+
+/// Safe summary emitted by persistence of one normalized Cloudflare result.
+#[derive(Debug, Default)]
+struct CloudflarePersistenceSummary {
+    credential_status: Option<String>,
+    account_count: u64,
+    worker_count: u64,
+    worker_mutation_authority: Option<String>,
+    authority_resolution: Option<String>,
+}
+
+/// Persist a normalized provider result into Pico's generic Resource,
+/// Relationship, Evidence, and Observation contracts. This function accepts
+/// no raw provider response and never constructs an authorization header.
+#[allow(clippy::too_many_arguments)]
+fn persist_cloudflare_provider_result(
+    result: &discovery::cloudflare::ProviderResult,
+    credential_key: &str,
+    credential: &Resource,
+    scan_id: &str,
+    resources: &ResourceRepo<'_>,
+    relationships: &RelationshipRepo<'_>,
+    evidence: &EvidenceRepo<'_>,
+    observations: &ObservationRepo<'_>,
+) -> Result<CloudflarePersistenceSummary, PicoError> {
+    use discovery::cloudflare::{AuthorityResolution, ScopeState};
+
+    let status = result
+        .credential_status
+        .map(|value| value.as_str().to_string());
+    let mut summary = CloudflarePersistenceSummary {
+        credential_status: status.clone(),
+        ..CloudflarePersistenceSummary::default()
+    };
+
+    let credential_status = status.as_deref().unwrap_or("UNKNOWN");
+    for account in &result.accounts {
+        let account_key = format!("cloudflare:account:{}", account.account_id);
+        let account_name = account
+            .name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or("Cloudflare Account");
+        let mut resource = match resources.get_by_canonical_key(&account_key)? {
+            Some(resource) => resource,
+            None => Resource::new(&account_key, "account", "cloudflare", account_name)?,
+        };
+        resource.last_observed_at = chrono::Utc::now();
+        resource.metadata = Some(serde_json::json!({
+            "account_id": account.account_id,
+            "account_type": account.account_type,
+            "environment": "UNKNOWN",
+            "source": "cloudflare_api",
+            "scope_state": account.scope.as_str(),
+        }));
+        validate_secret_safe(resource.metadata.as_ref().expect("metadata set"))?;
+        resources.upsert(&resource)?;
+        observe_resource(observations, scan_id, &resource, "cloudflare_provider")?;
+        evidence_for_subject(
+            evidence,
+            scan_id,
+            EvidenceClass::Direct,
+            "cloudflare_account_inventory",
+            &account.source_locator,
+            &account_key,
+            "Cloudflare account observed through the bounded account inventory operation",
+            serde_json::json!({
+                "account_id": account.account_id,
+                "scope_state": account.scope.as_str(),
+            }),
+        )?;
+
+        let state = match account.scope {
+            ScopeState::InScope => RelationshipState::Derived,
+            ScopeState::OutOfScope => RelationshipState::Blocked,
+            ScopeState::Unknown => RelationshipState::Unknown,
+        };
+        let relationship_key = format!("{credential_key}|scoped_to|{account_key}");
+        let metadata = serde_json::json!({
+            "scope_state": account.scope.as_str(),
+            "credential_status": credential_status,
+            "authority_resolution": "UNKNOWN",
+        });
+        persist_cloudflare_relationship(
+            relationships,
+            evidence,
+            observations,
+            scan_id,
+            credential,
+            &resource,
+            &relationship_key,
+            "scoped_to",
+            state,
+            metadata,
+            "Cloudflare token policy account scope was normalized by the provider adapter",
+            &account.source_locator,
+        )?;
+        summary.account_count += 1;
+    }
+
+    for worker in &result.workers {
+        let worker_key = worker.canonical_key();
+        let mut resource = match resources.get_by_canonical_key(&worker_key)? {
+            Some(resource) => resource,
+            None => Resource::new(&worker_key, "worker", "cloudflare", &worker.script_name)?,
+        };
+        resource.last_observed_at = chrono::Utc::now();
+        resource.metadata = Some(serde_json::json!({
+            "account_id": worker.account_id,
+            "worker_tag": worker.worker_tag,
+            "identity_precision": worker.identity_precision(),
+            "environment": "UNKNOWN",
+            "consequential_sink": true,
+            "source": "cloudflare_api",
+        }));
+        validate_secret_safe(resource.metadata.as_ref().expect("metadata set"))?;
+        resources.upsert(&resource)?;
+        observe_resource(observations, scan_id, &resource, "cloudflare_provider")?;
+        evidence_for_subject(
+            evidence,
+            scan_id,
+            EvidenceClass::Direct,
+            "cloudflare_worker_inventory",
+            &worker.source_locator,
+            &worker_key,
+            "Cloudflare Worker observed through the bounded Worker inventory operation",
+            serde_json::json!({
+                "account_id": worker.account_id,
+                "worker_identity": worker_key,
+                "identity_precision": worker.identity_precision(),
+            }),
+        )?;
+        summary.worker_count += 1;
+
+        // The provider emits one authority observation per enumerated Worker.
+        // A missing observation is intentionally not upgraded to write access.
+        if let Some(authority) = result.authorities.iter().find(|candidate| {
+            candidate.worker_key == worker_key && candidate.account_id == worker.account_id
+        }) {
+            let relationship_key = format!("{credential_key}|can_mutate|{worker_key}");
+            let metadata = serde_json::json!({
+                "capability": "WORKERS_SCRIPTS_WRITE",
+                "authority_resolution": authority.resolution.as_str(),
+                "credential_status": credential_status,
+                "permission_state": authority.permission_state,
+                "account_scope_state": authority.scope_state.as_str(),
+                "target_observation_state": "OBSERVED",
+                "unknown_reasons": authority.unknown_reasons,
+            });
+            persist_cloudflare_relationship(
+                relationships,
+                evidence,
+                observations,
+                scan_id,
+                credential,
+                &resource,
+                &relationship_key,
+                "can_mutate",
+                authority.state,
+                metadata,
+                "Cloudflare read-only policy and scope evidence resolved Worker mutation authority",
+                &authority.source_locator,
+            )?;
+            summary.worker_mutation_authority = Some(
+                match authority.state {
+                    RelationshipState::Derived => "CONFIRMED",
+                    RelationshipState::Blocked => "BLOCKED",
+                    _ => "UNKNOWN",
+                }
+                .to_string(),
+            );
+            summary.authority_resolution = Some(authority.resolution.as_str().to_string());
+        } else if result.credential_status
+            != Some(discovery::cloudflare::CredentialStatus::Inactive)
+        {
+            let relationship_key = format!("{credential_key}|can_mutate|{worker_key}");
+            let metadata = serde_json::json!({
+                "capability": "WORKERS_SCRIPTS_WRITE",
+                "authority_resolution": AuthorityResolution::Unknown.as_str(),
+                "credential_status": credential_status,
+                "unknown_reasons": ["AUTHORITY_RESULT_UNAVAILABLE"],
+            });
+            persist_cloudflare_relationship(
+                relationships,
+                evidence,
+                observations,
+                scan_id,
+                credential,
+                &resource,
+                &relationship_key,
+                "can_mutate",
+                RelationshipState::Unknown,
+                metadata,
+                "Worker observed but Cloudflare mutation authority was not resolved",
+                &worker.source_locator,
+            )?;
+            summary.worker_mutation_authority = Some("UNKNOWN".to_string());
+            summary.authority_resolution = Some(AuthorityResolution::Unknown.as_str().to_string());
+        }
+    }
+
+    Ok(summary)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_cloudflare_relationship(
+    relationships: &RelationshipRepo<'_>,
+    evidence: &EvidenceRepo<'_>,
+    observations: &ObservationRepo<'_>,
+    scan_id: &str,
+    from: &Resource,
+    to: &Resource,
+    key: &str,
+    kind: &str,
+    state: RelationshipState,
+    metadata: serde_json::Value,
+    explanation: &str,
+    locator: &str,
+) -> Result<(), PicoError> {
+    validate_secret_safe(&metadata)?;
+    let mut relationship = match relationships.get_by_canonical_key(key)? {
+        Some(relationship) => relationship,
+        None => Relationship::new(key, &from.id, &to.id, kind, state)?,
+    };
+    relationship.state = state;
+    relationship.last_observed_at = chrono::Utc::now();
+    relationship.metadata = Some(metadata.clone());
+    relationships.upsert(&relationship)?;
+
+    let mut item = Evidence::new(
+        scan_id,
+        EvidenceClass::Derived,
+        "cloudflare_authority_resolution",
+        locator,
+        key,
+        explanation,
+        Sensitivity::Internal,
+    )?;
+    item.metadata = Some(metadata.clone());
+    evidence.insert(&item)?;
+    relationships.link_evidence(&relationship.id, &item.id)?;
+
+    let mut observation = Observation::new(
+        scan_id,
+        "relationship",
+        &relationship.id,
+        "observed",
+        "cloudflare_provider",
+    )?;
+    observation.metadata = Some(metadata);
+    observations.insert(&observation)
 }
 
 fn validate_secret_safe(value: &serde_json::Value) -> Result<(), PicoError> {

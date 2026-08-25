@@ -161,9 +161,23 @@ pub fn discover_with_environment(
                     credential_type: "api_token",
                     source_type: "project_dotenv",
                     source_locator: ".env:CLOUDFLARE_API_TOKEN".to_string(),
-                    fingerprint: value_fingerprint,
+                    fingerprint: value_fingerprint.clone(),
                     environment: EnvironmentReachability::Proven,
                 });
+            }
+            // The exact project-root dotenv source is the bounded local
+            // contract that proves Bash reachability. Provider access remains
+            // transient and emits only safe normalized facts.
+            let provider_reachable = environment_reachability == EnvironmentReachability::Proven
+                && result.bash_capabilities.first().is_some_and(|capability| {
+                    capability.permission == PermissionAction::Allow
+                        && capability.scope == CapabilityScope::Unrestricted
+                });
+            if provider_reachable {
+                result.cloudflare = Some(crate::discovery::cloudflare::inspect_live(
+                    &value.0,
+                    &value_fingerprint,
+                ));
             }
         }
     }

@@ -11,3 +11,5 @@ mod github_mcp_scan_test;
 mod offline_test;
 #[path = "integration/opencode_scan_test.rs"]
 mod opencode_scan_test;
+#[path = "integration/sprint006_safety_test.rs"]
+mod sprint006_safety_test;
