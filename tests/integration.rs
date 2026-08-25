@@ -17,3 +17,5 @@ mod sprint006_safety_test;
 mod sprint007_graph_test;
 #[path = "integration/sprint008_analysis_test.rs"]
 mod sprint008_analysis_test;
+#[path = "integration/sprint009_finding_test.rs"]
+mod sprint009_finding_test;

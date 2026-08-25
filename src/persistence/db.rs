@@ -158,6 +158,105 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_attack_path_edges_path ON attack_path_edges(attack_path_id);
     CREATE INDEX IF NOT EXISTS idx_attack_path_evidence_path ON attack_path_evidence(attack_path_id);
     "#,
+    // Migration 4: Sprint 009 normalized Finding persistence. Findings are
+    // scan-scoped projections over completed analysis; links retain exact
+    // paths, same-scan evidence, structured reasons, and ordered remediation
+    // cuts without copying provider configuration into the Finding.
+    r#"
+    CREATE TABLE IF NOT EXISTS findings (
+        id TEXT PRIMARY KEY,
+        scan_id TEXT NOT NULL REFERENCES scans(id),
+        fingerprint TEXT NOT NULL,
+        finding_version TEXT NOT NULL,
+        finding_class TEXT NOT NULL CHECK (finding_class IN ('UNTRUSTED_TO_PRODUCTION')),
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK (severity IN ('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+        confidence TEXT NOT NULL CHECK (confidence IN ('LOW', 'MEDIUM', 'HIGH')),
+        status TEXT NOT NULL CHECK (status IN ('OPEN')),
+        metadata TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (scan_id, fingerprint)
+    );
+
+    CREATE TABLE IF NOT EXISTS finding_paths (
+        finding_id TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+        attack_path_id TEXT NOT NULL REFERENCES attack_paths(id),
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (finding_id, position),
+        UNIQUE (finding_id, attack_path_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS finding_evidence (
+        finding_id TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+        evidence_id TEXT NOT NULL REFERENCES evidence(id),
+        position INTEGER NOT NULL CHECK (position >= 0),
+        support_role TEXT NOT NULL,
+        PRIMARY KEY (finding_id, position),
+        UNIQUE (finding_id, evidence_id, position)
+    );
+
+    CREATE TABLE IF NOT EXISTS finding_reasons (
+        finding_id TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        reason_code TEXT NOT NULL,
+        resource_ids TEXT NOT NULL,
+        relationship_ids TEXT NOT NULL,
+        attack_path_ids TEXT NOT NULL,
+        evidence_ids TEXT NOT NULL,
+        PRIMARY KEY (finding_id, position),
+        UNIQUE (finding_id, reason_code, position)
+    );
+
+    CREATE TABLE IF NOT EXISTS finding_remediations (
+        finding_id TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        rule_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        security_effect TEXT NOT NULL,
+        cut_phase TEXT NOT NULL,
+        target_resource_ids TEXT NOT NULL,
+        target_relationship_ids TEXT NOT NULL,
+        PRIMARY KEY (finding_id, position),
+        UNIQUE (finding_id, rule_id, position)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
+    CREATE INDEX IF NOT EXISTS idx_findings_class ON findings(finding_class);
+    CREATE INDEX IF NOT EXISTS idx_finding_paths_finding ON finding_paths(finding_id);
+    CREATE INDEX IF NOT EXISTS idx_finding_paths_attack_path ON finding_paths(attack_path_id);
+    CREATE INDEX IF NOT EXISTS idx_finding_evidence_finding ON finding_evidence(finding_id);
+    CREATE INDEX IF NOT EXISTS idx_finding_evidence_evidence ON finding_evidence(evidence_id);
+    CREATE INDEX IF NOT EXISTS idx_finding_reasons_finding ON finding_reasons(finding_id);
+    CREATE INDEX IF NOT EXISTS idx_finding_remediations_finding ON finding_remediations(finding_id);
+
+    -- SQLite cannot express the scan-scoped part of these relationships as a
+    -- composite foreign key because the legacy attack_paths/evidence tables
+    -- do not expose scan_id in a UNIQUE composite key. Keep the ordinary FKs
+    -- above and enforce the stronger invariant at the database boundary.
+    CREATE TRIGGER IF NOT EXISTS finding_paths_same_scan_insert
+    BEFORE INSERT ON finding_paths
+    FOR EACH ROW
+    WHEN (SELECT scan_id FROM findings WHERE id = NEW.finding_id) IS NOT NULL
+     AND (SELECT scan_id FROM attack_paths WHERE id = NEW.attack_path_id) IS NOT NULL
+     AND (SELECT scan_id FROM findings WHERE id = NEW.finding_id)
+         != (SELECT scan_id FROM attack_paths WHERE id = NEW.attack_path_id)
+    BEGIN
+        SELECT RAISE(ABORT, 'finding path must reference an attack path from the same scan');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS finding_evidence_same_scan_insert
+    BEFORE INSERT ON finding_evidence
+    FOR EACH ROW
+    WHEN (SELECT scan_id FROM findings WHERE id = NEW.finding_id) IS NOT NULL
+     AND (SELECT scan_id FROM evidence WHERE id = NEW.evidence_id) IS NOT NULL
+     AND (SELECT scan_id FROM findings WHERE id = NEW.finding_id)
+         != (SELECT scan_id FROM evidence WHERE id = NEW.evidence_id)
+    BEGIN
+        SELECT RAISE(ABORT, 'finding evidence must reference evidence from the same scan');
+    END;
+    "#,
 ];
 
 /// A SQLite-backed Pico database.

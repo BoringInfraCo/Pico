@@ -11,6 +11,7 @@ pub mod application;
 pub mod cli;
 pub mod discovery;
 pub mod domain;
+pub mod findings;
 pub mod graph;
 pub mod persistence;
 pub mod shared;

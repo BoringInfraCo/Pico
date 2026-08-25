@@ -6,6 +6,7 @@
 
 pub mod analysis;
 pub mod db;
+pub mod findings;
 pub mod repos;
 
 pub use analysis::{
@@ -13,6 +14,10 @@ pub use analysis::{
     ScanAnalysisRecord, ScanAnalysisRepo,
 };
 pub use db::Database;
+pub use findings::{
+    FindingEvidenceRecord, FindingPathRecord, FindingReasonRecord, FindingRecord,
+    FindingRemediationRecord, FindingRepo,
+};
 pub use repos::{EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo};
 
 /// Helpers for serializing domain values to SQLite text columns.

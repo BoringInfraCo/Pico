@@ -87,6 +87,11 @@ pub struct ObservedWorker {
     pub script_name: String,
     pub worker_tag: Option<String>,
     pub source_locator: String,
+    /// Explicit provider classification of the Worker destination. Absence
+    /// remains UNKNOWN and must never be inferred from names or presence.
+    /// Supported normalized values are `PRODUCTION`, `STAGING`, `LOCAL_DEV`,
+    /// and `UNKNOWN`.
+    pub sink_impact: Option<String>,
 }
 
 impl ObservedWorker {
@@ -448,6 +453,7 @@ impl<T: GetTransport> Client<T> {
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     source_locator: workers_path.clone(),
+                    sink_impact: None,
                 };
                 let worker_key = observed.canonical_key();
                 let (state, resolution, permission_state, unknown_reasons) =

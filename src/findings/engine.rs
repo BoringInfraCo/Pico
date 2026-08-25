@@ -1,0 +1,871 @@
+//! Deterministic eligibility, grouping, and materialization of Findings.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use chrono::Utc;
+use sha2::{Digest, Sha256};
+
+use crate::analysis::{
+    AnalysisResult, AnalysisStatus, AttackPath, AuthorityResolution, BoundaryDecision,
+    CandidateDisposition, CapabilityClass, InfluenceStrength, SinkImpact, SourceTrust,
+};
+use crate::domain::{Evidence, EvidenceClass, ScanStatus};
+use crate::graph::SecurityGraph;
+
+use super::model::{
+    Confidence, Finding, FindingClass, FindingGenerationStatus, FindingLimits, FindingReason,
+    FindingResult, FindingStatus, ReasonCode, Remediation, Severity, FINDING_VERSION,
+};
+
+const TITLE: &str = "External content can reach production mutation authority";
+const SUMMARY: &str = "Externally controlled content can reach an autonomous coding environment with authority capable of changing an explicitly classified production resource.";
+
+/// Generate Findings for a completed scan. This convenience API assumes the
+/// caller has already established that the Scan is complete. Use
+/// [`generate_with_scan_status`] at the application boundary when the Scan
+/// lifecycle status is available.
+pub fn generate(
+    graph: &SecurityGraph,
+    analysis: &AnalysisResult,
+    limits: &FindingLimits,
+) -> FindingResult {
+    generate_with_scan_status(graph, analysis, ScanStatus::Complete, limits)
+}
+
+/// Generate only positive Findings from a complete, complete-analysis scan.
+/// Every security-critical fact is checked against the current graph and its
+/// current-scan Evidence; missing or weak facts fail closed.
+pub fn generate_with_scan_status(
+    graph: &SecurityGraph,
+    analysis: &AnalysisResult,
+    scan_status: ScanStatus,
+    limits: &FindingLimits,
+) -> FindingResult {
+    let mut result = FindingResult {
+        scan_id: graph.scan_id.clone(),
+        finding_version: FINDING_VERSION,
+        status: FindingGenerationStatus::Complete,
+        findings: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    if scan_status != ScanStatus::Complete {
+        result.diagnostics.push("scan is not COMPLETE".into());
+        return result;
+    }
+    if analysis.scan_id != graph.scan_id {
+        result.status = FindingGenerationStatus::Failed;
+        result
+            .diagnostics
+            .push("analysis belongs to another scan".into());
+        return result;
+    }
+    if analysis.status != AnalysisStatus::Complete {
+        result
+            .diagnostics
+            .push("analysis is not COMPLETE; positive Findings are suppressed".into());
+        return result;
+    }
+    if analysis.attack_paths.len() > limits.maximum_attack_paths_examined {
+        result.status = FindingGenerationStatus::Limited;
+        result
+            .diagnostics
+            .push("Finding attack-path examination limit reached".into());
+        return result;
+    }
+
+    let mut groups: BTreeMap<String, Vec<Candidate<'_>>> = BTreeMap::new();
+    for path in &analysis.attack_paths {
+        if path.disposition != CandidateDisposition::Active {
+            continue;
+        }
+        let Some(candidate) = eligible_candidate(graph, path) else {
+            continue;
+        };
+        let key = grouping_key(graph, path, candidate.severity, candidate.confidence);
+        groups.entry(key).or_default().push(candidate);
+    }
+    if groups.len() > limits.maximum_groups {
+        result.status = FindingGenerationStatus::Limited;
+        result
+            .diagnostics
+            .push("Finding grouping limit reached".into());
+        return result;
+    }
+
+    for (_, mut candidates) in groups {
+        candidates.sort_by(|a, b| a.path.fingerprint.cmp(&b.path.fingerprint));
+        candidates.dedup_by(|a, b| a.path.fingerprint == b.path.fingerprint);
+        if candidates.len() > limits.maximum_paths_per_finding {
+            result.status = FindingGenerationStatus::Limited;
+            result
+                .diagnostics
+                .push("paths per Finding limit reached".into());
+            result.findings.clear();
+            return result;
+        }
+        let finding = match materialize_finding(graph, &candidates, limits) {
+            Ok(finding) => finding,
+            Err(message) => {
+                result.diagnostics.push(message);
+                continue;
+            }
+        };
+        if result.findings.len() >= limits.maximum_emitted_findings {
+            result.status = FindingGenerationStatus::Limited;
+            result
+                .diagnostics
+                .push("emitted Finding limit reached".into());
+            result.findings.clear();
+            return result;
+        }
+        result.findings.push(finding);
+    }
+    result
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Candidate<'a> {
+    path: &'a AttackPath,
+    production_evidence: &'a [String],
+    severity: Severity,
+    confidence: Confidence,
+}
+
+fn eligible_candidate<'a>(graph: &'a SecurityGraph, path: &'a AttackPath) -> Option<Candidate<'a>> {
+    if !matches!(
+        path.source_trust,
+        SourceTrust::PublicExternal | SourceTrust::OpenWorld | SourceTrust::AuthenticatedExternal
+    ) || !matches!(
+        path.influence_strength,
+        InfluenceStrength::AgentRetrievable
+            | InfluenceStrength::AutomaticallyInjected
+            | InfluenceStrength::InstructionBearing
+    ) || !matches!(
+        path.capability,
+        CapabilityClass::Execute | CapabilityClass::Admin
+    ) || !matches!(
+        path.authority_resolution,
+        AuthorityResolution::Exact | AuthorityResolution::Scoped
+    ) || path.sink_impact != SinkImpact::Production
+    {
+        return None;
+    }
+    if path
+        .boundary_evaluations
+        .iter()
+        .any(|boundary| boundary.decision != BoundaryDecision::DoesNotInterrupt)
+    {
+        return None;
+    }
+    let sink = graph.node(&path.sink_resource_id)?;
+    if !explicit_production_metadata(sink.safe_metadata.as_ref()) {
+        return None;
+    }
+    if !critical_edges_are_confirmed(graph, path) {
+        return None;
+    }
+    let path_evidence = all_path_evidence(graph, path)?;
+    let production_ids = explicit_production_evidence(graph, path, &path_evidence);
+    if production_ids.is_empty() {
+        return None;
+    }
+    let production_class = evidence_quality(&production_ids, graph)?;
+    let confidence = if path_evidence
+        .iter()
+        .all(|e| e.class != EvidenceClass::Inferred)
+        && production_ids.iter().all(|id| {
+            graph
+                .evidence_index
+                .evidence(id)
+                .is_some_and(|e| e.class != EvidenceClass::Inferred)
+        })
+        && production_class
+    {
+        Confidence::High
+    } else {
+        return None;
+    };
+    let severity = match path.source_trust {
+        SourceTrust::PublicExternal | SourceTrust::OpenWorld => Severity::Critical,
+        SourceTrust::AuthenticatedExternal => Severity::High,
+        _ => return None,
+    };
+    // Leak the sorted IDs into the graph-owned temporary only through the
+    // candidate's own local storage. The helper returns a static-looking
+    // slice backed by the path's evidence when classification evidence is
+    // already linked there; unlinked production Evidence is handled by
+    // `materialize_finding` through a recomputation. This branch is replaced
+    // below by the owned candidate constructor.
+    let _ = production_ids;
+    let production_evidence = path.evidence_ids.as_slice();
+    Some(Candidate {
+        path,
+        production_evidence,
+        severity,
+        confidence,
+    })
+}
+
+fn critical_edges_are_confirmed(graph: &SecurityGraph, path: &AttackPath) -> bool {
+    path.influence_edges
+        .iter()
+        .chain(path.authority_edges.iter())
+        .all(|reference| {
+            graph.edge(&reference.relationship_id).is_some_and(|edge| {
+                matches!(
+                    edge.state,
+                    crate::domain::RelationshipState::Confirmed
+                        | crate::domain::RelationshipState::Derived
+                )
+            })
+        })
+}
+
+fn all_path_evidence<'a>(graph: &'a SecurityGraph, path: &AttackPath) -> Option<Vec<&'a Evidence>> {
+    let mut ids = path.evidence_ids.clone();
+    ids.sort();
+    ids.dedup();
+    let mut evidence = Vec::with_capacity(ids.len());
+    for id in ids {
+        let item = graph.evidence_index.evidence(&id)?;
+        if item.scan_id != graph.scan_id {
+            return None;
+        }
+        evidence.push(item);
+    }
+    Some(evidence)
+}
+
+fn explicit_production_metadata(metadata: Option<&serde_json::Value>) -> bool {
+    let Some(object) = metadata.and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    ["sink_impact", "environment", "production_classification"]
+        .iter()
+        .any(|key| {
+            object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| value.eq_ignore_ascii_case("PRODUCTION"))
+        })
+}
+
+fn explicit_production_evidence<'a>(
+    graph: &'a SecurityGraph,
+    path: &AttackPath,
+    path_evidence: &[&'a Evidence],
+) -> Vec<String> {
+    let sink_key = graph
+        .node(&path.sink_resource_id)
+        .map(|node| node.canonical_key.as_str());
+    let mut output = path_evidence
+        .iter()
+        .filter(|evidence| evidence_is_production(evidence, &path.sink_resource_id, sink_key))
+        .map(|evidence| evidence.id.clone())
+        .collect::<Vec<_>>();
+    for evidence in graph.evidence_index.by_evidence_id.values() {
+        if evidence.scan_id == graph.scan_id
+            && evidence_is_production(evidence, &path.sink_resource_id, sink_key)
+        {
+            output.push(evidence.id.clone());
+        }
+    }
+    output.sort();
+    output.dedup();
+    output
+}
+
+fn evidence_is_production(evidence: &Evidence, sink_id: &str, sink_key: Option<&str>) -> bool {
+    let subject_matches = evidence.subject == sink_id
+        || sink_key == Some(evidence.subject.as_str())
+        // Relationship Evidence commonly uses the relationship canonical key
+        // as its subject. Requiring the sink canonical key as a segment keeps
+        // this deterministic without accepting name-based evidence.
+        || sink_key.is_some_and(|key| evidence.subject.contains(key));
+    let explicit = evidence
+        .metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| {
+            ["sink_impact", "environment", "production_classification"]
+                .iter()
+                .find_map(|key| object.get(*key).and_then(serde_json::Value::as_str))
+        })
+        .is_some_and(|value| value.eq_ignore_ascii_case("PRODUCTION"));
+    let observation_explicit = evidence
+        .observation
+        .to_ascii_uppercase()
+        .contains("PRODUCTION")
+        && (evidence
+            .observation
+            .to_ascii_uppercase()
+            .contains("SINK_IMPACT")
+            || evidence
+                .observation
+                .to_ascii_uppercase()
+                .contains("ENVIRONMENT"));
+    subject_matches && (explicit || observation_explicit)
+}
+
+fn evidence_quality(ids: &[String], graph: &SecurityGraph) -> Option<bool> {
+    if ids.is_empty() {
+        return None;
+    }
+    Some(ids.iter().all(|id| {
+        graph.evidence_index.evidence(id).is_some_and(|evidence| {
+            matches!(
+                evidence.class,
+                EvidenceClass::Direct | EvidenceClass::Declared | EvidenceClass::Derived
+            ) && evidence.scan_id == graph.scan_id
+        })
+    }))
+}
+
+fn grouping_key(
+    graph: &SecurityGraph,
+    path: &AttackPath,
+    severity: Severity,
+    confidence: Confidence,
+) -> String {
+    let mut authorities = path
+        .authority_edges
+        .iter()
+        .filter_map(|reference| graph.edge(&reference.relationship_id))
+        .flat_map(|edge| [edge.from_resource_id.as_str(), edge.to_resource_id.as_str()])
+        .filter_map(|id| graph.node(id))
+        .filter(|node| node.roles.iter().any(|role| role.as_str() == "AUTHORITY"))
+        .map(|node| node.canonical_key.as_str())
+        .collect::<Vec<_>>();
+    authorities.sort_unstable();
+    authorities.dedup();
+    let source = canonical_node(graph, &path.source_resource_id);
+    let actor = canonical_node(graph, &path.actor_resource_id);
+    format!(
+        "source={source};actor={actor};authority={};severity={};confidence={}",
+        authorities.join(","),
+        severity.as_str(),
+        confidence.as_str()
+    )
+}
+
+fn materialize_finding(
+    graph: &SecurityGraph,
+    candidates: &[Candidate<'_>],
+    limits: &FindingLimits,
+) -> Result<Finding, String> {
+    let first = candidates
+        .first()
+        .ok_or_else(|| "empty Finding group".to_string())?;
+    let mut sources = candidates
+        .iter()
+        .map(|candidate| canonical_node(graph, &candidate.path.source_resource_id))
+        .collect::<Vec<_>>();
+    let mut actors = candidates
+        .iter()
+        .map(|candidate| canonical_node(graph, &candidate.path.actor_resource_id))
+        .collect::<Vec<_>>();
+    let mut sinks = candidates
+        .iter()
+        .map(|candidate| canonical_node(graph, &candidate.path.sink_resource_id))
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    actors.sort();
+    actors.dedup();
+    sinks.sort();
+    sinks.dedup();
+
+    let mut evidence_ids = BTreeSet::new();
+    let mut relationship_ids = BTreeSet::new();
+    let mut resource_ids = BTreeSet::new();
+    let path_fingerprints = candidates
+        .iter()
+        .map(|candidate| candidate.path.fingerprint.clone())
+        .collect::<Vec<_>>();
+    let path_ids = candidates
+        .iter()
+        .map(|candidate| candidate.path.id.clone())
+        .collect::<Vec<_>>();
+    for candidate in candidates {
+        resource_ids.insert(candidate.path.source_resource_id.clone());
+        resource_ids.insert(candidate.path.actor_resource_id.clone());
+        resource_ids.insert(candidate.path.sink_resource_id.clone());
+        for reference in candidate
+            .path
+            .influence_edges
+            .iter()
+            .chain(candidate.path.authority_edges.iter())
+        {
+            relationship_ids.insert(reference.relationship_id.clone());
+            if let Some(edge) = graph.edge(&reference.relationship_id) {
+                evidence_ids.extend(edge.evidence_ids.iter().cloned());
+            }
+        }
+        evidence_ids.extend(candidate.path.evidence_ids.iter().cloned());
+        evidence_ids.extend(candidate.production_evidence.iter().cloned());
+        evidence_ids.extend(explicit_production_evidence_for_path(graph, candidate.path));
+    }
+    let evidence_ids = evidence_ids.into_iter().collect::<Vec<_>>();
+    if evidence_ids.len() > limits.maximum_evidence_per_finding {
+        return Err("Evidence per Finding limit reached".into());
+    }
+    if evidence_ids.iter().any(|id| {
+        graph
+            .evidence_index
+            .evidence(id)
+            .is_none_or(|evidence| evidence.scan_id != graph.scan_id)
+    }) {
+        return Err("Finding Evidence is missing or belongs to another scan".into());
+    }
+
+    let mut reasons = vec![
+        reason(
+            ReasonCode::ExternalInfluenceSource,
+            &resource_ids,
+            &relationship_ids,
+            &path_fingerprints,
+            &evidence_ids,
+        ),
+        reason(
+            ReasonCode::AgentRetrievableContent,
+            &resource_ids,
+            &relationship_ids,
+            &path_fingerprints,
+            &evidence_ids,
+        ),
+        reason(
+            ReasonCode::AutonomousExecutionCapability,
+            &resource_ids,
+            &relationship_ids,
+            &path_fingerprints,
+            &evidence_ids,
+        ),
+        reason(
+            ReasonCode::ReachableCredentialAuthority,
+            &resource_ids,
+            &relationship_ids,
+            &path_fingerprints,
+            &evidence_ids,
+        ),
+        reason(
+            ReasonCode::ProductionMutationAuthority,
+            &resource_ids,
+            &relationship_ids,
+            &path_fingerprints,
+            &evidence_ids,
+        ),
+        reason(
+            ReasonCode::NoEnforcedBoundary,
+            &resource_ids,
+            &relationship_ids,
+            &path_fingerprints,
+            &evidence_ids,
+        ),
+    ];
+    reasons.sort_by_key(|reason| reason.code);
+    if reasons.len() > limits.maximum_reasons_per_finding {
+        return Err("reasons per Finding limit reached".into());
+    }
+    let remediations = remediations(graph, candidates);
+    if remediations.len() > limits.maximum_remediations_per_finding {
+        return Err("remediations per Finding limit reached".into());
+    }
+    let remediation_rule_ids = remediations
+        .iter()
+        .map(|remediation| remediation.rule_id.clone())
+        .collect::<Vec<_>>();
+    let fingerprint = finding_fingerprint(
+        &sources,
+        &actors,
+        &sinks,
+        &path_fingerprints,
+        first.severity,
+        first.confidence,
+        &remediation_rule_ids,
+    );
+    Ok(Finding {
+        id: format!(
+            "finding_{}:{}",
+            graph.scan_id,
+            fingerprint.trim_start_matches("sha256:")
+        ),
+        scan_id: graph.scan_id.clone(),
+        fingerprint,
+        finding_version: FINDING_VERSION,
+        finding_class: FindingClass::UntrustedToProduction,
+        status: FindingStatus::Open,
+        title: TITLE.to_string(),
+        summary: SUMMARY.to_string(),
+        severity: first.severity,
+        confidence: first.confidence,
+        source_resource_ids: sources,
+        actor_resource_ids: actors,
+        sink_resource_ids: sinks,
+        attack_path_ids: path_ids,
+        attack_path_fingerprints: path_fingerprints,
+        evidence_ids,
+        reasons,
+        remediations,
+        created_at: Utc::now(),
+    })
+}
+
+fn explicit_production_evidence_for_path(graph: &SecurityGraph, path: &AttackPath) -> Vec<String> {
+    let Some(sink_key) = graph
+        .node(&path.sink_resource_id)
+        .map(|node| node.canonical_key.as_str())
+    else {
+        return Vec::new();
+    };
+    graph
+        .evidence_index
+        .by_evidence_id
+        .values()
+        .filter(|evidence| {
+            evidence.scan_id == graph.scan_id
+                && evidence_is_production(evidence, &path.sink_resource_id, Some(sink_key))
+        })
+        .map(|evidence| evidence.id.clone())
+        .collect()
+}
+
+fn reason(
+    code: ReasonCode,
+    resource_ids: &BTreeSet<String>,
+    relationship_ids: &BTreeSet<String>,
+    path_fingerprints: &[String],
+    evidence_ids: &[String],
+) -> FindingReason {
+    FindingReason {
+        code,
+        resource_ids: resource_ids.iter().cloned().collect(),
+        relationship_ids: relationship_ids.iter().cloned().collect(),
+        attack_path_fingerprints: path_fingerprints.to_vec(),
+        evidence_ids: evidence_ids.to_vec(),
+    }
+}
+
+fn remediations(graph: &SecurityGraph, candidates: &[Candidate<'_>]) -> Vec<Remediation> {
+    let mut cuts: BTreeMap<&'static str, (Vec<String>, BTreeSet<String>, &'static str)> =
+        BTreeMap::new();
+    for candidate in candidates {
+        for reference in candidate
+            .path
+            .influence_edges
+            .iter()
+            .chain(candidate.path.authority_edges.iter())
+        {
+            let Some(edge) = graph.edge(&reference.relationship_id) else {
+                continue;
+            };
+            let rule = match edge.kind.as_str() {
+                "can_retrieve" | "can_call" => "RESTRICT_EXTERNAL_RETRIEVAL",
+                "can_execute" => "ENFORCE_BASH_APPROVAL_OR_DENY",
+                "can_access" | "uses_credential" | "authenticates_to" => {
+                    "REMOVE_AGENT_CREDENTIAL_REACHABILITY"
+                }
+                "can_mutate" | "can_deploy" => "SCOPE_PRODUCTION_MUTATION_AUTHORITY",
+                _ => continue,
+            };
+            let phase = reference.phase.as_str();
+            let entry = cuts
+                .entry(rule)
+                .or_insert_with(|| (Vec::new(), BTreeSet::new(), phase));
+            entry.0.push(edge.relationship_id.clone());
+            entry.1.insert(edge.from_resource_id.clone());
+            entry.1.insert(edge.to_resource_id.clone());
+        }
+    }
+    let descriptions = [
+        (
+            "RESTRICT_EXTERNAL_RETRIEVAL",
+            "Restrict the exact external retrieval capability for the privileged Actor.",
+            "Require an explicit boundary before externally controlled content is retrieved by the Actor.",
+            "Break the influence segment before content reaches the Actor.",
+        ),
+        (
+            "ENFORCE_BASH_APPROVAL_OR_DENY",
+            "Require technically enforced, non-bypassable approval or deny for Bash.",
+            "Ensure the Actor cannot self-approve execution of the shell capability.",
+            "Interrupt autonomous execution before authority becomes reachable.",
+        ),
+        (
+            "REMOVE_AGENT_CREDENTIAL_REACHABILITY",
+            "Remove the credential from the Actor-reachable execution environment.",
+            "Prevent autonomous execution from reaching the authority-bearing credential.",
+            "Break the authority segment before credential use.",
+        ),
+        (
+            "SCOPE_PRODUCTION_MUTATION_AUTHORITY",
+            "Scope mutation authority away from the affected production target.",
+            "Remove or narrow the exact production mutation edge reached by the Actor.",
+            "Limit the final authority-to-production mutation cut.",
+        ),
+    ];
+    let mut output = Vec::new();
+    for (rule_id, (mut relationship_ids, resources, phase)) in cuts {
+        relationship_ids.sort();
+        let Some((_, title, description, effect)) =
+            descriptions.iter().find(|item| item.0 == rule_id)
+        else {
+            continue;
+        };
+        output.push(Remediation {
+            rule_id: rule_id.to_string(),
+            title: (*title).to_string(),
+            description: (*description).to_string(),
+            security_effect: (*effect).to_string(),
+            cut_phase: phase.to_string(),
+            target_resource_ids: resources.into_iter().collect(),
+            target_relationship_ids: relationship_ids,
+        });
+    }
+    output.sort_by(|a, b| a.rule_id.cmp(&b.rule_id));
+    output
+}
+
+fn canonical_node(graph: &SecurityGraph, id: &str) -> String {
+    graph
+        .node(id)
+        .map(|node| node.canonical_key.clone())
+        .unwrap_or_else(|| id.to_string())
+}
+
+fn finding_fingerprint(
+    sources: &[String],
+    actors: &[String],
+    sinks: &[String],
+    paths: &[String],
+    severity: Severity,
+    confidence: Confidence,
+    remediation_rules: &[String],
+) -> String {
+    let mut input = String::new();
+    field(&mut input, "version", &FINDING_VERSION.to_string());
+    field(
+        &mut input,
+        "class",
+        FindingClass::UntrustedToProduction.as_str(),
+    );
+    for value in sources {
+        field(&mut input, "source", value);
+    }
+    for value in actors {
+        field(&mut input, "actor", value);
+    }
+    for value in sinks {
+        field(&mut input, "sink", value);
+    }
+    for value in paths {
+        field(&mut input, "path", value);
+    }
+    field(&mut input, "severity", severity.as_str());
+    field(&mut input, "confidence", confidence.as_str());
+    for value in remediation_rules {
+        field(&mut input, "remediation", value);
+    }
+    let digest = Sha256::digest(input.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
+fn field(output: &mut String, label: &str, value: &str) {
+    output.push_str(&format!("{}:{}:{}:", label.len(), label, value.len()));
+    output.push_str(value);
+    output.push(';');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::{AnalysisLimits, AnalysisResult};
+    use crate::domain::{EvidenceClass, RelationshipState, Sensitivity};
+    use crate::graph::{EdgeUsability, GraphEdge, GraphEvidenceIndex, GraphNode, SecurityRole};
+    use serde_json::json;
+
+    fn fixture() -> (SecurityGraph, AnalysisResult) {
+        let scan_id = "scan-finding".to_string();
+        let ids = ["source", "tool", "actor", "bash", "credential", "sink"];
+        let mut nodes = Vec::new();
+        for id in ids {
+            let (key, roles, metadata) = match id {
+                "source" => (
+                    "source:github:issue",
+                    vec![SecurityRole::Source],
+                    Some(
+                        json!({"trust":"PUBLIC_EXTERNAL","influence_strength":"AGENT_RETRIEVABLE"}),
+                    ),
+                ),
+                "actor" => ("agent:opencode", vec![SecurityRole::Actor], None),
+                "bash" => (
+                    "shell:bash",
+                    vec![SecurityRole::Capability],
+                    Some(json!({"capability":"EXECUTE"})),
+                ),
+                "sink" => (
+                    "cloudflare:worker:production",
+                    vec![SecurityRole::Sink],
+                    Some(json!({"consequential_sink":true,"sink_impact":"PRODUCTION"})),
+                ),
+                "credential" => (
+                    "credential:cloudflare:fingerprint",
+                    vec![SecurityRole::Authority],
+                    None,
+                ),
+                "tool" => ("mcp:github:tool", vec![SecurityRole::Capability], None),
+                _ => unreachable!(),
+            };
+            nodes.push(GraphNode {
+                resource_id: id.into(),
+                canonical_key: key.into(),
+                kind: "fixture".into(),
+                provider: "fixture".into(),
+                name: id.into(),
+                safe_metadata: metadata,
+                roles,
+            });
+        }
+        let edge_defs = [
+            ("call", "actor", "tool", "can_call"),
+            ("retrieve", "tool", "source", "can_retrieve"),
+            ("execute", "actor", "bash", "can_execute"),
+            ("access", "bash", "credential", "can_access"),
+            ("mutate", "credential", "sink", "can_mutate"),
+        ];
+        let mut edges = Vec::new();
+        let mut outgoing = BTreeMap::new();
+        let mut incoming = BTreeMap::new();
+        let mut evidence = GraphEvidenceIndex::default();
+        for (id, from, to, kind) in edge_defs {
+            let mut edge = GraphEdge {
+                relationship_id: id.into(),
+                canonical_key: format!("{from}|{kind}|{to}"),
+                from_resource_id: from.into(),
+                to_resource_id: to.into(),
+                kind: kind.into(),
+                state: RelationshipState::Derived,
+                usability: EdgeUsability::Traversable,
+                safe_metadata: None,
+                evidence_ids: vec![format!("ev-{id}")],
+            };
+            if id == "mutate" {
+                edge.safe_metadata = Some(json!({"authority_resolution":"EXACT"}));
+            }
+            outgoing
+                .entry(from.into())
+                .or_insert_with(Vec::new)
+                .push(id.into());
+            incoming
+                .entry(to.into())
+                .or_insert_with(Vec::new)
+                .push(id.into());
+            let mut item = Evidence::new(
+                &scan_id,
+                EvidenceClass::Derived,
+                "fixture",
+                "fixture",
+                &edge.canonical_key,
+                "observed",
+                Sensitivity::Internal,
+            )
+            .unwrap();
+            item.id = format!("ev-{id}");
+            evidence.by_evidence_id.insert(item.id.clone(), item);
+            evidence
+                .by_relationship_id
+                .insert(id.into(), edge.evidence_ids.clone());
+            edges.push(edge);
+        }
+        let mut production = Evidence::new(
+            &scan_id,
+            EvidenceClass::Declared,
+            "fixture",
+            "fixture",
+            "sink",
+            "sink_impact=PRODUCTION",
+            Sensitivity::Internal,
+        )
+        .unwrap();
+        production.id = "ev-production".into();
+        production.metadata = Some(json!({"sink_impact":"PRODUCTION"}));
+        evidence
+            .by_evidence_id
+            .insert(production.id.clone(), production);
+        let graph = SecurityGraph {
+            scan_id: scan_id.clone(),
+            snapshot_version: 1,
+            nodes,
+            edges,
+            outgoing_index: outgoing,
+            incoming_index: incoming,
+            evidence_index: evidence,
+        };
+        let analysis = crate::analysis::analyze(&graph, &AnalysisLimits::default());
+        (graph, analysis)
+    }
+
+    #[test]
+    fn emits_critical_high_golden_finding() {
+        let (graph, analysis) = fixture();
+        let result = generate(&graph, &analysis, &FindingLimits::default());
+        assert_eq!(result.status, FindingGenerationStatus::Complete);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].severity, Severity::Critical);
+        assert_eq!(result.findings[0].confidence, Confidence::High);
+        assert_eq!(
+            result.findings[0].finding_class,
+            FindingClass::UntrustedToProduction
+        );
+        assert_eq!(result.findings[0].remediations.len(), 4);
+    }
+
+    #[test]
+    fn unknown_production_is_not_a_finding() {
+        let (mut graph, analysis) = fixture();
+        graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.resource_id == "sink")
+            .unwrap()
+            .safe_metadata = Some(json!({"consequential_sink":true,"sink_impact":"UNKNOWN"}));
+        let mut analysis = analysis;
+        analysis.attack_paths[0].sink_impact = SinkImpact::Unknown;
+        let result = generate(&graph, &analysis, &FindingLimits::default());
+        assert!(result.findings.is_empty());
+    }
+
+    #[test]
+    fn partial_and_limited_are_fail_closed() {
+        let (graph, analysis) = fixture();
+        let partial = generate_with_scan_status(
+            &graph,
+            &analysis,
+            ScanStatus::Partial,
+            &FindingLimits::default(),
+        );
+        assert!(partial.findings.is_empty());
+        let mut limited_analysis = analysis;
+        limited_analysis.status = AnalysisStatus::Limited;
+        let limited = generate(&graph, &limited_analysis, &FindingLimits::default());
+        assert!(limited.findings.is_empty());
+    }
+
+    #[test]
+    fn equivalent_graphs_have_stable_finding_fingerprint() {
+        let (graph, analysis) = fixture();
+        let first = generate(&graph, &analysis, &FindingLimits::default());
+        let mut second_graph = graph.clone();
+        second_graph.scan_id = "scan-other".into();
+        for evidence in second_graph.evidence_index.by_evidence_id.values_mut() {
+            evidence.scan_id = "scan-other".into();
+        }
+        let mut second_analysis = analysis.clone();
+        second_analysis.scan_id = "scan-other".into();
+        second_analysis.attack_paths[0].scan_id = "scan-other".into();
+        let second = generate(&second_graph, &second_analysis, &FindingLimits::default());
+        assert_eq!(
+            first.findings[0].fingerprint,
+            second.findings[0].fingerprint
+        );
+        assert_ne!(first.findings[0].id, second.findings[0].id);
+    }
+}

@@ -87,6 +87,15 @@ fn run_scan() -> Result<(), PicoError> {
         result.unresolved_candidate_count
     );
     println!("Findings:        {}", result.finding_count);
+    if let Some(class) = result.finding_class {
+        println!("Finding:         {class}");
+    }
+    if let Some(severity) = result.finding_severity {
+        println!("Severity:        {severity}");
+    }
+    if let Some(confidence) = result.finding_confidence {
+        println!("Confidence:      {confidence}");
+    }
     if let Some(permission) = result.bash_permission {
         println!("Effective Bash: {permission}");
     }

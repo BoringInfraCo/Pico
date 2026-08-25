@@ -7,11 +7,11 @@ use pico::shared::{PicoError, PICO_VERSION};
 use tempfile::tempdir;
 
 #[test]
-fn fresh_database_initializes_to_schema_version_3() {
+fn fresh_database_initializes_to_schema_version_4() {
     let dir = tempdir().unwrap();
     let mut db = Database::open(&dir.path().join("pico.db")).unwrap();
     db.migrate().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 3);
+    assert_eq!(db.schema_version().unwrap(), 4);
 }
 
 #[test]
@@ -20,9 +20,9 @@ fn migration_is_idempotent() {
     let path = dir.path().join("pico.db");
     let mut db = Database::open(&path).unwrap();
     db.migrate().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 3);
+    assert_eq!(db.schema_version().unwrap(), 4);
     db.migrate().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 3);
+    assert_eq!(db.schema_version().unwrap(), 4);
 }
 
 #[test]
@@ -62,6 +62,11 @@ fn schema_tables_exist() {
         "attack_paths",
         "attack_path_edges",
         "attack_path_evidence",
+        "findings",
+        "finding_paths",
+        "finding_evidence",
+        "finding_reasons",
+        "finding_remediations",
     ] {
         let name: String = db
             .connection()

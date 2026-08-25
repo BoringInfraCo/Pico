@@ -11,11 +11,15 @@ use crate::domain::{
     Observation, Relationship, RelationshipState, Resource, Scan, ScanStatus, Sensitivity,
     GRAPH_SNAPSHOT_VERSION,
 };
+use crate::findings::{
+    generate_with_scan_status, FindingGenerationStatus, FindingLimits, FindingResult,
+};
 use crate::graph::{project, ProjectionInput, SecurityGraph};
 use crate::persistence::{
     AttackPathEdgeRecord, AttackPathEvidenceRecord, AttackPathRecord, AttackPathRepo, Database,
-    EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanAnalysisRecord,
-    ScanAnalysisRepo, ScanRepo,
+    EvidenceRepo, FindingEvidenceRecord, FindingPathRecord, FindingReasonRecord, FindingRecord,
+    FindingRemediationRecord, FindingRepo, ObservationRepo, RelationshipRepo, ResourceRepo,
+    ScanAnalysisRecord, ScanAnalysisRepo, ScanRepo,
 };
 use crate::shared::{PicoError, PICO_VERSION};
 use chrono::Utc;
@@ -32,6 +36,10 @@ pub struct ScanResult {
     pub relationship_count: u64,
     pub evidence_count: u64,
     pub finding_count: u64,
+    pub findings: Option<FindingResult>,
+    pub finding_class: Option<String>,
+    pub finding_severity: Option<String>,
+    pub finding_confidence: Option<String>,
     pub bash_permission: Option<String>,
     pub github_mcp_observed: bool,
     pub influence_strength: Option<String>,
@@ -676,12 +684,33 @@ impl ScanService {
             ));
         }
 
-        let completed =
+        let desired_status =
             if analysis.status == AnalysisStatus::Limited || !discovered.problems.is_empty() {
-                scan.partial()?
+                ScanStatus::Partial
             } else {
-                scan.complete()?
+                ScanStatus::Complete
             };
+        let findings =
+            generate_with_scan_status(&graph, &analysis, desired_status, &FindingLimits::default());
+        if findings.status == FindingGenerationStatus::Failed {
+            let failed = scan.fail()?;
+            scan_repo.update(&failed)?;
+            return Err(PicoError::scan(
+                "deterministic Finding generation failed integrity validation",
+            ));
+        }
+        if let Err(error) = persist_finding_results(db.connection(), &findings) {
+            let failed = scan.fail()?;
+            scan_repo.update(&failed)?;
+            return Err(error);
+        }
+        let completed = if desired_status == ScanStatus::Partial
+            || findings.status == FindingGenerationStatus::Limited
+        {
+            scan.partial()?
+        } else {
+            scan.complete()?
+        };
         scan_repo.update(&completed)?;
 
         let resource_count = resource_repo.count()?;
@@ -697,7 +726,20 @@ impl ScanService {
             agent_count: u64::from(actor_seen),
             relationship_count,
             evidence_count,
-            finding_count: 0,
+            finding_count: findings.findings.len() as u64,
+            finding_class: findings
+                .findings
+                .first()
+                .map(|finding| finding.finding_class.as_str().to_string()),
+            finding_severity: findings
+                .findings
+                .first()
+                .map(|finding| finding.severity.as_str().to_string()),
+            finding_confidence: findings
+                .findings
+                .first()
+                .map(|finding| finding.confidence.as_str().to_string()),
+            findings: Some(findings),
             bash_permission,
             github_mcp_observed,
             influence_strength,
@@ -738,6 +780,79 @@ impl ScanService {
             unresolved_candidate_count: analysis.unresolved_candidate_count as u64,
         })
     }
+}
+
+fn persist_finding_results(
+    connection: &rusqlite::Connection,
+    results: &FindingResult,
+) -> Result<(), PicoError> {
+    let repo = FindingRepo::new(connection);
+    for finding in &results.findings {
+        repo.insert(&FindingRecord {
+            id: finding.id.clone(),
+            scan_id: finding.scan_id.clone(),
+            fingerprint: finding.fingerprint.clone(),
+            finding_version: finding.finding_version.to_string(),
+            finding_class: finding.finding_class.as_str().to_string(),
+            title: finding.title.clone(),
+            summary: finding.summary.clone(),
+            severity: finding.severity.as_str().to_string(),
+            confidence: finding.confidence.as_str().to_string(),
+            status: finding.status.as_str().to_string(),
+            metadata: None,
+            created_at: finding.created_at,
+        })?;
+        for (position, attack_path_id) in finding.attack_path_ids.iter().enumerate() {
+            repo.insert_path(&FindingPathRecord {
+                finding_id: finding.id.clone(),
+                attack_path_id: attack_path_id.clone(),
+                position: position as u32,
+            })?;
+        }
+        let production_evidence = finding
+            .reasons
+            .iter()
+            .filter(|reason| reason.code.as_str() == "PRODUCTION_MUTATION_AUTHORITY")
+            .flat_map(|reason| reason.evidence_ids.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>();
+        for (position, evidence_id) in finding.evidence_ids.iter().enumerate() {
+            repo.insert_evidence(&FindingEvidenceRecord {
+                finding_id: finding.id.clone(),
+                evidence_id: evidence_id.clone(),
+                position: position as u32,
+                support_role: if production_evidence.contains(evidence_id) {
+                    "SINK_CLASSIFICATION".to_string()
+                } else {
+                    "SUPPORTING".to_string()
+                },
+            })?;
+        }
+        for (position, reason) in finding.reasons.iter().enumerate() {
+            repo.insert_reason(&FindingReasonRecord {
+                finding_id: finding.id.clone(),
+                position: position as u32,
+                reason_code: reason.code.as_str().to_string(),
+                resource_ids: reason.resource_ids.clone(),
+                relationship_ids: reason.relationship_ids.clone(),
+                attack_path_ids: finding.attack_path_ids.clone(),
+                evidence_ids: reason.evidence_ids.clone(),
+            })?;
+        }
+        for (position, remediation) in finding.remediations.iter().enumerate() {
+            repo.insert_remediation(&FindingRemediationRecord {
+                finding_id: finding.id.clone(),
+                position: position as u32,
+                rule_id: remediation.rule_id.clone(),
+                title: remediation.title.clone(),
+                description: remediation.description.clone(),
+                security_effect: remediation.security_effect.clone(),
+                cut_phase: remediation.cut_phase.clone(),
+                target_resource_ids: remediation.target_resource_ids.clone(),
+                target_relationship_ids: remediation.target_relationship_ids.clone(),
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn persist_analysis_results(
@@ -854,6 +969,19 @@ struct CloudflarePersistenceSummary {
     authority_resolution: Option<String>,
 }
 
+/// Accept only the bounded normalized sink classifications that the provider
+/// seam is allowed to carry. Missing or unsupported values remain UNKNOWN;
+/// Worker names and account metadata never participate in classification.
+fn normalize_sink_impact(value: Option<&str>) -> &'static str {
+    match value {
+        Some("PRODUCTION") => "PRODUCTION",
+        Some("STAGING") => "STAGING",
+        Some("LOCAL_DEV") => "LOCAL_DEV",
+        Some("UNKNOWN") => "UNKNOWN",
+        _ => "UNKNOWN",
+    }
+}
+
 /// Persist a normalized provider result into Pico's generic Resource,
 /// Relationship, Evidence, and Observation contracts. This function accepts
 /// no raw provider response and never constructs an authorization header.
@@ -968,6 +1096,7 @@ fn persist_cloudflare_provider_result(
 
     for worker in &result.workers {
         let worker_key = worker.canonical_key();
+        let sink_impact = normalize_sink_impact(worker.sink_impact.as_deref());
         let mut resource = match resources.get_by_canonical_key(&worker_key)? {
             Some(resource) => resource,
             None => Resource::new(&worker_key, "worker", "cloudflare", &worker.script_name)?,
@@ -977,7 +1106,8 @@ fn persist_cloudflare_provider_result(
             "account_id": worker.account_id,
             "worker_tag": worker.worker_tag,
             "identity_precision": worker.identity_precision(),
-            "environment": "UNKNOWN",
+            "environment": sink_impact,
+            "sink_impact": sink_impact,
             "consequential_sink": true,
             "source": "cloudflare_api",
         }));
@@ -996,6 +1126,7 @@ fn persist_cloudflare_provider_result(
                 "account_id": worker.account_id,
                 "worker_identity": worker_key,
                 "identity_precision": worker.identity_precision(),
+                "sink_impact": sink_impact,
             }),
         )?;
         summary.worker_count += 1;
@@ -1013,6 +1144,7 @@ fn persist_cloudflare_provider_result(
                 "permission_state": authority.permission_state,
                 "account_scope_state": authority.scope_state.as_str(),
                 "target_observation_state": "OBSERVED",
+                "sink_impact": sink_impact,
                 "unknown_reasons": authority.unknown_reasons,
             });
             persist_cloudflare_relationship(

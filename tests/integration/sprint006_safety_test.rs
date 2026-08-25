@@ -196,6 +196,7 @@ fn worker_identity_is_account_scoped_and_prefers_immutable_tag() {
         script_name: "checkout".to_string(),
         worker_tag: Some("immutable-1".to_string()),
         source_locator: "cloudflare_api".to_string(),
+        sink_impact: None,
     };
     assert_eq!(
         tagged.canonical_key(),
@@ -208,6 +209,7 @@ fn worker_identity_is_account_scoped_and_prefers_immutable_tag() {
         script_name: "checkout".to_string(),
         worker_tag: None,
         source_locator: "cloudflare_api".to_string(),
+        sink_impact: None,
     };
     assert_eq!(
         fallback.canonical_key(),
@@ -257,6 +259,7 @@ fn injected_provider_result_persists_exact_worker_authority() {
         script_name: "checkout".to_string(),
         worker_tag: Some("worker-tag-1234567890123456".to_string()),
         source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+        sink_impact: None,
     };
     let worker_key = worker.canonical_key();
     let provider = ProviderResult {

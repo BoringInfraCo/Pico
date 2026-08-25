@@ -57,6 +57,7 @@ fn complete_provider(workspace: &std::path::Path, home: &std::path::Path) -> Pro
         script_name: "checkout".to_string(),
         worker_tag: Some("worker-tag-1234567890123456".to_string()),
         source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+        sink_impact: None,
     };
     let worker_key = worker.canonical_key();
     ProviderResult {
