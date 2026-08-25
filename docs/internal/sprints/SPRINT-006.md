@@ -1844,6 +1844,7 @@ verification remains mandatory either way.
 ~~~text
 Completion date: 2026-08-25
 Verified baseline: b52559d
+Implementation commit: 67c5e86 feat(authority): resolve Cloudflare Worker authority
 Automated tests: 109 passed / 0 failed
 cargo check: PASS
 cargo clippy --all-targets -- -D warnings: PASS
