@@ -1845,6 +1845,7 @@ verification remains mandatory either way.
 Completion date: 2026-08-25
 Verified baseline: b52559d
 Implementation commit: 67c5e86 feat(authority): resolve Cloudflare Worker authority
+Follow-up fix commit: 782c955 fix(authority): persist Cloudflare credential status
 Automated tests: 109 passed / 0 failed
 cargo check: PASS
 cargo clippy --all-targets -- -D warnings: PASS
