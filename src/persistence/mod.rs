@@ -13,7 +13,7 @@ pub use analysis::{
     AttackPathEdgeRecord, AttackPathEvidenceRecord, AttackPathRecord, AttackPathRepo,
     ScanAnalysisRecord, ScanAnalysisRepo,
 };
-pub use db::Database;
+pub use db::{require_schema_version, Database, SUPPORTED_SCHEMA_VERSION};
 pub use findings::{
     FindingEvidenceRecord, FindingPathRecord, FindingReasonRecord, FindingRecord,
     FindingRemediationRecord, FindingRepo,

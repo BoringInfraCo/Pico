@@ -19,3 +19,7 @@ mod sprint007_graph_test;
 mod sprint008_analysis_test;
 #[path = "integration/sprint009_finding_test.rs"]
 mod sprint009_finding_test;
+#[path = "integration/sprint010_cli_test.rs"]
+mod sprint010_cli_test;
+#[path = "integration/sprint010_finding_query_test.rs"]
+mod sprint010_finding_query_test;

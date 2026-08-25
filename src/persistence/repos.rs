@@ -115,6 +115,37 @@ impl<'a> ScanRepo<'a> {
             .map_err(db_err)?;
         Ok(n as u64)
     }
+
+    /// Newest scan whose lifecycle status is exactly COMPLETE, ordered by
+    /// `completed_at DESC, started_at DESC, id DESC`.
+    pub fn newest_complete(&self) -> Result<Option<Scan>, PicoError> {
+        self.conn
+            .query_row(
+                "SELECT id, started_at, completed_at, status, trigger, scope,
+                        pico_version, environment_fingerprint, metadata
+                 FROM scans WHERE status = 'COMPLETE'
+                 ORDER BY completed_at DESC, started_at DESC, id DESC LIMIT 1",
+                [],
+                row_to_scan,
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Newest scan attempt regardless of status, ordered by
+    /// `started_at DESC, id DESC`.
+    pub fn newest_attempt(&self) -> Result<Option<Scan>, PicoError> {
+        self.conn
+            .query_row(
+                "SELECT id, started_at, completed_at, status, trigger, scope,
+                        pico_version, environment_fingerprint, metadata
+                 FROM scans ORDER BY started_at DESC, id DESC LIMIT 1",
+                [],
+                row_to_scan,
+            )
+            .optional()
+            .map_err(db_err)
+    }
 }
 
 fn row_to_scan(row: &Row<'_>) -> rusqlite::Result<Scan> {

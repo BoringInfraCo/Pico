@@ -1,0 +1,431 @@
+//! Deterministic terminal rendering of Finding DTOs (SPRINT-010.md §7/§10).
+//!
+//! These functions format the application DTOs only; they contain no SQL, no
+//! security logic, and no provider interpretation. Every persisted string is
+//! passed through `terminal_safe` so untrusted text cannot spoof the layout.
+
+use crate::application::{FindingDetail, FindingList, FindingSummary};
+use crate::shared::terminal_safe;
+
+/// Renders `pico findings` for the selected scan snapshot.
+pub fn render_findings_list(list: &FindingList) -> String {
+    let mut out = String::new();
+    out.push_str("Pico Findings\n\n");
+    match &list.selected_scan {
+        None => {
+            if list.newest_scan_attempt.is_none() {
+                out.push_str("No scans have been run yet in this workspace.\n");
+                out.push_str("Run `pico scan` to discover the paths agents create.\n");
+            } else if let Some(attempt) = &list.newest_scan_attempt {
+                out.push_str("No COMPLETE scan exists in this workspace.\n");
+                out.push_str(&format!(
+                    "Newest scan attempt: {} ({})\n",
+                    terminal_safe(&attempt.id),
+                    terminal_safe(&attempt.status)
+                ));
+                out.push_str("Run `pico scan` and let it complete to produce results.\n");
+                out.push_str("This is not an all-clear; no authoritative scan exists.\n");
+            }
+            return out;
+        }
+        Some(selected) => {
+            out.push_str(&format!("Scan: {}\n", terminal_safe(&selected.id)));
+            out.push_str(&format!("Status: {}\n", terminal_safe(&selected.status)));
+            out.push_str(&format!(
+                "Completed: {}\n",
+                selected
+                    .completed_at
+                    .as_deref()
+                    .map(terminal_safe)
+                    .unwrap_or_else(|| "n/a".to_string())
+            ));
+            out.push_str(match list.freshness {
+                crate::application::Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
+                crate::application::Freshness::NewerIncomplete => {
+                    "Freshness: NEWER INCOMPLETE ATTEMPT\n"
+                }
+            });
+            if let Some(warning) = &list.freshness_warning {
+                out.push('\n');
+                for line in warning.split('\n') {
+                    out.push_str(&terminal_safe(line));
+                    out.push('\n');
+                }
+            }
+            out.push_str(&format!("Findings: {}\n", list.findings.len()));
+        }
+    }
+
+    for summary in &list.findings {
+        out.push('\n');
+        push_summary(&mut out, summary);
+        out.push_str("\nRun:\n  pico finding ");
+        out.push_str(&terminal_safe(&summary.id));
+        out.push('\n');
+    }
+
+    if list.selected_scan.is_some() && list.findings.is_empty() {
+        out.push('\n');
+        out.push_str(
+            "No Findings were produced for this COMPLETE scan within Pico's supported scope.\n",
+        );
+    }
+    out
+}
+
+/// Renders one Finding summary block inside the list.
+fn push_summary(out: &mut String, summary: &FindingSummary) {
+    out.push_str(&format!(
+        "{} · {} confidence\n",
+        terminal_safe(&summary.severity),
+        terminal_safe(&summary.confidence)
+    ));
+    out.push_str(&terminal_safe(&summary.title));
+    out.push('\n');
+    out.push_str(&format!(
+        "Class: {}\n",
+        terminal_safe(&summary.finding_class)
+    ));
+    out.push_str(&format!("Status: {}\n", terminal_safe(&summary.status)));
+    out.push_str(&format!("Paths: {}\n", summary.attack_path_count));
+    out.push_str(&format!(
+        "Affected production resources: {}\n",
+        summary.affected_sink_count
+    ));
+    out.push_str(&format!("ID: {}\n", terminal_safe(&summary.id)));
+    out.push_str(&format!(
+        "Fingerprint: {}\n",
+        terminal_safe(&summary.fingerprint)
+    ));
+}
+
+/// Renders `pico finding <id>` for one persisted Finding.
+pub fn render_finding_detail(detail: &FindingDetail) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{} · {} confidence\n",
+        terminal_safe(&detail.severity),
+        terminal_safe(&detail.confidence)
+    ));
+    out.push_str(&terminal_safe(&detail.title));
+    out.push_str("\n\n");
+
+    out.push_str("Finding\n");
+    out.push_str(&format!("ID: {}\n", terminal_safe(&detail.id)));
+    out.push_str(&format!(
+        "Fingerprint: {}\n",
+        terminal_safe(&detail.fingerprint)
+    ));
+    out.push_str(&format!("Version: {}\n", detail.finding_version));
+    out.push_str(&format!(
+        "Class: {}\n",
+        terminal_safe(&detail.finding_class)
+    ));
+    out.push_str(&format!("Status: {}\n", terminal_safe(&detail.status)));
+    out.push_str(&format!("Scan: {}\n", terminal_safe(&detail.scan.id)));
+    out.push_str(&format!(
+        "Scan status: {}\n",
+        terminal_safe(&detail.scan.status)
+    ));
+    out.push_str(&format!("Created: {}\n", terminal_safe(&detail.created_at)));
+    match &detail.currentness {
+        crate::application::Currentness::LatestComplete => {
+            out.push_str("Currentness: LATEST_COMPLETE\n");
+        }
+        crate::application::Currentness::Historical {
+            newer_complete_scan_id,
+        } => {
+            out.push_str("Currentness: HISTORICAL\n");
+            out.push_str(&format!(
+                "Newer COMPLETE scan: {}\n",
+                terminal_safe(newer_complete_scan_id)
+            ));
+        }
+    }
+    if let Some(warning) = &detail.freshness_warning {
+        out.push_str("Freshness: NEWER INCOMPLETE ATTEMPT\n");
+        for line in warning.split('\n') {
+            out.push_str(&terminal_safe(line));
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+
+    out.push_str("What Pico found\n");
+    out.push_str(&terminal_safe(&detail.summary));
+    out.push_str("\n\n");
+
+    out.push_str("Why it matters\n");
+    out.push_str(&terminal_safe(&detail.title));
+    out.push('\n');
+    out.push_str(&terminal_safe(&detail.summary));
+    out.push_str("\n\n");
+
+    out.push_str("Reasons\n");
+    if detail.reasons.is_empty() {
+        out.push_str("No recorded reasons.\n");
+    } else {
+        for reason in &detail.reasons {
+            out.push_str(&format!(
+                "{}. {} — {}\n",
+                reason.position + 1,
+                terminal_safe(&reason.code),
+                terminal_safe(&reason.explanation)
+            ));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("Path or Paths\n");
+    if detail.paths.is_empty() {
+        out.push_str("No linked attack paths.\n");
+    } else {
+        for (index, path) in detail.paths.iter().enumerate() {
+            out.push_str(&format!("Path {}\n", index + 1));
+            out.push_str(&path_chain(path));
+            out.push('\n');
+            out.push_str(&format!(
+                "Disposition: {}\n",
+                terminal_safe(&path.disposition)
+            ));
+            out.push_str(&format!(
+                "Source trust: {}\n",
+                terminal_safe(&path.source_trust)
+            ));
+            out.push_str(&format!(
+                "Influence strength: {}\n",
+                terminal_safe(&path.influence_strength)
+            ));
+            out.push_str(&format!(
+                "Capability: {}\n",
+                terminal_safe(&path.capability)
+            ));
+            out.push_str(&format!(
+                "Authority resolution: {}\n",
+                terminal_safe(&path.authority_resolution)
+            ));
+            out.push_str(&format!(
+                "Sink impact: {}\n",
+                terminal_safe(&path.sink_impact)
+            ));
+            out.push_str(&format!(
+                "Source: {}\n",
+                terminal_safe(&path.source_resource_id)
+            ));
+            out.push_str(&format!(
+                "Actor: {}\n",
+                terminal_safe(&path.actor_resource_id)
+            ));
+            out.push_str(&format!(
+                "Sink: {}\n",
+                terminal_safe(&path.sink_resource_id)
+            ));
+            for step in &path.steps {
+                out.push_str(&format!(
+                    "  {} {} {} → {} {} ({})\n",
+                    step.position,
+                    terminal_safe(&step.phase),
+                    terminal_safe(&step.traversal),
+                    terminal_safe(&step.from_resource.name),
+                    terminal_safe(&step.to_resource.name),
+                    terminal_safe(&step.relationship_kind)
+                ));
+                out.push_str("  Supporting evidence:");
+                if step.evidence_ids.is_empty() {
+                    out.push_str(" none\n");
+                } else {
+                    out.push(' ');
+                    out.push_str(
+                        &step
+                            .evidence_ids
+                            .iter()
+                            .map(|id| terminal_safe(id))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                    out.push('\n');
+                }
+            }
+            if path.boundaries.is_empty() {
+                out.push_str("  Recorded boundaries: none\n");
+            } else {
+                for boundary in &path.boundaries {
+                    out.push_str(&format!(
+                        "  Boundary {}: {}\n",
+                        terminal_safe(&boundary.kind),
+                        terminal_safe(&boundary.decision)
+                    ));
+                }
+            }
+            out.push('\n');
+        }
+    }
+
+    out.push_str("Severity and Confidence\n");
+    out.push_str(&format!("Severity: {}\n", terminal_safe(&detail.severity)));
+    out.push_str(&format!(
+        "Confidence: {}\n",
+        terminal_safe(&detail.confidence)
+    ));
+    out.push_str("Severity — what could happen if the established path is usable.\n");
+    out.push_str("Confidence — how strongly Pico established that this Finding exists.\n");
+    out.push_str(&terminal_safe(&detail.severity_basis));
+    out.push('\n');
+    out.push_str(&terminal_safe(&detail.confidence_basis));
+    out.push_str("\n\n");
+
+    out.push_str("Evidence\n");
+    if detail.evidence.is_empty() {
+        out.push_str("No same-scan Evidence recorded.\n");
+    } else {
+        for evidence in &detail.evidence {
+            out.push_str(&format!("Evidence: {}\n", terminal_safe(&evidence.id)));
+            out.push_str(&format!("  Class: {}\n", terminal_safe(&evidence.class)));
+            out.push_str(&format!(
+                "  Source type: {}\n",
+                terminal_safe(&evidence.source_type)
+            ));
+            out.push_str(&format!(
+                "  Source: {}\n",
+                evidence
+                    .safe_source_locator
+                    .as_deref()
+                    .map(terminal_safe)
+                    .unwrap_or_else(|| "<redacted source locator>".to_string())
+            ));
+            out.push_str(&format!(
+                "  Subject: {}\n",
+                terminal_safe(&evidence.subject)
+            ));
+            out.push_str(&format!(
+                "  Observation: {}\n",
+                terminal_safe(&evidence.observation)
+            ));
+            out.push_str(&format!(
+                "  Captured: {}\n",
+                terminal_safe(&evidence.captured_at)
+            ));
+            out.push_str(&format!(
+                "  Freshness: {}\n",
+                terminal_safe(&evidence.freshness)
+            ));
+            out.push_str(&format!(
+                "  Sensitivity: {}\n",
+                terminal_safe(&evidence.sensitivity)
+            ));
+            out.push_str(&format!(
+                "  Support roles: {}\n",
+                evidence
+                    .support_roles
+                    .iter()
+                    .map(|role| terminal_safe(role))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("Boundaries and Uncertainty\n");
+    out.push_str(&terminal_safe(&detail.boundary_summary));
+    out.push('\n');
+    for uncertainty in &detail.uncertainties {
+        out.push_str("- ");
+        out.push_str(&terminal_safe(uncertainty));
+        out.push('\n');
+    }
+    out.push('\n');
+
+    out.push_str("Recommended cuts\n");
+    for remediation in &detail.remediations {
+        out.push_str(&format!(
+            "{}. {} ({})\n",
+            remediation.position + 1,
+            terminal_safe(&remediation.title),
+            terminal_safe(&remediation.rule_id)
+        ));
+        out.push_str(&format!(
+            "   Description: {}\n",
+            terminal_safe(&remediation.description)
+        ));
+        out.push_str(&format!(
+            "   Security effect: {}\n",
+            terminal_safe(&remediation.security_effect)
+        ));
+        out.push_str(&format!(
+            "   Cut phase: {}\n",
+            terminal_safe(&remediation.cut_phase)
+        ));
+        out.push_str("   Target resources:");
+        if remediation.target_resources.is_empty() {
+            out.push_str(" none\n");
+        } else {
+            out.push(' ');
+            out.push_str(
+                &remediation
+                    .target_resources
+                    .iter()
+                    .map(|resource| {
+                        format!(
+                            "{} ({})",
+                            terminal_safe(&resource.name),
+                            terminal_safe(&resource.id)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            out.push('\n');
+        }
+        out.push_str("   Target relationships:");
+        if remediation.target_relationship_ids.is_empty() {
+            out.push_str(" none\n");
+        } else {
+            out.push(' ');
+            out.push_str(
+                &remediation
+                    .target_relationship_ids
+                    .iter()
+                    .map(|id| terminal_safe(id))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            out.push('\n');
+        }
+    }
+    out.push_str(&terminal_safe(&detail.remediation_note));
+    out.push_str("\n\n");
+
+    out.push_str("Scope note\n");
+    out.push_str("Potential exposure, not exploitation\n");
+    out.push_str(&terminal_safe(&detail.scope_note));
+    out.push('\n');
+    out
+}
+
+/// Renders a connected source-to-Sink chain from traversal-applied steps.
+fn path_chain(path: &crate::application::ExplainedPath) -> String {
+    if path.steps.is_empty() {
+        return terminal_safe(&path.source_resource_id);
+    }
+    let mut chain: Vec<String> = Vec::with_capacity(path.steps.len() + 1);
+    let first = &path.steps[0];
+    chain.push(display_name(&first.from_resource));
+    for step in &path.steps {
+        chain.push(display_name(&step.to_resource));
+    }
+    chain
+        .iter()
+        .map(|name| terminal_safe(name))
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
+/// Prefers the persisted resource name, falling back to its canonical key.
+fn display_name(resource: &crate::application::ResourceView) -> String {
+    if resource.name.is_empty() {
+        resource.canonical_key.clone()
+    } else {
+        resource.name.clone()
+    }
+}

@@ -259,6 +259,10 @@ const MIGRATIONS: &[&str] = &[
     "#,
 ];
 
+/// The only schema version supported by this build. Query commands must
+/// never migrate; a mismatch is a compatibility error.
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 4;
+
 /// A SQLite-backed Pico database.
 pub struct Database {
     conn: Connection,
@@ -285,6 +289,29 @@ impl Database {
             Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|e| {
                 PicoError::scan(format!(
                     "no Pico state at {} (run `pico init` first): {e}",
+                    path.display()
+                ))
+            })?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(Database { conn })
+    }
+
+    /// Open an existing database strictly read-only without creating it.
+    ///
+    /// Used by query commands so that explanation can never mutate state,
+    /// run DDL, or update `user_version`.
+    pub fn open_read_only(path: &Path) -> Result<Self, PicoError> {
+        if !path.exists() {
+            return Err(PicoError::scan(format!(
+                "no Pico state at {} (run `pico init` first)",
+                path.display()
+            )));
+        }
+        let conn =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
+                PicoError::scan(format!(
+                    "cannot read Pico state at {} (run `pico init` first): {e}",
                     path.display()
                 ))
             })?;
@@ -335,6 +362,18 @@ pub fn schema_version(conn: &Connection) -> Result<i64, PicoError> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|e| PicoError::migration(e.to_string()))?;
+    Ok(version)
+}
+
+/// Require the current schema version without migrating or writing.
+pub fn require_schema_version(conn: &Connection) -> Result<i64, PicoError> {
+    let version = schema_version(conn)?;
+    if version != SUPPORTED_SCHEMA_VERSION {
+        return Err(PicoError::migration(format!(
+            "unsupported schema version {version}; this build requires schema \
+             version {SUPPORTED_SCHEMA_VERSION} (run `pico init` to upgrade)"
+        )));
+    }
     Ok(version)
 }
 

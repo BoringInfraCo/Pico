@@ -90,3 +90,50 @@ impl From<chrono::ParseError> for PicoError {
 
 /// The Pico version reported in scans and CLI output.
 pub const PICO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Applies the deterministic terminal-safety policy to persisted text.
+///
+/// Printable ASCII (0x20-0x7E) and Unicode scalar values at or above U+00A0
+/// pass through unchanged; every C0 control, DEL (0x7F), and C1 code point is
+/// escaped as `\xHH` (uppercase hex over its UTF-8 bytes) so persisted text
+/// can never spoof headings, colors, or additional terminal lines.
+pub fn terminal_safe(value: &str) -> String {
+    let mut safe = String::with_capacity(value.len());
+    for character in value.chars() {
+        let scalar = character as u32;
+        if (0x20..=0x7E).contains(&scalar) || scalar >= 0xA0 {
+            safe.push(character);
+        } else {
+            let mut encoded = [0u8; 4];
+            for byte in character.encode_utf8(&mut encoded).as_bytes() {
+                safe.push_str(&format!("\\x{byte:02X}"));
+            }
+        }
+    }
+    safe
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_safe;
+
+    #[test]
+    fn terminal_safe_passes_printable_and_unicode_text_through() {
+        assert_eq!(terminal_safe("plain ASCII"), "plain ASCII");
+        assert_eq!(terminal_safe("CRITICAL · HIGH"), "CRITICAL · HIGH");
+        assert_eq!(terminal_safe("a → b"), "a → b");
+    }
+
+    #[test]
+    fn terminal_safe_escapes_c0_del_and_c1_over_utf8_bytes() {
+        assert_eq!(terminal_safe("line1\nline2"), "line1\\x0Aline2");
+        assert_eq!(terminal_safe("col\ttab"), "col\\x09tab");
+        assert_eq!(terminal_safe("\r"), "\\x0D");
+        assert_eq!(terminal_safe("\u{7F}"), "\\x7F");
+        assert_eq!(terminal_safe("\u{9B}"), "\\xC2\\x9B");
+        assert_eq!(
+            terminal_safe("\u{1B}[31mSPOOF\u{1B}[0m"),
+            "\\x1B[31mSPOOF\\x1B[0m"
+        );
+    }
+}
