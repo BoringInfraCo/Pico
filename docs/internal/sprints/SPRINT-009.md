@@ -1,6 +1,6 @@
 # Pico — Sprint 009: First Finding — Untrusted to Production
 
-**Status:** READY
+**Status:** COMPLETE
 **Sprint:** 009
 **Phase:** v0.1 — Golden Path Proof
 **Type:** Implementation
@@ -1076,29 +1076,29 @@ otherwise STOP and report it.
 
 Sprint 009 is complete only when:
 
-- [ ] Baseline `8f2987a` is verified.
-- [ ] Finding generation consumes only completed current-scan analysis.
-- [ ] `UNTRUSTED_TO_PRODUCTION` is the only Finding class implemented.
-- [ ] Explicit production classification is required.
-- [ ] UNKNOWN and STAGING sinks do not produce the production Finding.
-- [ ] ACTIVE, BLOCKED, UNRESOLVED, PARTIAL, and LIMITED remain distinct.
-- [ ] Severity is deterministic and independent from confidence.
-- [ ] Confidence is deterministic and weakest-fact constrained.
-- [ ] Evidence aggregation is same-scan, sorted, unique, and complete.
-- [ ] Finding grouping is deterministic and bounded.
-- [ ] Finding fingerprints are stable across equivalent scans.
-- [ ] Equivalent paths may group without losing affected resources.
-- [ ] Structured reasons reference exact security facts.
-- [ ] Remediations reference exact graph cut points.
-- [ ] No remediation is applied.
-- [ ] SQLite persistence and foreign-key behavior are verified.
-- [ ] `pico scan` reports the first useful Finding.
-- [ ] Repeated scans preserve stable fingerprints and history.
-- [ ] Secret sentinels have zero persistence and output occurrences.
-- [ ] Finding generation performs zero network/provider operations.
-- [ ] Full verification passes.
-- [ ] Final diff contains no Sprint 010+ functionality.
-- [ ] This document records completion evidence.
+- [x] Baseline `8f2987a` is verified.
+- [x] Finding generation consumes only completed current-scan analysis.
+- [x] `UNTRUSTED_TO_PRODUCTION` is the only Finding class implemented.
+- [x] Explicit production classification is required.
+- [x] UNKNOWN and STAGING sinks do not produce the production Finding.
+- [x] ACTIVE, BLOCKED, UNRESOLVED, PARTIAL, and LIMITED remain distinct.
+- [x] Severity is deterministic and independent from confidence.
+- [x] Confidence is deterministic and weakest-fact constrained.
+- [x] Evidence aggregation is same-scan, sorted, unique, and complete.
+- [x] Finding grouping is deterministic and bounded.
+- [x] Finding fingerprints are stable across equivalent scans.
+- [x] Equivalent paths may group without losing affected resources.
+- [x] Structured reasons reference exact security facts.
+- [x] Remediations reference exact graph cut points.
+- [x] No remediation is applied.
+- [x] SQLite persistence and foreign-key behavior are verified.
+- [x] `pico scan` reports the first useful Finding.
+- [x] Repeated scans preserve stable fingerprints and history.
+- [x] Secret sentinels have zero persistence and output occurrences.
+- [x] Finding generation performs zero network/provider operations.
+- [x] Full verification passes.
+- [x] Final diff contains no Sprint 010+ functionality.
+- [x] This document records completion evidence.
 
 ---
 
@@ -1175,6 +1175,40 @@ roadmap decision
 
 Do not claim the full v0.1 exit gate while controlled dogfood and explanation
 comprehension gates remain incomplete.
+
+## Recorded completion evidence
+
+- Completion date: 2026-08-25.
+- Verified baseline: `8f2987a7e040b6ee2ad19075eb2256e6e6c76403` on `main`; origin/main
+  remained `6d379a7de5f4a84c20f7c518f58d943625d4ed75`.
+- Implementation commit: `4c642216f08c62d85ff2dd640a0c8d043c7fd8f2`
+  (`feat(findings): generate untrusted-to-production finding`).
+- Schema version: 4; Finding version: 1.
+- Verification: 145 tests passed (55 library, 30 domain, 41 integration, 19
+  persistence); `cargo check`, Clippy with `-D warnings`, `cargo fmt --check`,
+  and `cargo build --release` passed.
+- Golden controlled fixture: one `UNTRUSTED_TO_PRODUCTION` Finding with
+  `CRITICAL` severity, `HIGH` confidence, one active AttackPath, explicit
+  same-scan `PRODUCTION` sink Evidence, six structured reasons, and four
+  deterministic remediation cut points.
+- Negative cases: UNKNOWN, unsupported, STAGING, LOCAL_DEV, blocked,
+  unresolved, partial, limited, absent, and incomplete scans produced zero
+  Findings. Repeated equivalent scans preserved one stable Finding fingerprint
+  per scan with scan-scoped history.
+- Persistence and safety: Finding, path, Evidence, reason, and remediation
+  links were persisted with same-scan foreign-key enforcement. The synthetic
+  sentinel `TEST_SECRET_SHOULD_NOT_PERSIST` was absent from persisted state and
+  output. No network or provider mutation was performed and no real credentials
+  or raw configuration were persisted.
+- Architecture pressure test: PASS. Production requires explicit same-scan
+  classification; severity and confidence remain separate deterministic
+  decisions; exact path/Evidence references and stable grouping worked; the
+  Finding domain remained provider-neutral; no plugin/rules framework or
+  Sprint 010 explanation UX was introduced.
+- Controlled-real-environment status: not run; no credentials or write access
+  were obtained. The production fixture used the bounded sanitized provider
+  seam required for deterministic testing.
+- Roadmap decision: `EXTEND v0.1`.
 
 ---
 
