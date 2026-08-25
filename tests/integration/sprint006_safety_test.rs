@@ -306,4 +306,13 @@ fn injected_provider_result_persists_exact_worker_authority() {
         )
         .unwrap();
     assert_eq!(can_mutate, 1);
+    let credential_validity: String = db
+        .connection()
+        .query_row(
+            "SELECT metadata FROM resources WHERE kind = 'credential'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(credential_validity.contains("\"validity\":\"ACTIVE\""));
 }

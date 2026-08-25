@@ -646,6 +646,29 @@ fn persist_cloudflare_provider_result(
     let status = result
         .credential_status
         .map(|value| value.as_str().to_string());
+    // Refresh only safe provider status on the already-normalized credential
+    // Resource. The token identifier and raw provider response remain
+    // transient and are deliberately not persisted here.
+    let mut credential_resource = credential.clone();
+    let mut credential_metadata = credential_resource
+        .metadata
+        .take()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let serde_json::Value::Object(fields) = &mut credential_metadata {
+        fields.insert(
+            "validity".to_string(),
+            serde_json::Value::String(status.clone().unwrap_or_else(|| "UNKNOWN".to_string())),
+        );
+        fields.insert(
+            "provider_authority_observed".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    validate_secret_safe(&credential_metadata)?;
+    credential_resource.metadata = Some(credential_metadata);
+    credential_resource.last_observed_at = chrono::Utc::now();
+    resources.upsert(&credential_resource)?;
+    let credential = &credential_resource;
     let mut summary = CloudflarePersistenceSummary {
         credential_status: status.clone(),
         ..CloudflarePersistenceSummary::default()
