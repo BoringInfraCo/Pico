@@ -2354,7 +2354,7 @@ completion evidence in this document
 
 - Completion date: 2026-08-25
 - Verified baseline: `ceaa420dea0e8f0bdf710374cb37322d66595ed5`
-- Implementation commit: recorded in the final repository handoff after commit
+- Implementation commit: `68a7806` — `feat(graph): project the golden-path security graph`
 - Branch: `main`
 - Baseline origin/main: `6d379a7de5f4a84c20f7c518f58d943625d4ed75`
 - Verification: 46 unit tests, 30 domain tests, 28 integration tests, and 14 persistence tests passed; doc-tests passed.
