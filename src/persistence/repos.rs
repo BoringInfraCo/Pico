@@ -478,6 +478,25 @@ impl<'a> EvidenceRepo<'a> {
             .map_err(db_err);
         result
     }
+
+    /// List only Evidence captured by one scan, in stable Evidence-ID order.
+    pub fn get_for_scan(&self, scan_id: &str) -> Result<Vec<Evidence>, PicoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, scan_id, class, source_type, source_locator,
+                        subject, observation, captured_at, freshness,
+                        sensitivity, metadata
+                 FROM evidence WHERE scan_id = ?1 ORDER BY id",
+            )
+            .map_err(db_err)?;
+        let result = stmt
+            .query_map([scan_id], row_to_evidence)
+            .map_err(db_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err);
+        result
+    }
 }
 
 fn row_to_evidence(row: &Row<'_>) -> rusqlite::Result<Evidence> {

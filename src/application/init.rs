@@ -67,7 +67,7 @@ mod tests {
     fn init_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let first = InitService::run(dir.path()).unwrap();
-        assert_eq!(first.schema_version, 2);
+        assert_eq!(first.schema_version, 3);
         assert!(first.db_path.exists());
 
         let second = InitService::run(dir.path()).unwrap();

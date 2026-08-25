@@ -15,3 +15,5 @@ mod opencode_scan_test;
 mod sprint006_safety_test;
 #[path = "integration/sprint007_graph_test.rs"]
 mod sprint007_graph_test;
+#[path = "integration/sprint008_analysis_test.rs"]
+mod sprint008_analysis_test;

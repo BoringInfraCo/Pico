@@ -73,8 +73,20 @@ fn run_scan() -> Result<(), PicoError> {
     println!("Graph Edges:    {}", result.graph_edge_count);
     println!("State-Eligible Edges: {}", result.state_eligible_edge_count);
     println!("Non-Eligible Edges:   {}", result.non_eligible_edge_count);
-    println!("Analysis:       NOT RUN");
-    println!("Findings:      {}", result.finding_count);
+    println!("Analysis:       {}", result.analysis_status);
+    println!("Analysis Disposition: {}", result.analysis_disposition);
+    println!("Influence Paths: {}", result.influence_path_count);
+    println!("Authority Paths: {}", result.authority_path_count);
+    println!(
+        "Potentially Active AttackPaths: {}",
+        result.active_attack_path_count
+    );
+    println!("Blocked AttackPaths: {}", result.blocked_attack_path_count);
+    println!(
+        "Unresolved Candidates: {}",
+        result.unresolved_candidate_count
+    );
+    println!("Findings:        {}", result.finding_count);
     if let Some(permission) = result.bash_permission {
         println!("Effective Bash: {permission}");
     }

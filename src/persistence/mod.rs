@@ -4,9 +4,14 @@
 //! Architecture Decision 002). This module owns the connection,
 //! migrations, and repositories for the observed-domain types.
 
+pub mod analysis;
 pub mod db;
 pub mod repos;
 
+pub use analysis::{
+    AttackPathEdgeRecord, AttackPathEvidenceRecord, AttackPathRecord, AttackPathRepo,
+    ScanAnalysisRecord, ScanAnalysisRepo,
+};
 pub use db::Database;
 pub use repos::{EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo};
 

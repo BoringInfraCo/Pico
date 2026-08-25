@@ -93,6 +93,71 @@ const MIGRATIONS: &[&str] = &[
     UPDATE resources SET kind = 'external_source' WHERE kind = 'external_content';
     UPDATE resources SET kind = 'provider_account' WHERE kind = 'account';
     "#,
+    // Migration 3: Sprint 008 deterministic analysis results. Analysis is
+    // append-oriented and remains a projection over the observed domain;
+    // these tables retain only normalized path summaries and ordered links.
+    r#"
+    CREATE TABLE IF NOT EXISTS scan_analyses (
+        scan_id TEXT PRIMARY KEY REFERENCES scans(id),
+        analysis_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('COMPLETE', 'LIMITED', 'FAILED')),
+        overall_disposition TEXT CHECK (
+            overall_disposition IS NULL OR overall_disposition IN
+            ('ACTIVE_PRESENT', 'UNRESOLVED_PRESENT', 'BLOCKED_ONLY', 'NONE')
+        ),
+        influence_path_count INTEGER NOT NULL DEFAULT 0 CHECK (influence_path_count >= 0),
+        authority_path_count INTEGER NOT NULL DEFAULT 0 CHECK (authority_path_count >= 0),
+        active_path_count INTEGER NOT NULL DEFAULT 0 CHECK (active_path_count >= 0),
+        blocked_path_count INTEGER NOT NULL DEFAULT 0 CHECK (blocked_path_count >= 0),
+        unresolved_candidate_count INTEGER NOT NULL DEFAULT 0 CHECK (unresolved_candidate_count >= 0),
+        limit_reasons TEXT,
+        diagnostics TEXT,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS attack_paths (
+        id TEXT PRIMARY KEY,
+        scan_id TEXT NOT NULL REFERENCES scans(id),
+        fingerprint TEXT NOT NULL,
+        analysis_version TEXT NOT NULL,
+        source_resource_id TEXT NOT NULL REFERENCES resources(id),
+        actor_resource_id TEXT NOT NULL REFERENCES resources(id),
+        sink_resource_id TEXT NOT NULL REFERENCES resources(id),
+        disposition TEXT NOT NULL CHECK (disposition IN ('ACTIVE', 'BLOCKED')),
+        source_trust TEXT NOT NULL,
+        influence_strength TEXT NOT NULL,
+        capability TEXT NOT NULL,
+        authority_resolution TEXT NOT NULL,
+        sink_impact TEXT NOT NULL,
+        boundary_metadata TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (scan_id, fingerprint)
+    );
+
+    CREATE TABLE IF NOT EXISTS attack_path_edges (
+        attack_path_id TEXT NOT NULL REFERENCES attack_paths(id) ON DELETE CASCADE,
+        relationship_id TEXT NOT NULL REFERENCES relationships(id),
+        position INTEGER NOT NULL CHECK (position >= 0),
+        phase TEXT NOT NULL CHECK (phase IN ('INFLUENCE', 'AUTHORITY')),
+        traversal TEXT NOT NULL CHECK (traversal IN ('FORWARD', 'REVERSE')),
+        PRIMARY KEY (attack_path_id, position),
+        UNIQUE (attack_path_id, relationship_id, position)
+    );
+
+    CREATE TABLE IF NOT EXISTS attack_path_evidence (
+        attack_path_id TEXT NOT NULL REFERENCES attack_paths(id) ON DELETE CASCADE,
+        evidence_id TEXT NOT NULL REFERENCES evidence(id),
+        position INTEGER NOT NULL CHECK (position >= 0),
+        support_role TEXT NOT NULL CHECK (support_role IN ('EDGE', 'BOUNDARY')),
+        PRIMARY KEY (attack_path_id, position),
+        UNIQUE (attack_path_id, evidence_id, position)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scan_analyses_status ON scan_analyses(status);
+    CREATE INDEX IF NOT EXISTS idx_attack_paths_scan ON attack_paths(scan_id);
+    CREATE INDEX IF NOT EXISTS idx_attack_path_edges_path ON attack_path_edges(attack_path_id);
+    CREATE INDEX IF NOT EXISTS idx_attack_path_evidence_path ON attack_path_evidence(attack_path_id);
+    "#,
 ];
 
 /// A SQLite-backed Pico database.

@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+use crate::analysis::{
+    analyze_with_scan_status, AnalysisLimits, AnalysisResult, AnalysisStatus, CandidateDisposition,
+};
 use crate::discovery;
 use crate::domain::{
     relationship_snapshot_metadata, resource_snapshot_metadata, Evidence, EvidenceClass,
@@ -10,9 +13,12 @@ use crate::domain::{
 };
 use crate::graph::{project, ProjectionInput, SecurityGraph};
 use crate::persistence::{
-    Database, EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo,
+    AttackPathEdgeRecord, AttackPathEvidenceRecord, AttackPathRecord, AttackPathRepo, Database,
+    EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanAnalysisRecord,
+    ScanAnalysisRepo, ScanRepo,
 };
 use crate::shared::{PicoError, PICO_VERSION};
+use chrono::Utc;
 
 /// Structured result of a scan, rendered by the CLI.
 #[derive(Debug, Clone)]
@@ -37,11 +43,19 @@ pub struct ScanResult {
     pub worker_mutation_authority: Option<String>,
     pub authority_resolution: Option<String>,
     pub graph: Option<SecurityGraph>,
+    pub analysis: Option<AnalysisResult>,
     pub graph_projection_status: String,
     pub graph_node_count: u64,
     pub graph_edge_count: u64,
     pub state_eligible_edge_count: u64,
     pub non_eligible_edge_count: u64,
+    pub analysis_status: String,
+    pub analysis_disposition: String,
+    pub influence_path_count: u64,
+    pub authority_path_count: u64,
+    pub active_attack_path_count: u64,
+    pub blocked_attack_path_count: u64,
+    pub unresolved_candidate_count: u64,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -642,11 +656,32 @@ impl ScanService {
             .count() as u64;
         let non_eligible_edge_count = graph_edge_count - state_eligible_edge_count;
 
-        let completed = if discovered.problems.is_empty() {
-            scan.complete()?
+        let discovery_status = if discovered.problems.is_empty() {
+            ScanStatus::Complete
         } else {
-            scan.partial()?
+            ScanStatus::Partial
         };
+        let analysis =
+            analyze_with_scan_status(&graph, &AnalysisLimits::default(), discovery_status);
+        if let Err(error) = persist_analysis_results(db.connection(), &analysis) {
+            let failed = scan.fail()?;
+            scan_repo.update(&failed)?;
+            return Err(error);
+        }
+        if analysis.status == AnalysisStatus::Failed {
+            let failed = scan.fail()?;
+            scan_repo.update(&failed)?;
+            return Err(PicoError::scan(
+                "deterministic analysis failed integrity validation",
+            ));
+        }
+
+        let completed =
+            if analysis.status == AnalysisStatus::Limited || !discovered.problems.is_empty() {
+                scan.partial()?
+            } else {
+                scan.complete()?
+            };
         scan_repo.update(&completed)?;
 
         let resource_count = resource_repo.count()?;
@@ -674,13 +709,139 @@ impl ScanService {
             worker_mutation_authority,
             authority_resolution,
             graph: Some(graph),
+            analysis: Some(analysis.clone()),
             graph_projection_status,
             graph_node_count,
             graph_edge_count,
             state_eligible_edge_count,
             non_eligible_edge_count,
+            analysis_status: analysis.status.as_str().to_string(),
+            analysis_disposition: match analysis.candidate_disposition {
+                CandidateDisposition::Active => "ACTIVE_PRESENT",
+                CandidateDisposition::Blocked => "BLOCKED_ONLY",
+                CandidateDisposition::Unresolved => "UNRESOLVED_PRESENT",
+                CandidateDisposition::None => "NONE",
+            }
+            .to_string(),
+            influence_path_count: analysis.influence_paths.len() as u64,
+            authority_path_count: analysis.authority_paths.len() as u64,
+            active_attack_path_count: analysis
+                .attack_paths
+                .iter()
+                .filter(|path| path.disposition == CandidateDisposition::Active)
+                .count() as u64,
+            blocked_attack_path_count: analysis
+                .attack_paths
+                .iter()
+                .filter(|path| path.disposition == CandidateDisposition::Blocked)
+                .count() as u64,
+            unresolved_candidate_count: analysis.unresolved_candidate_count as u64,
         })
     }
+}
+
+fn persist_analysis_results(
+    connection: &rusqlite::Connection,
+    analysis: &AnalysisResult,
+) -> Result<(), PicoError> {
+    let active_count = analysis
+        .attack_paths
+        .iter()
+        .filter(|path| path.disposition == CandidateDisposition::Active)
+        .count() as u64;
+    let blocked_count = analysis
+        .attack_paths
+        .iter()
+        .filter(|path| path.disposition == CandidateDisposition::Blocked)
+        .count() as u64;
+    let overall = if analysis.status != AnalysisStatus::Complete {
+        None
+    } else {
+        Some(
+            match analysis.candidate_disposition {
+                CandidateDisposition::Active => "ACTIVE_PRESENT",
+                CandidateDisposition::Blocked => "BLOCKED_ONLY",
+                CandidateDisposition::Unresolved => "UNRESOLVED_PRESENT",
+                CandidateDisposition::None => "NONE",
+            }
+            .to_string(),
+        )
+    };
+    let summary = ScanAnalysisRecord {
+        scan_id: analysis.scan_id.clone(),
+        analysis_version: analysis.analysis_version.to_string(),
+        status: analysis.status.as_str().to_string(),
+        overall_disposition: overall,
+        influence_path_count: analysis.influence_paths.len() as u64,
+        authority_path_count: analysis.authority_paths.len() as u64,
+        active_path_count: active_count,
+        blocked_path_count: blocked_count,
+        unresolved_candidate_count: analysis.unresolved_candidate_count as u64,
+        limit_reasons: None,
+        diagnostics: Some(serde_json::json!(analysis.diagnostics)),
+        created_at: Utc::now(),
+    };
+    ScanAnalysisRepo::new(connection).upsert(&summary)?;
+
+    if analysis.status != AnalysisStatus::Complete {
+        return Ok(());
+    }
+    let paths = AttackPathRepo::new(connection);
+    for path in &analysis.attack_paths {
+        let boundary_metadata =
+            serde_json::to_value(&path.boundary_evaluations).map_err(|error| {
+                PicoError::scan(format!("analysis boundary serialization failed: {error}"))
+            })?;
+        paths.insert(&AttackPathRecord {
+            id: path.id.clone(),
+            scan_id: path.scan_id.clone(),
+            fingerprint: path.fingerprint.clone(),
+            analysis_version: path.analysis_version.to_string(),
+            source_resource_id: path.source_resource_id.clone(),
+            actor_resource_id: path.actor_resource_id.clone(),
+            sink_resource_id: path.sink_resource_id.clone(),
+            disposition: path.disposition.as_str().to_string(),
+            source_trust: path.source_trust.as_str().to_string(),
+            influence_strength: path.influence_strength.as_str().to_string(),
+            capability: path.capability.as_str().to_string(),
+            authority_resolution: path.authority_resolution.as_str().to_string(),
+            sink_impact: path.sink_impact.as_str().to_string(),
+            boundary_metadata: Some(boundary_metadata),
+            created_at: Utc::now(),
+        })?;
+        for (position, edge) in path
+            .influence_edges
+            .iter()
+            .chain(path.authority_edges.iter())
+            .enumerate()
+        {
+            paths.insert_edge(&AttackPathEdgeRecord {
+                attack_path_id: path.id.clone(),
+                relationship_id: edge.relationship_id.clone(),
+                position: position as u32,
+                phase: edge.phase.as_str().to_string(),
+                traversal: edge.traversal.as_str().to_string(),
+            })?;
+        }
+        let boundary_evidence = path
+            .boundary_evaluations
+            .iter()
+            .flat_map(|boundary| boundary.evidence_ids.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>();
+        for (position, evidence_id) in path.evidence_ids.iter().enumerate() {
+            paths.insert_evidence(&AttackPathEvidenceRecord {
+                attack_path_id: path.id.clone(),
+                evidence_id: evidence_id.clone(),
+                position: position as u32,
+                support_role: if boundary_evidence.contains(evidence_id) {
+                    "BOUNDARY".to_string()
+                } else {
+                    "EDGE".to_string()
+                },
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Safe summary emitted by persistence of one normalized Cloudflare result.

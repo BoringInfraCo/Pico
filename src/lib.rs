@@ -6,6 +6,7 @@
 //! cli -> application -> domain / persistence
 //! ```
 
+pub mod analysis;
 pub mod application;
 pub mod cli;
 pub mod discovery;
