@@ -3,6 +3,8 @@
 
 #[path = "domain/evidence_observation_test.rs"]
 mod evidence_observation_test;
+#[path = "domain/graph_model_test.rs"]
+mod graph_model_test;
 #[path = "domain/relationship_test.rs"]
 mod relationship_test;
 #[path = "domain/resource_test.rs"]

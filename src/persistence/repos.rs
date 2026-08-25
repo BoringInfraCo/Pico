@@ -217,6 +217,26 @@ impl<'a> ResourceRepo<'a> {
             .map_err(db_err)?;
         Ok(n as u64)
     }
+
+    /// List all stable Resources for a scan-scoped graph projector. The
+    /// projector determines membership from Observations rather than this
+    /// global list.
+    pub fn list(&self) -> Result<Vec<Resource>, PicoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, canonical_key, kind, provider, name, metadata,
+                        first_observed_at, last_observed_at
+                 FROM resources ORDER BY canonical_key",
+            )
+            .map_err(db_err)?;
+        let result = stmt
+            .query_map([], row_to_resource)
+            .map_err(db_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err);
+        result
+    }
 }
 
 fn row_to_resource(row: &Row<'_>) -> rusqlite::Result<Resource> {
@@ -324,6 +344,44 @@ impl<'a> RelationshipRepo<'a> {
             .map_err(db_err)?;
         Ok(n as u64)
     }
+
+    /// List all stable Relationships. Scan membership and state snapshots are
+    /// applied by the graph projector.
+    pub fn list(&self) -> Result<Vec<Relationship>, PicoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, canonical_key, from_resource_id, to_resource_id,
+                        kind, state, metadata, first_observed_at, last_observed_at
+                 FROM relationships ORDER BY canonical_key",
+            )
+            .map_err(db_err)?;
+        let result = stmt
+            .query_map([], row_to_relationship)
+            .map_err(db_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err);
+        result
+    }
+
+    /// List all relationship/evidence links so the projector can reject
+    /// cross-scan evidence rather than silently dropping it.
+    pub fn evidence_links(&self) -> Result<Vec<(String, String)>, PicoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT relationship_id, evidence_id
+                 FROM relationship_evidence
+                 ORDER BY relationship_id, evidence_id",
+            )
+            .map_err(db_err)?;
+        let result = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(db_err)?
+            .collect::<Result<Vec<(String, String)>, _>>()
+            .map_err(db_err);
+        result
+    }
 }
 
 fn row_to_relationship(row: &Row<'_>) -> rusqlite::Result<Relationship> {
@@ -402,6 +460,24 @@ impl<'a> EvidenceRepo<'a> {
             .map_err(db_err)?;
         Ok(n as u64)
     }
+
+    pub fn list(&self) -> Result<Vec<Evidence>, PicoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, scan_id, class, source_type, source_locator,
+                        subject, observation, captured_at, freshness,
+                        sensitivity, metadata
+                 FROM evidence ORDER BY id",
+            )
+            .map_err(db_err)?;
+        let result = stmt
+            .query_map([], row_to_evidence)
+            .map_err(db_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err);
+        result
+    }
 }
 
 fn row_to_evidence(row: &Row<'_>) -> rusqlite::Result<Evidence> {
@@ -477,6 +553,23 @@ impl<'a> ObservationRepo<'a> {
             .query_row("SELECT COUNT(*) FROM observations", [], |r| r.get(0))
             .map_err(db_err)?;
         Ok(n as u64)
+    }
+
+    pub fn list_for_scan(&self, scan_id: &str) -> Result<Vec<Observation>, PicoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, scan_id, subject_type, subject_id, observation_type,
+                        observed_at, source, metadata
+                 FROM observations WHERE scan_id = ?1 ORDER BY id",
+            )
+            .map_err(db_err)?;
+        let result = stmt
+            .query_map([scan_id], row_to_observation)
+            .map_err(db_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err);
+        result
     }
 }
 

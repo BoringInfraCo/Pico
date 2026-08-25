@@ -12,7 +12,8 @@ use crate::shared::PicoError;
 /// Migration 1: Sprint 001 observed-domain schema
 /// (scans, resources, relationships, observations, evidence,
 /// relationship_evidence) per ARCHITECTURE.md and SPRINT-001.md §9.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
     CREATE TABLE IF NOT EXISTS scans (
         id TEXT PRIMARY KEY,
         started_at TEXT NOT NULL,
@@ -84,7 +85,15 @@ const MIGRATIONS: &[&str] = &[r#"
     CREATE INDEX IF NOT EXISTS idx_evidence_scan ON evidence(scan_id);
     CREATE INDEX IF NOT EXISTS idx_relationships_from ON relationships(from_resource_id);
     CREATE INDEX IF NOT EXISTS idx_relationships_to ON relationships(to_resource_id);
-    "#];
+    "#,
+    // Migration 2: Sprint 007 canonicalizes the provider-neutral Resource
+    // vocabulary used by graph projection. Keep the migration idempotent for
+    // databases created by earlier sprints.
+    r#"
+    UPDATE resources SET kind = 'external_source' WHERE kind = 'external_content';
+    UPDATE resources SET kind = 'provider_account' WHERE kind = 'account';
+    "#,
+];
 
 /// A SQLite-backed Pico database.
 pub struct Database {

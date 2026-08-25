@@ -10,6 +10,48 @@ use serde_json::Value;
 
 use super::error::DomainError;
 use super::ids::new_id;
+use super::{Relationship, Resource};
+
+/// Version of the scan-scoped graph snapshot carried by new observations.
+///
+/// Stable Resource and Relationship rows are updated by later scans, so graph
+/// projection must use the immutable, scan-specific observation payload.
+pub const GRAPH_SNAPSHOT_VERSION: u64 = 1;
+
+/// Build the safe, provider-neutral snapshot attached to a Resource
+/// observation. Resource metadata has already passed the application layer's
+/// secret-safety checks; this helper only wraps it in the versioned contract.
+pub fn resource_snapshot_metadata(resource: &Resource) -> Value {
+    serde_json::json!({
+        "graph_snapshot_version": GRAPH_SNAPSHOT_VERSION,
+        "subject_type": "resource",
+        "resource": {
+            "canonical_key": resource.canonical_key,
+            "kind": resource.kind,
+            "provider": resource.provider,
+            "name": resource.name,
+            "safe_metadata": resource.metadata,
+        }
+    })
+}
+
+/// Build the safe, provider-neutral snapshot attached to a Relationship
+/// observation. The relationship state and endpoints are captured for the
+/// scan and must not be reconstructed from the mutable stable row later.
+pub fn relationship_snapshot_metadata(relationship: &Relationship) -> Value {
+    serde_json::json!({
+        "graph_snapshot_version": GRAPH_SNAPSHOT_VERSION,
+        "subject_type": "relationship",
+        "relationship": {
+            "canonical_key": relationship.canonical_key,
+            "from_resource_id": relationship.from_resource_id,
+            "to_resource_id": relationship.to_resource_id,
+            "kind": relationship.kind,
+            "state": relationship.state.as_str(),
+            "safe_metadata": relationship.metadata,
+        }
+    })
+}
 
 /// A record of what Pico observed during a Scan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

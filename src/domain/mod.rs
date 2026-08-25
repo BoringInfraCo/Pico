@@ -16,7 +16,9 @@ pub mod scan;
 
 pub use error::DomainError;
 pub use evidence::{Evidence, EvidenceClass, Sensitivity};
-pub use observation::Observation;
+pub use observation::{
+    relationship_snapshot_metadata, resource_snapshot_metadata, Observation, GRAPH_SNAPSHOT_VERSION,
+};
 pub use relationship::{Relationship, RelationshipState};
 pub use resource::Resource;
 pub use scan::{Scan, ScanStatus, ScanTrigger};

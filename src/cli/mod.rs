@@ -68,6 +68,12 @@ fn run_scan() -> Result<(), PicoError> {
     println!("Resources:     {}", result.resource_count);
     println!("Relationships: {}", result.relationship_count);
     println!("Evidence:      {}", result.evidence_count);
+    println!("Security Graph: {}", result.graph_projection_status);
+    println!("Graph Nodes:    {}", result.graph_node_count);
+    println!("Graph Edges:    {}", result.graph_edge_count);
+    println!("State-Eligible Edges: {}", result.state_eligible_edge_count);
+    println!("Non-Eligible Edges:   {}", result.non_eligible_edge_count);
+    println!("Analysis:       NOT RUN");
     println!("Findings:      {}", result.finding_count);
     if let Some(permission) = result.bash_permission {
         println!("Effective Bash: {permission}");

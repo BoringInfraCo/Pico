@@ -4,9 +4,11 @@ use std::path::Path;
 
 use crate::discovery;
 use crate::domain::{
-    Evidence, EvidenceClass, Observation, Relationship, RelationshipState, Resource, Scan,
-    ScanStatus, Sensitivity,
+    relationship_snapshot_metadata, resource_snapshot_metadata, Evidence, EvidenceClass,
+    Observation, Relationship, RelationshipState, Resource, Scan, ScanStatus, Sensitivity,
+    GRAPH_SNAPSHOT_VERSION,
 };
+use crate::graph::{project, ProjectionInput, SecurityGraph};
 use crate::persistence::{
     Database, EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo,
 };
@@ -34,6 +36,12 @@ pub struct ScanResult {
     pub cloudflare_worker_count: u64,
     pub worker_mutation_authority: Option<String>,
     pub authority_resolution: Option<String>,
+    pub graph: Option<SecurityGraph>,
+    pub graph_projection_status: String,
+    pub graph_node_count: u64,
+    pub graph_edge_count: u64,
+    pub state_eligible_edge_count: u64,
+    pub non_eligible_edge_count: u64,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -91,7 +99,13 @@ impl ScanService {
         db.migrate()?;
 
         let scan_repo = ScanRepo::new(db.connection());
-        let scan = Scan::start(PICO_VERSION)?;
+        let mut scan = Scan::start(PICO_VERSION)?;
+        // Every scan created after the graph snapshot contract exists declares
+        // the version needed for safe scan-scoped projection. The graph layer
+        // can distinguish an intentionally empty scan from legacy state.
+        scan.metadata = Some(serde_json::json!({
+            "graph_snapshot_version": GRAPH_SNAPSHOT_VERSION,
+        }));
         scan_repo.insert(&scan)?;
 
         let mut discovered = discovery::discover_with_environment(
@@ -128,13 +142,15 @@ impl ScanService {
                 Sensitivity::Internal,
             )?)?;
             if !actor_seen {
-                observation_repo.insert(&Observation::new(
+                let mut observation = Observation::new(
                     &scan.id,
                     "resource",
                     &resource.id,
                     "present",
                     "opencode_adapter",
-                )?)?;
+                )?;
+                observation.metadata = Some(resource_snapshot_metadata(&resource));
+                observation_repo.insert(&observation)?;
                 actor_seen = true;
             }
             actor_resource = Some(resource);
@@ -205,7 +221,11 @@ impl ScanService {
                 "present",
                 "opencode_adapter",
             )?;
-            bash_observation.metadata = Some(capability_metadata.clone());
+            let mut snapshot = resource_snapshot_metadata(&bash);
+            if let serde_json::Value::Object(fields) = &mut snapshot {
+                fields.insert("capability".to_string(), capability_metadata.clone());
+            }
+            bash_observation.metadata = Some(snapshot);
             observation_repo.insert(&bash_observation)?;
 
             let mut relationship_observation = Observation::new(
@@ -215,7 +235,7 @@ impl ScanService {
                 "effective_permission",
                 "opencode_adapter",
             )?;
-            relationship_observation.metadata = Some(capability_metadata);
+            relationship_observation.metadata = Some(relationship_snapshot_metadata(&relationship));
             observation_repo.insert(&relationship_observation)?;
             bash_permission = Some(capability.permission.as_str().to_string());
         }
@@ -388,7 +408,7 @@ impl ScanService {
                     {
                         Some(resource) => resource,
                         None => {
-                            Resource::new(&content_key, "external_content", "github", content_name)?
+                            Resource::new(&content_key, "external_source", "github", content_name)?
                         }
                     };
                     content_resource.last_observed_at = chrono::Utc::now();
@@ -493,27 +513,32 @@ impl ScanService {
             )?;
 
             if let Some(bash) = bash_resource.as_ref() {
-                let (state, reachability) = match (
-                    credential.environment,
-                    discovered
-                        .bash_capabilities
-                        .first()
-                        .map(|capability| capability.permission),
-                ) {
-                    (
-                        discovery::EnvironmentReachability::Proven,
-                        Some(discovery::PermissionAction::Allow),
-                    ) => (RelationshipState::Derived, "REACHABLE"),
-                    (
-                        discovery::EnvironmentReachability::Proven,
-                        Some(discovery::PermissionAction::Ask),
-                    ) => (RelationshipState::Derived, "APPROVAL_GATED"),
-                    (
-                        discovery::EnvironmentReachability::Proven,
-                        Some(discovery::PermissionAction::Deny),
-                    ) => (RelationshipState::Blocked, "BLOCKED"),
-                    _ => (RelationshipState::Unknown, "UNKNOWN"),
-                };
+                let (state, reachability) =
+                    match (credential.environment, discovered.bash_capabilities.first()) {
+                        (discovery::EnvironmentReachability::Proven, Some(capability))
+                            if capability.permission == discovery::PermissionAction::Allow
+                                && capability.scope == discovery::CapabilityScope::Unrestricted =>
+                        {
+                            (RelationshipState::Derived, "REACHABLE")
+                        }
+                        (discovery::EnvironmentReachability::Proven, Some(capability))
+                            if capability.permission == discovery::PermissionAction::Allow =>
+                        {
+                            (RelationshipState::Unknown, "UNKNOWN")
+                        }
+                        (discovery::EnvironmentReachability::Proven, Some(capability))
+                            if capability.permission == discovery::PermissionAction::Ask
+                                && capability.scope == discovery::CapabilityScope::Unrestricted =>
+                        {
+                            (RelationshipState::Derived, "APPROVAL_GATED")
+                        }
+                        (discovery::EnvironmentReachability::Proven, Some(capability))
+                            if capability.permission == discovery::PermissionAction::Deny =>
+                        {
+                            (RelationshipState::Blocked, "BLOCKED")
+                        }
+                        _ => (RelationshipState::Unknown, "UNKNOWN"),
+                    };
                 credential_reachability = Some(reachability.to_string());
                 let relationship_key = format!("shell:bash|can_access|{}", credential_key);
                 let relationship_metadata = serde_json::json!({
@@ -582,6 +607,41 @@ impl ScanService {
             }
         }
 
+        let resources = resource_repo.list()?;
+        let relationships = relationship_repo.list()?;
+        let observations = observation_repo.list_for_scan(&scan.id)?;
+        let evidence = evidence_repo.list()?;
+        let relationship_evidence = relationship_repo.evidence_links()?;
+        let graph = match project(ProjectionInput {
+            scan_id: &scan.id,
+            snapshot_version: GRAPH_SNAPSHOT_VERSION as u32,
+            resources: &resources,
+            relationships: &relationships,
+            observations: &observations,
+            evidence: &evidence,
+            relationship_evidence: &relationship_evidence,
+        }) {
+            Ok(graph) => graph,
+            Err(error) => {
+                let failed = scan.fail()?;
+                scan_repo.update(&failed)?;
+                return Err(PicoError::scan(format!("graph projection failed: {error}")));
+            }
+        };
+        let graph_projection_status = if graph.nodes.is_empty() {
+            "EMPTY".to_string()
+        } else {
+            "PROJECTED".to_string()
+        };
+        let graph_node_count = graph.nodes.len() as u64;
+        let graph_edge_count = graph.edges.len() as u64;
+        let state_eligible_edge_count = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.usability.is_traversable())
+            .count() as u64;
+        let non_eligible_edge_count = graph_edge_count - state_eligible_edge_count;
+
         let completed = if discovered.problems.is_empty() {
             scan.complete()?
         } else {
@@ -613,6 +673,12 @@ impl ScanService {
             cloudflare_worker_count,
             worker_mutation_authority,
             authority_resolution,
+            graph: Some(graph),
+            graph_projection_status,
+            graph_node_count,
+            graph_edge_count,
+            state_eligible_edge_count,
+            non_eligible_edge_count,
         })
     }
 }
@@ -684,7 +750,7 @@ fn persist_cloudflare_provider_result(
             .unwrap_or("Cloudflare Account");
         let mut resource = match resources.get_by_canonical_key(&account_key)? {
             Some(resource) => resource,
-            None => Resource::new(&account_key, "account", "cloudflare", account_name)?,
+            None => Resource::new(&account_key, "provider_account", "cloudflare", account_name)?,
         };
         resource.last_observed_at = chrono::Utc::now();
         resource.metadata = Some(serde_json::json!({
@@ -888,7 +954,7 @@ fn persist_cloudflare_relationship(
         "observed",
         "cloudflare_provider",
     )?;
-    observation.metadata = Some(metadata);
+    observation.metadata = Some(relationship_snapshot_metadata(&relationship));
     observations.insert(&observation)
 }
 
@@ -962,7 +1028,7 @@ fn persist_credential_relationship(
         "observed",
         "cloudflare_credential_adapter",
     )?;
-    observation.metadata = Some(metadata);
+    observation.metadata = Some(relationship_snapshot_metadata(&relationship));
     observations.insert(&observation)
 }
 
@@ -972,13 +1038,9 @@ fn observe_resource(
     resource: &Resource,
     source: &str,
 ) -> Result<(), PicoError> {
-    observations.insert(&Observation::new(
-        scan_id,
-        "resource",
-        &resource.id,
-        "present",
-        source,
-    )?)
+    let mut observation = Observation::new(scan_id, "resource", &resource.id, "present", source)?;
+    observation.metadata = Some(resource_snapshot_metadata(resource));
+    observations.insert(&observation)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1047,6 +1109,6 @@ fn persist_influence_relationship(
         "observed",
         "github_mcp_adapter",
     )?;
-    observation.metadata = Some(serde_json::json!({"state": state.as_str()}));
+    observation.metadata = Some(relationship_snapshot_metadata(&relationship));
     observations.insert(&observation)
 }
