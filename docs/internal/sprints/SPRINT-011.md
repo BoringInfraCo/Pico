@@ -1,6 +1,6 @@
 # Pico — Sprint 011: First Agent Interface — Minimal MCP Exposure
 
-**Status:** READY
+**Status:** COMPLETE
 **Sprint:** 011
 **Phase:** v0.1 — Golden Path Proof
 **Type:** Implementation
@@ -1034,6 +1034,49 @@ roadmap decision
 
 Do not claim the full v0.1 exit gate while controlled dogfood or independent
 developer comprehension remains incomplete.
+
+## Recorded completion evidence — 2026-08-25
+
+- **Verified baseline:** `13bc5e912ca9ada72ac0c7fca7d09f6fcfe48054`; working
+  tree clean except preserved untracked `.DS_Store`.
+- **Implementation commit:** `936a421 feat(mcp): serve persisted findings to coding agents`.
+- **Schema version:** 4 (unchanged). Finding/analysis/snapshot versions: 1.
+- **Verification totals:** 222 passed, 0 failed (77 unit + 30 domain +
+  77 integration + 38 persistence). `cargo check`, `cargo clippy --all-targets
+  -- -D warnings`, `cargo fmt --check`, `cargo build --release`: all clean.
+- **Protocol:** transport stdio; supported versions
+  `2025-06-18 | 2025-03-26 | 2024-11-05`; requested supported versions echoed,
+  otherwise fallback `2025-06-18`; scripted session negotiated `2025-03-26`;
+  serverInfo `pico` + `PICO_VERSION`.
+- **Tools/list:** exactly `list_findings` and `get_finding`, both
+  `readOnlyHint: true`, stable order, JSON Schema input contracts.
+- **Golden session (provider seam):** list payload deep-equals the serialized
+  `FindingList` plus state/guidance (`RESULTS_AVAILABLE`,
+  `LATEST_COMPLETE`); detail deep-equals serialized `FindingDetail` with six
+  ordered reasons, five traversal-aware steps (REVERSE×2 → FORWARD×3),
+  connected chain, per-step Evidence IDs, boundary narrative, scope note, and
+  four ordered remediations. CLI/MCP parity asserted by DTO equality.
+- **Freshness and history:** RUNNING/PARTIAL/FAILED attempts surface
+  `NEWER_INCOMPLETE_ATTEMPT` with verbatim warning text (newline sanitized to
+  `\x0A` per the terminal-safety contract); historical finding reports
+  HISTORICAL with `newer_complete_scan_id` and keeps originating-snapshot
+  names despite later stable-row renames.
+- **Negative cases:** unknown tool → `-32602`; unknown method → `-32601`;
+  malformed frame → `-32700` with session continuation; oversized line → one
+  bounded error then continued session; uninitialized workspace → safe
+  `pico init` guidance; unknown/prefix/empty Finding IDs fail closed.
+- **Determinism and zero-write:** repeated calls byte-identical; database file
+  hash identical across full sessions (release binary and in-process).
+- **Secret sentinels:** zero occurrences in any frame, stderr, or SQLite.
+- **Mutation counts:** new Scans 0; database writes 0; network requests 0;
+  provider operations 0; remediations applied 0.
+- **Architecture pressure test:** all 15 answers YES (two tools read-only;
+  no SQL/security logic in MCP; ScanService structurally unreachable from the
+  MCP path; no daemon/listener; no schema change).
+- **Independent review / agent-session dogfood:** NOT RUN — remains a roadmap
+  follow-up.
+- **Roadmap decision:** EXTEND v0.1 (all architecture slices 1–10 built;
+  controlled dogfood and developer comprehension gates remain open).
 
 ---
 
