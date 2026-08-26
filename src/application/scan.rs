@@ -69,11 +69,22 @@ pub struct ScanResult {
 /// Runs bounded local discovery in an initialized workspace.
 pub struct ScanService;
 
+/// Reachability asserted by the operator-facing entry point. The shipped CLI
+/// scans a real workspace, where the project-root dotenv contract
+/// (SPRINT-005) is the bounded proof that Bash can reach the credential; the
+/// adapter's own Bash allow/unrestricted gate remains the only other condition
+/// on live introspection. Fixture seams pass their reachability explicitly and
+/// are unaffected by this constant.
+const OPERATOR_REACHABILITY: discovery::EnvironmentReachability =
+    discovery::EnvironmentReachability::Proven;
+
 impl ScanService {
     pub fn run(workspace: &Path) -> Result<ScanResult, PicoError> {
-        Self::run_with_home(
+        Self::run_with_home_and_environment(
             workspace,
             std::env::var_os("HOME").as_deref().map(Path::new),
+            None,
+            OPERATOR_REACHABILITY,
         )
     }
 
@@ -1404,4 +1415,19 @@ fn persist_influence_relationship(
     )?;
     observation.metadata = Some(relationship_snapshot_metadata(&relationship));
     observations.insert(&observation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OPERATOR_REACHABILITY;
+    use crate::discovery::EnvironmentReachability;
+
+    /// The operator entry point must assert Proven reachability: with the
+    /// parameter pinned to Unknown upstream, the live provider gate
+    /// (opencode.rs provider_reachable) can never open and inspect_live is
+    /// dead code from the shipped CLI. Structural tie, per Sprint 012 §13.
+    #[test]
+    fn operator_entry_point_asserts_proven_reachability() {
+        assert_eq!(OPERATOR_REACHABILITY, EnvironmentReachability::Proven);
+    }
 }

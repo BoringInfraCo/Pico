@@ -3,6 +3,8 @@
 
 #[path = "integration/cloudflare_credential_scan_test.rs"]
 mod cloudflare_credential_scan_test;
+#[path = "integration/dogfood_f1_live_test.rs"]
+mod dogfood_f1_live_test;
 #[path = "integration/empty_scan_test.rs"]
 mod empty_scan_test;
 #[path = "integration/github_mcp_scan_test.rs"]
