@@ -28,6 +28,37 @@ pub enum PermissionAction {
     Unknown,
 }
 
+/// The single effective Bash execution posture derived from a resolved
+/// permission action plus sandbox configuration. This is what the analysis
+/// boundary layer consumes, not the raw `PermissionAction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum EffectiveBashPermission {
+    /// Bash runs automatically with no approval step (resolved allow).
+    #[default]
+    AutoAllow,
+    /// Bash may run but only after an explicit human approval gate.
+    ApprovalGated,
+    /// Bash execution is denied outright.
+    Denied,
+    /// Bash runs inside an isolating sandbox.
+    Sandboxed,
+    /// The resolved policy was neither fully allow/ask/deny (e.g. a mixed or
+    /// bounded pattern); no concrete effective state is invented here.
+    Unknown,
+}
+
+impl EffectiveBashPermission {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AutoAllow => "AUTO_ALLOW",
+            Self::ApprovalGated => "APPROVAL_GATED",
+            Self::Denied => "DENIED",
+            Self::Sandboxed => "SANDBOXED",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+}
+
 impl PermissionAction {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -60,6 +91,7 @@ impl CapabilityScope {
 pub struct ObservedBashCapability {
     pub permission: PermissionAction,
     pub scope: CapabilityScope,
+    pub effective_state: EffectiveBashPermission,
     pub runtime_mode: &'static str,
     pub source_locator: String,
 }

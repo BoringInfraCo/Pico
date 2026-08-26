@@ -206,12 +206,16 @@ impl ScanService {
             bash_resource = Some(bash.clone());
 
             let relationship_key = "agent:opencode|can_execute|shell:bash";
-            let state = match capability.permission {
-                discovery::PermissionAction::Allow | discovery::PermissionAction::Ask => {
-                    RelationshipState::Derived
+            let (state, boundary_kind) = match capability.effective_state {
+                discovery::EffectiveBashPermission::AutoAllow => (RelationshipState::Derived, None),
+                discovery::EffectiveBashPermission::Sandboxed => {
+                    (RelationshipState::Derived, Some("SANDBOX".to_string()))
                 }
-                discovery::PermissionAction::Deny => RelationshipState::Blocked,
-                discovery::PermissionAction::Unknown => RelationshipState::Unknown,
+                discovery::EffectiveBashPermission::ApprovalGated => {
+                    (RelationshipState::Unknown, None)
+                }
+                discovery::EffectiveBashPermission::Denied => (RelationshipState::Blocked, None),
+                discovery::EffectiveBashPermission::Unknown => (RelationshipState::Unknown, None),
             };
             let mut relationship = match relationship_repo.get_by_canonical_key(relationship_key)? {
                 Some(relationship) => relationship,
@@ -221,11 +225,19 @@ impl ScanService {
             };
             relationship.state = state;
             relationship.last_observed_at = chrono::Utc::now();
-            let capability_metadata = serde_json::json!({
+            let mut capability_metadata = serde_json::json!({
                 "effective_permission": capability.permission.as_str(),
+                "effective_state": capability.effective_state.as_str(),
                 "scope": capability.scope.as_str(),
                 "runtime_mode": capability.runtime_mode,
             });
+            // Sandboxed Bash is surfaced as a Sandbox boundary so the analysis
+            // layer can interrupt without misclassifying it as a HardDeny.
+            if let Some(kind) = boundary_kind {
+                if let serde_json::Value::Object(fields) = &mut capability_metadata {
+                    fields.insert("boundary_kind".to_string(), serde_json::Value::String(kind));
+                }
+            }
             relationship.metadata = Some(capability_metadata.clone());
             relationship_repo.upsert(&relationship)?;
 

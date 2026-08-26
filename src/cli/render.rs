@@ -238,6 +238,23 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
                 "Sink: {}\n",
                 terminal_safe(&path.sink_resource_id)
             ));
+            if let Some(capability) = &path.effective_bash_capability {
+                out.push_str(&format!(
+                    "Effective Bash capability: {}\n",
+                    terminal_safe(capability)
+                ));
+                match &path.bash_boundary {
+                    Some(boundary) => {
+                        out.push_str(&format!(
+                            "Bash interrupting boundary: {}\n",
+                            terminal_safe(boundary)
+                        ));
+                    }
+                    None => {
+                        out.push_str("Bash interrupting boundary: none\n");
+                    }
+                }
+            }
             for step in &path.steps {
                 out.push_str(&format!(
                     "  {} {} {} → {} {} ({})\n",

@@ -58,6 +58,12 @@ pub fn evaluate(
                     BoundaryDecision::Unresolved,
                 )
             }
+        } else if metadata_string(metadata, "boundary_kind").as_deref() == Some("SANDBOX") {
+            (
+                BoundaryKind::Sandbox,
+                "PROVEN".into(),
+                BoundaryDecision::DoesNotInterrupt,
+            )
         } else if metadata_string(metadata, "policy").is_some()
             || metadata_string(metadata, "boundary_kind").as_deref() == Some("SOFT_POLICY")
         {

@@ -143,6 +143,12 @@ pub struct ExplainedPath {
     pub sink_resource_id: String,
     pub steps: Vec<PathStep>,
     pub boundaries: Vec<BoundaryView>,
+    /// The effective OpenCode Bash permission resolved for the scan, surfaced
+    /// from the `can_execute` edge's `effective_state` metadata (SPRINT-016 R6).
+    pub effective_bash_capability: Option<String>,
+    /// The interrupting boundary kind imposed on the Bash `can_execute` edge,
+    /// if the effective Bash capability is not AUTO_ALLOW/UNKNOWN (SPRINT-016 R7).
+    pub bash_boundary: Option<String>,
 }
 
 /// One traversal-applied step of an explained path.
@@ -978,6 +984,36 @@ fn boundary_views(path: &AttackPathRecord) -> Result<Vec<BoundaryView>, PicoErro
     Ok(views)
 }
 
+/// Resolves the effective OpenCode Bash capability for one explained path from
+/// the `can_execute` edge's `effective_state` metadata, and maps it to the
+/// interrupting boundary kind that the boundary analysis would attach to that
+/// edge (SPRINT-016 R6/R7). Returns `(None, None)` when no Bash capability edge
+/// participates in the path.
+fn bash_capability_view(
+    graph: &SecurityGraph,
+    edges: &[AttackPathEdgeRecord],
+) -> (Option<String>, Option<String>) {
+    use crate::analysis::model::metadata_string;
+    for edge in edges {
+        let Some(graph_edge) = graph.edge(&edge.relationship_id) else {
+            continue;
+        };
+        let Some(state) = metadata_string(graph_edge.safe_metadata.as_ref(), "effective_state")
+        else {
+            continue;
+        };
+        let boundary = match state.as_str() {
+            "AUTO_ALLOW" | "UNKNOWN" => None,
+            "APPROVAL_GATED" => Some("MANDATORY_APPROVAL"),
+            "DENIED" => Some("HARD_DENY"),
+            "SANDBOXED" => Some("SANDBOX"),
+            _ => None,
+        };
+        return (Some(state), boundary.map(|value| value.to_string()));
+    }
+    (None, None)
+}
+
 fn explained_paths(
     conn: &Connection,
     graph: &SecurityGraph,
@@ -997,6 +1033,7 @@ fn explained_paths(
             )));
         }
         let steps = path_steps(graph, path, &edges, reference)?;
+        let (effective_bash_capability, bash_boundary) = bash_capability_view(graph, &edges);
         let path_evidence_rows = paths_repo.list_evidence(&path.id)?;
         contiguous_positions(
             &format!("attack path {} evidence", path.id),
@@ -1028,6 +1065,8 @@ fn explained_paths(
             sink_resource_id: path.sink_resource_id.clone(),
             steps,
             boundaries: boundary_views(path)?,
+            effective_bash_capability,
+            bash_boundary,
         });
     }
     Ok(output)

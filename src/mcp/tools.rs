@@ -323,6 +323,8 @@ struct SafeExplainedPath {
     sink_resource_id: String,
     steps: Vec<SafePathStep>,
     boundaries: Vec<SafeBoundaryView>,
+    effective_bash_capability: Option<String>,
+    bash_boundary: Option<String>,
 }
 
 impl SafeExplainedPath {
@@ -341,6 +343,8 @@ impl SafeExplainedPath {
             sink_resource_id: terminal_safe(&path.sink_resource_id),
             steps: path.steps.iter().map(SafePathStep::new).collect(),
             boundaries: path.boundaries.iter().map(SafeBoundaryView::new).collect(),
+            effective_bash_capability: path.effective_bash_capability.as_deref().map(terminal_safe),
+            bash_boundary: path.bash_boundary.as_deref().map(terminal_safe),
         }
     }
 }
@@ -511,4 +515,53 @@ fn safe_optional(value: Option<&str>) -> Option<String> {
 
 fn safe_strings(values: &[String]) -> Vec<String> {
     values.iter().map(|value| terminal_safe(value)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SafeExplainedPath;
+    use crate::application::ExplainedPath;
+
+    /// Asserts the MCP mirror serializes the effective Bash capability and its
+    /// interrupting boundary for every resolved OpenCode posture (SPRINT-016 R7).
+    #[test]
+    fn safe_explained_path_serializes_effective_bash_capability() {
+        let cases = [
+            ("APPROVAL_GATED", Some("MANDATORY_APPROVAL")),
+            ("DENIED", Some("HARD_DENY")),
+            ("SANDBOXED", Some("SANDBOX")),
+            ("AUTO_ALLOW", None),
+        ];
+        for (label, boundary) in cases {
+            let path = ExplainedPath {
+                id: "p".to_string(),
+                fingerprint: "sha256:p".to_string(),
+                disposition: "ACTIVE".to_string(),
+                source_trust: "PUBLIC_EXTERNAL".to_string(),
+                influence_strength: "AGENT_RETRIEVABLE".to_string(),
+                capability: "EXECUTE".to_string(),
+                authority_resolution: "EXACT".to_string(),
+                sink_impact: "PRODUCTION".to_string(),
+                source_resource_id: "s".to_string(),
+                actor_resource_id: "a".to_string(),
+                sink_resource_id: "k".to_string(),
+                steps: vec![],
+                boundaries: vec![],
+                effective_bash_capability: Some(label.to_string()),
+                bash_boundary: boundary.map(str::to_string),
+            };
+            let safe = SafeExplainedPath::new(&path);
+            let value = serde_json::to_value(&safe).expect("serializable");
+            assert_eq!(
+                value["effective_bash_capability"],
+                serde_json::json!(label),
+                "MCP field must carry the effective Bash capability for {label}"
+            );
+            assert_eq!(
+                value["bash_boundary"],
+                serde_json::json!(boundary),
+                "MCP field must carry the interrupting boundary for {label}"
+            );
+        }
+    }
 }

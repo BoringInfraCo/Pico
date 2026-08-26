@@ -13,8 +13,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::discovery::{
-    CapabilityScope, DiscoveryResult, EnvironmentReachability, McpTransport, ObservedActor,
-    ObservedBashCapability, ObservedCredential, ObservedMcpServer, PermissionAction,
+    CapabilityScope, DiscoveryResult, EffectiveBashPermission, EnvironmentReachability,
+    McpTransport, ObservedActor, ObservedBashCapability, ObservedCredential, ObservedMcpServer,
+    PermissionAction,
 };
 use crate::shared::PicoError;
 
@@ -95,16 +96,19 @@ pub fn discover_with_environment(
     }
 
     if !result.actors.is_empty() && result.problems.is_empty() {
-        match resolve_bash(&effective) {
-            Ok((permission, scope)) => result.bash_capabilities.push(ObservedBashCapability {
-                permission,
-                scope,
-                // OpenCode's --auto/TUI session mode is not available from
-                // static configuration. ASK is therefore never described as
-                // automatic execution by this adapter.
-                runtime_mode: "UNKNOWN",
-                source_locator: locators.join(","),
-            }),
+        match resolve_effective_bash(&effective) {
+            Ok((permission, scope, effective_state)) => {
+                result.bash_capabilities.push(ObservedBashCapability {
+                    permission,
+                    scope,
+                    effective_state,
+                    // OpenCode's --auto/TUI session mode is not available from
+                    // static configuration. ASK is therefore never described as
+                    // automatic execution by this adapter.
+                    runtime_mode: "UNKNOWN",
+                    source_locator: locators.join(","),
+                })
+            }
             Err(problem) => result.problems.push(problem),
         }
         match parse_mcp_servers(&effective, &locators) {
@@ -487,7 +491,20 @@ struct PermissionRule {
     command_catch_all: bool,
 }
 
+#[cfg(test)]
 fn resolve_bash(config: &Value) -> Result<(PermissionAction, CapabilityScope), String> {
+    let (permission, scope, _) = resolve_effective_bash(config)?;
+    Ok((permission, scope))
+}
+
+/// Resolve the OpenCode Bash policy into the raw permission action, its scope,
+/// and the single `EffectiveBashPermission` the analysis boundary layer
+/// consumes. Sandbox posture is detected here from configuration before the
+/// raw action is flattened.
+pub fn resolve_effective_bash(
+    config: &Value,
+) -> Result<(PermissionAction, CapabilityScope, EffectiveBashPermission), String> {
+    let sandboxed = is_sandbox_enabled(config);
     // OpenCode's current built-in build-agent default is `* = allow`.
     let mut rules = vec![PermissionRule {
         action: PermissionAction::Allow,
@@ -523,29 +540,99 @@ fn resolve_bash(config: &Value) -> Result<(PermissionAction, CapabilityScope), S
             .as_object()
             .ok_or_else(|| format!("agent.{agent_name} must be an object"))?;
         if agent.get("disable").and_then(Value::as_bool) == Some(true) {
-            return Ok((PermissionAction::Unknown, CapabilityScope::Bounded));
+            return Ok((
+                PermissionAction::Unknown,
+                CapabilityScope::Bounded,
+                EffectiveBashPermission::Unknown,
+            ));
         }
         if let Some(permission) = agent.get("permission") {
             append_bash_rules(permission, &mut rules)?;
         }
     } else if agent_name != "build" {
-        return Ok((PermissionAction::Unknown, CapabilityScope::Bounded));
+        return Ok((
+            PermissionAction::Unknown,
+            CapabilityScope::Bounded,
+            EffectiveBashPermission::Unknown,
+        ));
     }
 
     let baseline = rules
         .iter()
         .rposition(|rule| rule.command_catch_all)
         .expect("built-in default supplies a catch-all");
-    let baseline_action = rules[baseline].action;
-    if rules[baseline..]
-        .iter()
-        .all(|rule| rule.action == baseline_action)
-    {
-        Ok((baseline_action, CapabilityScope::Unrestricted))
+    // A command-independent edge cannot truthfully flatten a mixed pattern
+    // policy: if any rule after the last catch-all is pattern-scoped, the
+    // policy is bounded and reported as UNKNOWN.
+    let tail_has_pattern = rules[baseline..].iter().any(|rule| !rule.command_catch_all);
+    let (action, scope) = if tail_has_pattern {
+        (PermissionAction::Unknown, CapabilityScope::Bounded)
     } else {
-        // A command-independent edge cannot truthfully flatten a mixed
-        // pattern policy. Preserve that it is bounded and report UNKNOWN.
-        Ok((PermissionAction::Unknown, CapabilityScope::Bounded))
+        // Among the explicitly configured catch-all rules apply the precedence
+        // Deny > Allow > Ask. The built-in `* = allow` default is excluded so
+        // an explicit `ask`/`deny` is honored rather than masked by the
+        // fallback. An explicit Allow therefore overrides an explicit Ask.
+        let explicit = rules.iter().skip(1).filter(|rule| rule.command_catch_all);
+        let action = if explicit
+            .clone()
+            .any(|rule| rule.action == PermissionAction::Deny)
+        {
+            PermissionAction::Deny
+        } else if explicit
+            .clone()
+            .any(|rule| rule.action == PermissionAction::Allow)
+        {
+            PermissionAction::Allow
+        } else if explicit
+            .clone()
+            .any(|rule| rule.action == PermissionAction::Ask)
+        {
+            PermissionAction::Ask
+        } else {
+            PermissionAction::Allow
+        };
+        (action, CapabilityScope::Unrestricted)
+    };
+    let effective_state = effective_state_for(action, sandboxed);
+    Ok((action, scope, effective_state))
+}
+
+/// Detect the OpenCode sandbox posture. We honor two documented config keys:
+///   1. Top-level `"sandbox": true` (the documented V2 project sandbox toggle).
+///   2. `"permission": { "bash": { "action": "allow", "sandbox": true } }`
+///      (a per-bash sandbox grant inside the permission object).
+///
+/// The second form is normalized by ignoring the non-pattern `sandbox` key in
+/// `append_bash_rules` so policy resolution does not reject it.
+fn is_sandbox_enabled(config: &Value) -> bool {
+    if config.get("sandbox").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    if let Some(bash) = config
+        .get("permission")
+        .and_then(Value::as_object)
+        .and_then(|permission| permission.get("bash"))
+        .and_then(Value::as_object)
+    {
+        if bash.get("sandbox").and_then(Value::as_bool) == Some(true) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Map a resolved `PermissionAction` plus sandbox posture to the single
+/// effective Bash permission the boundary layer consumes.
+fn effective_state_for(action: PermissionAction, sandboxed: bool) -> EffectiveBashPermission {
+    if sandboxed {
+        return EffectiveBashPermission::Sandboxed;
+    }
+    match action {
+        PermissionAction::Allow => EffectiveBashPermission::AutoAllow,
+        PermissionAction::Ask => EffectiveBashPermission::ApprovalGated,
+        PermissionAction::Deny => EffectiveBashPermission::Denied,
+        // A mixed/bounded policy yields no concrete effective state.
+        PermissionAction::Unknown => EffectiveBashPermission::Unknown,
     }
 }
 
@@ -578,6 +665,22 @@ fn append_bash_rules(permission: &Value, rules: &mut Vec<PermissionRule>) -> Res
             .as_object()
             .ok_or_else(|| "permission.bash must be a string or object".to_string())?;
         for (pattern, action) in patterns {
+            // Non-pattern control keys: `sandbox` is the sandbox toggle (already
+            // detected by `is_sandbox_enabled`) and `action` is an alias for a
+            // catch-all grant. Neither is a command pattern.
+            if pattern == "sandbox" {
+                continue;
+            }
+            if pattern == "action" {
+                let action = action
+                    .as_str()
+                    .ok_or_else(|| "permission.bash.action must be a string".to_string())?;
+                rules.push(PermissionRule {
+                    action: parse_action(action)?,
+                    command_catch_all: true,
+                });
+                continue;
+            }
             let action = action
                 .as_str()
                 .ok_or_else(|| format!("permission.bash.{pattern} must be a string"))?;
@@ -785,6 +888,15 @@ fn strip_jsonc(input: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::model::{
+        AuthorityPath, AuthorityResolution, BoundaryKind, CapabilityClass, InfluencePath,
+        InfluenceStrength, PathEdgeRef, PathPhase, SegmentDisposition, SinkImpact, SourceTrust,
+        TraversalDirection,
+    };
+    use crate::discovery::EffectiveBashPermission;
+    use crate::domain::RelationshipState;
+    use crate::graph::model::{EdgeUsability, GraphEdge};
+    use crate::graph::SecurityGraph;
     use tempfile::tempdir;
 
     #[test]
@@ -918,5 +1030,418 @@ mod tests {
         let debug = format!("{credential:?}");
         assert_eq!(debug, "TransientCredential(REDACTED)");
         assert!(!debug.contains("TEST_SECRET_SHOULD_NOT_PERSIST"));
+    }
+
+    // ---- Effective Bash permission mapping (STEP 1-3) -----------------------
+
+    #[test]
+    fn r1_deny_overrides_allow_becomes_denied() {
+        let config = serde_json::json!({
+            "permission": {"bash": "allow"},
+            "agent": {"build": {"permission": {"bash": "deny"}}}
+        });
+        let (permission, scope, effective) = resolve_effective_bash(&config).unwrap();
+        assert_eq!(permission, PermissionAction::Deny);
+        assert_eq!(scope, CapabilityScope::Unrestricted);
+        assert_eq!(effective, EffectiveBashPermission::Denied);
+    }
+
+    #[test]
+    fn r2_ask_becomes_approval_gated_and_mandatory_approval_boundary() {
+        let config = serde_json::json!({"permission": {"bash": "ask"}});
+        let (permission, _, effective) = resolve_effective_bash(&config).unwrap();
+        assert_eq!(permission, PermissionAction::Ask);
+        assert_eq!(effective, EffectiveBashPermission::ApprovalGated);
+
+        // The scan mapping emits an Unknown-state edge with effective_permission
+        // ASK, which the boundary layer converts to a MandatoryApproval boundary.
+        let edge = GraphEdge {
+            relationship_id: "agent:opencode|can_execute|shell:bash".to_string(),
+            canonical_key: "agent:opencode|can_execute|shell:bash".to_string(),
+            from_resource_id: "agent:opencode".to_string(),
+            to_resource_id: "shell:bash".to_string(),
+            kind: "can_execute".to_string(),
+            state: RelationshipState::Unknown,
+            usability: EdgeUsability::from_state(RelationshipState::Unknown),
+            safe_metadata: Some(serde_json::json!({"effective_permission": "ASK"})),
+            evidence_ids: Vec::new(),
+        };
+        let graph = SecurityGraph {
+            scan_id: "scan".into(),
+            snapshot_version: 1,
+            nodes: Vec::new(),
+            edges: vec![edge],
+            outgoing_index: Default::default(),
+            incoming_index: Default::default(),
+            evidence_index: Default::default(),
+        };
+        let path = InfluencePath {
+            source_resource_id: "source".into(),
+            actor_resource_id: "agent:opencode".into(),
+            edges: vec![PathEdgeRef {
+                relationship_id: "agent:opencode|can_execute|shell:bash".into(),
+                phase: PathPhase::Influence,
+                traversal: TraversalDirection::Forward,
+                position: 0,
+            }],
+            source_trust: SourceTrust::Unknown,
+            influence_strength: InfluenceStrength::Unknown,
+            evidence_ids: Vec::new(),
+            disposition: SegmentDisposition::Active,
+        };
+        let authority = AuthorityPath {
+            actor_resource_id: "agent:opencode".into(),
+            sink_resource_id: "sink".into(),
+            edges: Vec::new(),
+            capability: CapabilityClass::Execute,
+            authority_resolution: AuthorityResolution::Unknown,
+            sink_impact: SinkImpact::Unknown,
+            evidence_ids: Vec::new(),
+            disposition: SegmentDisposition::Active,
+        };
+        let evaluations = crate::analysis::boundary::evaluate(&graph, &path, &authority);
+        assert!(
+            evaluations
+                .iter()
+                .any(|e| e.kind == BoundaryKind::MandatoryApproval),
+            "expected a MandatoryApproval boundary, got {evaluations:?}"
+        );
+    }
+
+    #[test]
+    fn r3_sandbox_becomes_sandboxed_and_sandbox_boundary() {
+        for config in [
+            serde_json::json!({"sandbox": true, "permission": {"bash": "allow"}}),
+            serde_json::json!({"permission": {"bash": {"action": "allow", "sandbox": true}}}),
+        ] {
+            let (permission, _, effective) = resolve_effective_bash(&config).unwrap();
+            assert_eq!(permission, PermissionAction::Allow);
+            assert_eq!(effective, EffectiveBashPermission::Sandboxed);
+
+            let edge = GraphEdge {
+                relationship_id: "agent:opencode|can_execute|shell:bash".to_string(),
+                canonical_key: "agent:opencode|can_execute|shell:bash".to_string(),
+                from_resource_id: "agent:opencode".to_string(),
+                to_resource_id: "shell:bash".to_string(),
+                kind: "can_execute".to_string(),
+                state: RelationshipState::Derived,
+                usability: EdgeUsability::from_state(RelationshipState::Derived),
+                safe_metadata: Some(serde_json::json!({
+                    "effective_permission": "ALLOW",
+                    "effective_state": "SANDBOXED",
+                    "boundary_kind": "SANDBOX"
+                })),
+                evidence_ids: Vec::new(),
+            };
+            let graph = SecurityGraph {
+                scan_id: "scan".into(),
+                snapshot_version: 1,
+                nodes: Vec::new(),
+                edges: vec![edge],
+                outgoing_index: Default::default(),
+                incoming_index: Default::default(),
+                evidence_index: Default::default(),
+            };
+            let path = InfluencePath {
+                source_resource_id: "source".into(),
+                actor_resource_id: "agent:opencode".into(),
+                edges: vec![PathEdgeRef {
+                    relationship_id: "agent:opencode|can_execute|shell:bash".into(),
+                    phase: PathPhase::Influence,
+                    traversal: TraversalDirection::Forward,
+                    position: 0,
+                }],
+                source_trust: SourceTrust::Unknown,
+                influence_strength: InfluenceStrength::Unknown,
+                evidence_ids: Vec::new(),
+                disposition: SegmentDisposition::Active,
+            };
+            let authority = AuthorityPath {
+                actor_resource_id: "agent:opencode".into(),
+                sink_resource_id: "sink".into(),
+                edges: Vec::new(),
+                capability: CapabilityClass::Execute,
+                authority_resolution: AuthorityResolution::Unknown,
+                sink_impact: SinkImpact::Unknown,
+                evidence_ids: Vec::new(),
+                disposition: SegmentDisposition::Active,
+            };
+            let evaluations = crate::analysis::boundary::evaluate(&graph, &path, &authority);
+            assert!(
+                evaluations.iter().any(|e| e.kind == BoundaryKind::Sandbox),
+                "expected a Sandbox boundary for {config}, got {evaluations:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn r4_agent_ask_overridden_by_bash_allow_is_auto_allow_without_interrupt() {
+        // Bash-level allow overrides an agent-level ask (higher precedence).
+        let config = serde_json::json!({
+            "permission": {"bash": "allow"},
+            "agent": {"build": {"permission": {"bash": "ask"}}}
+        });
+        let (permission, _, effective) = resolve_effective_bash(&config).unwrap();
+        assert_eq!(permission, PermissionAction::Allow);
+        assert_eq!(effective, EffectiveBashPermission::AutoAllow);
+
+        let edge = GraphEdge {
+            relationship_id: "agent:opencode|can_execute|shell:bash".to_string(),
+            canonical_key: "agent:opencode|can_execute|shell:bash".to_string(),
+            from_resource_id: "agent:opencode".to_string(),
+            to_resource_id: "shell:bash".to_string(),
+            kind: "can_execute".to_string(),
+            state: RelationshipState::Derived,
+            usability: EdgeUsability::from_state(RelationshipState::Derived),
+            safe_metadata: Some(serde_json::json!({"effective_permission": "ALLOW"})),
+            evidence_ids: Vec::new(),
+        };
+        let graph = SecurityGraph {
+            scan_id: "scan".into(),
+            snapshot_version: 1,
+            nodes: Vec::new(),
+            edges: vec![edge],
+            outgoing_index: Default::default(),
+            incoming_index: Default::default(),
+            evidence_index: Default::default(),
+        };
+        let path = InfluencePath {
+            source_resource_id: "source".into(),
+            actor_resource_id: "agent:opencode".into(),
+            edges: vec![PathEdgeRef {
+                relationship_id: "agent:opencode|can_execute|shell:bash".into(),
+                phase: PathPhase::Influence,
+                traversal: TraversalDirection::Forward,
+                position: 0,
+            }],
+            source_trust: SourceTrust::Unknown,
+            influence_strength: InfluenceStrength::Unknown,
+            evidence_ids: Vec::new(),
+            disposition: SegmentDisposition::Active,
+        };
+        let authority = AuthorityPath {
+            actor_resource_id: "agent:opencode".into(),
+            sink_resource_id: "sink".into(),
+            edges: Vec::new(),
+            capability: CapabilityClass::Execute,
+            authority_resolution: AuthorityResolution::Unknown,
+            sink_impact: SinkImpact::Unknown,
+            evidence_ids: Vec::new(),
+            disposition: SegmentDisposition::Active,
+        };
+        let evaluations = crate::analysis::boundary::evaluate(&graph, &path, &authority);
+        assert!(
+            evaluations.is_empty(),
+            "AutoAllow must not yield an interrupting boundary, got {evaluations:?}"
+        );
+    }
+
+    #[test]
+    fn r5_state_to_boundary_table() {
+        // (effective_state, edge state, metadata) => expected boundary kind.
+        let cases: Vec<(
+            EffectiveBashPermission,
+            RelationshipState,
+            Option<serde_json::Value>,
+            Option<BoundaryKind>,
+        )> = vec![
+            (
+                EffectiveBashPermission::AutoAllow,
+                RelationshipState::Derived,
+                Some(serde_json::json!({"effective_permission": "ALLOW"})),
+                None,
+            ),
+            (
+                EffectiveBashPermission::ApprovalGated,
+                RelationshipState::Unknown,
+                Some(serde_json::json!({"effective_permission": "ASK"})),
+                Some(BoundaryKind::MandatoryApproval),
+            ),
+            (
+                EffectiveBashPermission::Denied,
+                RelationshipState::Blocked,
+                None,
+                Some(BoundaryKind::HardDeny),
+            ),
+            (
+                EffectiveBashPermission::Sandboxed,
+                RelationshipState::Derived,
+                Some(serde_json::json!({
+                    "effective_permission": "ALLOW",
+                    "boundary_kind": "SANDBOX"
+                })),
+                Some(BoundaryKind::Sandbox),
+            ),
+            (
+                EffectiveBashPermission::Unknown,
+                RelationshipState::Unknown,
+                None,
+                Some(BoundaryKind::HardDeny),
+            ),
+        ];
+        for (effective, state, metadata, expected) in cases {
+            let edge = GraphEdge {
+                relationship_id: "agent:opencode|can_execute|shell:bash".to_string(),
+                canonical_key: "agent:opencode|can_execute|shell:bash".to_string(),
+                from_resource_id: "agent:opencode".to_string(),
+                to_resource_id: "shell:bash".to_string(),
+                kind: "can_execute".to_string(),
+                state,
+                usability: EdgeUsability::from_state(state),
+                safe_metadata: metadata,
+                evidence_ids: Vec::new(),
+            };
+            let graph = SecurityGraph {
+                scan_id: "scan".into(),
+                snapshot_version: 1,
+                nodes: Vec::new(),
+                edges: vec![edge],
+                outgoing_index: Default::default(),
+                incoming_index: Default::default(),
+                evidence_index: Default::default(),
+            };
+            let path = InfluencePath {
+                source_resource_id: "source".into(),
+                actor_resource_id: "agent:opencode".into(),
+                edges: vec![PathEdgeRef {
+                    relationship_id: "agent:opencode|can_execute|shell:bash".into(),
+                    phase: PathPhase::Influence,
+                    traversal: TraversalDirection::Forward,
+                    position: 0,
+                }],
+                source_trust: SourceTrust::Unknown,
+                influence_strength: InfluenceStrength::Unknown,
+                evidence_ids: Vec::new(),
+                disposition: SegmentDisposition::Active,
+            };
+            let authority = AuthorityPath {
+                actor_resource_id: "agent:opencode".into(),
+                sink_resource_id: "sink".into(),
+                edges: Vec::new(),
+                capability: CapabilityClass::Execute,
+                authority_resolution: AuthorityResolution::Unknown,
+                sink_impact: SinkImpact::Unknown,
+                evidence_ids: Vec::new(),
+                disposition: SegmentDisposition::Active,
+            };
+            let evaluations = crate::analysis::boundary::evaluate(&graph, &path, &authority);
+            let found = evaluations.iter().map(|e| e.kind).next();
+            assert_eq!(
+                found, expected,
+                "effective_state {effective:?} (state {state:?}) boundary mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn r8_battery_precedence_and_surface_effective_state() {
+        // Precedence: deny must beat ask and allow at the same level.
+        fn effective_of(config: serde_json::Value) -> EffectiveBashPermission {
+            resolve_effective_bash(&config).unwrap().2
+        }
+        assert_eq!(
+            effective_of(serde_json::json!({"permission": {"bash": "deny"}})),
+            EffectiveBashPermission::Denied
+        );
+        assert_eq!(
+            effective_of(serde_json::json!({"permission": {"bash": "ask"}})),
+            EffectiveBashPermission::ApprovalGated
+        );
+        assert_eq!(
+            effective_of(serde_json::json!({"permission": {"bash": "allow"}})),
+            EffectiveBashPermission::AutoAllow
+        );
+        // Agent deny overrides global allow.
+        assert_eq!(
+            effective_of(serde_json::json!({
+                "permission": {"bash": "allow"},
+                "agent": {"build": {"permission": {"bash": "deny"}}}
+            })),
+            EffectiveBashPermission::Denied
+        );
+        // Sandbox wins even when the action would otherwise be allow/ask/deny.
+        assert_eq!(
+            effective_of(serde_json::json!({"sandbox": true, "permission": {"bash": "deny"}})),
+            EffectiveBashPermission::Sandboxed
+        );
+
+        // MCP transport + credential surfaces are observed independently; the
+        // effective Bash state still resolves from the same config.
+        let dir = tempdir().unwrap();
+        let cfg = serde_json::json!({
+            "permission": {"bash": "allow"},
+            "mcp": {
+                "servers": {
+                    "local": {"type": "stdio", "command": "ghcr.io/github/github-mcp-server"},
+                    "remote": {"type": "http", "url": "https://mcp.example.com"}
+                }
+            }
+        });
+        fs::write(
+            dir.path().join("opencode.json"),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+        let result = discover(dir.path(), None).unwrap();
+        assert_eq!(result.bash_capabilities.len(), 1);
+        assert_eq!(
+            result.bash_capabilities[0].effective_state,
+            EffectiveBashPermission::AutoAllow
+        );
+        let transports: Vec<_> = result
+            .mcp_servers
+            .iter()
+            .map(|s| (s.name.as_str(), s.transport))
+            .collect();
+        assert!(transports
+            .iter()
+            .any(|(n, t)| *n == "local" && *t == McpTransport::Stdio));
+        assert!(transports
+            .iter()
+            .any(|(n, t)| *n == "remote" && *t == McpTransport::Http));
+
+        // Credential from .env beats environment variant in reachability, but
+        // the effective Bash state is unchanged.
+        let ws = tempdir().unwrap();
+        fs::write(
+            ws.path().join(".env"),
+            "CLOUDFLARE_API_TOKEN=dotenv-token-value\n",
+        )
+        .unwrap();
+        fs::write(
+            ws.path().join("opencode.json"),
+            serde_json::to_string(&serde_json::json!({"permission": {"bash": "ask"}})).unwrap(),
+        )
+        .unwrap();
+        let cred_result = discover_with_environment(
+            ws.path(),
+            None,
+            Some(&[("CLOUDFLARE_API_TOKEN", "env-token-value")]),
+            EnvironmentReachability::Proven,
+        )
+        .unwrap();
+        assert_eq!(
+            cred_result.bash_capabilities[0].effective_state,
+            EffectiveBashPermission::ApprovalGated
+        );
+        assert!(
+            cred_result
+                .credentials
+                .iter()
+                .any(|c| c.source_type == "project_dotenv"),
+            "expected a .env credential surface"
+        );
+    }
+
+    #[test]
+    fn r9_identical_config_yields_identical_effective_state() {
+        let config = serde_json::json!({
+            "permission": {"bash": {"*": "allow"}},
+            "agent": {"build": {"permission": {"bash": "ask"}}}
+        });
+        let first = resolve_effective_bash(&config).unwrap();
+        let second = resolve_effective_bash(&config).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.2, EffectiveBashPermission::AutoAllow);
     }
 }
