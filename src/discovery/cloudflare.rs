@@ -815,6 +815,55 @@ mod tests {
     }
 
     #[test]
+    fn repeated_scan_produces_stable_canonical_identities() {
+        // Same observed Worker must yield an identical canonical_key across
+        // repeated scans (no scan_id, timestamp, or random id participates in
+        // the key). This guards against canonical_key churn between runs.
+        let first = ObservedWorker {
+            account_id: "account-1234567890123456".to_string(),
+            script_name: "worker".to_string(),
+            worker_tag: Some("immutable-worker-1".to_string()),
+            source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            sink_impact: None,
+        };
+        let second = ObservedWorker {
+            account_id: "account-1234567890123456".to_string(),
+            script_name: "worker".to_string(),
+            worker_tag: Some("immutable-worker-1".to_string()),
+            source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            sink_impact: None,
+        };
+        assert_eq!(first.canonical_key(), second.canonical_key());
+        assert_eq!(
+            first.canonical_key(),
+            "cloudflare:worker:account-1234567890123456:immutable-worker-1"
+        );
+
+        // The tag-less (name-scoped) variant must also be stable across scans.
+        let a = ObservedWorker {
+            account_id: "account-1234567890123456".to_string(),
+            script_name: "daily-job".to_string(),
+            worker_tag: None,
+            source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            sink_impact: None,
+        };
+        let b = ObservedWorker {
+            account_id: "account-1234567890123456".to_string(),
+            script_name: "daily-job".to_string(),
+            worker_tag: None,
+            source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            sink_impact: None,
+        };
+        assert_eq!(a.canonical_key(), b.canonical_key());
+        assert_eq!(
+            a.canonical_key(),
+            "cloudflare:worker:account-1234567890123456:name:daily-job"
+        );
+        // Two distinct workers must not collide.
+        assert_ne!(first.canonical_key(), a.canonical_key());
+    }
+
+    #[test]
     fn client_rejects_unallowlisted_paths() {
         assert!(!is_allowlisted_path("/accounts/a/workers/scripts/worker"));
         assert!(!is_allowlisted_path("/user/tokens/verify?x=1"));

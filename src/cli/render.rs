@@ -259,6 +259,19 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
                     );
                     out.push('\n');
                 }
+                for provenance in &step.supporting_evidence {
+                    out.push_str(&format!(
+                        "    - {} locator={} captured={} freshness={}\n",
+                        terminal_safe(&provenance.evidence_id),
+                        provenance
+                            .safe_source_locator
+                            .as_deref()
+                            .map(terminal_safe)
+                            .unwrap_or_else(|| "<redacted source locator>".to_string()),
+                        terminal_safe(&provenance.captured_at),
+                        terminal_safe(&provenance.freshness),
+                    ));
+                }
             }
             if path.boundaries.is_empty() {
                 out.push_str("  Recorded boundaries: none\n");
@@ -287,6 +300,10 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
     out.push('\n');
     out.push_str(&terminal_safe(&detail.confidence_basis));
     out.push_str("\n\n");
+
+    out.push_str("Weakest evidence\n");
+    out.push_str(&terminal_safe(&detail.weakest_evidence));
+    out.push('\n');
 
     out.push_str("Evidence\n");
     if detail.evidence.is_empty() {

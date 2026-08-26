@@ -174,3 +174,146 @@ pub fn discover_with_environment(
 ) -> Result<DiscoveryResult, PicoError> {
     agents::opencode::discover_with_environment(workspace, home, environment, reachability)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use tempfile::tempdir;
+
+    use crate::discovery::cloudflare::{Client, GetResponse, GetTransport, ProviderResult};
+    use crate::discovery::{discover, DiscoveryResult};
+    use crate::domain::evidence::source_locator_is_safe;
+
+    /// Secret sentinels that must never appear as a `source_locator`.
+    const SENTINELS: [&str; 2] = ["TEST_SECRET_SHOULD_NOT_PERSIST", "synthetic-token"];
+
+    fn check_discovery(result: &DiscoveryResult) {
+        for actor in &result.actors {
+            assert!(
+                source_locator_is_safe(&actor.source_locator, &SENTINELS),
+                "actor source_locator leaked: {}",
+                actor.source_locator
+            );
+        }
+        for capability in &result.bash_capabilities {
+            assert!(source_locator_is_safe(
+                &capability.source_locator,
+                &SENTINELS
+            ));
+        }
+        for server in &result.mcp_servers {
+            assert!(source_locator_is_safe(&server.source_locator, &SENTINELS));
+        }
+        for credential in &result.credentials {
+            assert!(source_locator_is_safe(
+                &credential.source_locator,
+                &SENTINELS
+            ));
+            assert!(source_locator_is_safe(&credential.fingerprint, &SENTINELS));
+        }
+        if let Some(cloudflare) = &result.cloudflare {
+            check_cloudflare(cloudflare);
+        }
+    }
+
+    fn check_cloudflare(result: &ProviderResult) {
+        for account in &result.accounts {
+            assert!(
+                source_locator_is_safe(&account.source_locator, &SENTINELS),
+                "cloudflare account source_locator leaked: {}",
+                account.source_locator
+            );
+        }
+        for worker in &result.workers {
+            assert!(
+                source_locator_is_safe(&worker.source_locator, &SENTINELS),
+                "cloudflare worker source_locator leaked: {}",
+                worker.source_locator
+            );
+        }
+        for authority in &result.authorities {
+            assert!(source_locator_is_safe(
+                &authority.source_locator,
+                &SENTINELS
+            ));
+        }
+    }
+
+    #[test]
+    fn adapter_conformance_emits_provenance_without_secrets() {
+        // OpenCode adapter via the filesystem seam.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"permission":{"bash":"allow"},"mcp":{"servers":{"local":{"type":"stdio","command":"ghcr.io/github/github-mcp-server"}}}}"#,
+        )
+        .unwrap();
+        let opencode = discover(dir.path(), None).unwrap();
+        check_discovery(&opencode);
+
+        // Cloudflare adapter via a fixture transport seam (no network). The
+        // token passed to inspect is a secret sentinel; it must not surface in
+        // any emitted source_locator.
+        struct FixtureTransport(HashMap<String, GetResponse>);
+        impl GetTransport for FixtureTransport {
+            fn get(&mut self, path: &str, _token: &str) -> Result<GetResponse, String> {
+                self.0
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| "fixture response missing".to_string())
+            }
+        }
+        let body = |content: &str| GetResponse {
+            status: 200,
+            body: content.to_string(),
+            redirected_to: None,
+        };
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            body(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            body(r#"{"result":{"policies":[]}}"#),
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            body(r#"{"result":[]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            body(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            body(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport(responses));
+        let cloudflare = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        check_cloudflare(&cloudflare);
+
+        // (a) Evidence::new rejects an empty source_locator.
+        assert!(crate::domain::Evidence::new(
+            "scan_1",
+            crate::domain::EvidenceClass::Direct,
+            "src",
+            "",
+            "subj",
+            "obs",
+            crate::domain::Sensitivity::Internal
+        )
+        .is_err());
+
+        // (b) The helper rejects secret-like and empty values, accepts safe ones.
+        assert!(!source_locator_is_safe("", &SENTINELS));
+        assert!(!source_locator_is_safe(
+            "TEST_SECRET_SHOULD_NOT_PERSIST",
+            &SENTINELS
+        ));
+        assert!(!source_locator_is_safe("synthetic-token", &SENTINELS));
+        assert!(source_locator_is_safe("project:opencode.json", &SENTINELS));
+        assert!(source_locator_is_safe("/accounts", &SENTINELS));
+    }
+}

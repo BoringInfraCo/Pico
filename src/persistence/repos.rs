@@ -444,6 +444,12 @@ impl<'a> EvidenceRepo<'a> {
 
     /// Append an evidence record.
     pub fn insert(&self, e: &Evidence) -> Result<(), PicoError> {
+        // Classify freshness at capture time when no explicit classification was
+        // supplied, so every persisted Evidence carries a provenance tier.
+        let classified = e
+            .freshness
+            .clone()
+            .unwrap_or_else(|| e.freshness_state(chrono::Utc::now()).as_str().to_string());
         self.conn
             .execute(
                 "INSERT INTO evidence
@@ -459,7 +465,7 @@ impl<'a> EvidenceRepo<'a> {
                     e.subject,
                     e.observation,
                     codec::ts_to_text(e.captured_at),
-                    e.freshness,
+                    Some(&classified),
                     e.sensitivity.as_str(),
                     codec::opt_json_to_text(&e.metadata),
                 ],

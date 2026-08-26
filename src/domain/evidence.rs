@@ -93,6 +93,71 @@ impl std::str::FromStr for Sensitivity {
     }
 }
 
+/// Freshness classification of Evidence (ARCHITECTURE.md §7.5 freshness model).
+///
+/// The age of `Evidence::captured_at` relative to a reference scan time maps to
+/// one of these states. The window bounds below were confirmed with the support
+/// note as the default freshness classification thresholds for Sprint 002.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Freshness {
+    Fresh,
+    Aging,
+    Stale,
+    Unknown,
+}
+
+impl Freshness {
+    /// Machine-readable string form used for persistence and display.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Freshness::Fresh => "FRESH",
+            Freshness::Aging => "AGING",
+            Freshness::Stale => "STALE",
+            Freshness::Unknown => "UNKNOWN",
+        }
+    }
+}
+
+impl std::str::FromStr for Freshness {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "FRESH" => Ok(Freshness::Fresh),
+            "AGING" => Ok(Freshness::Aging),
+            "STALE" => Ok(Freshness::Stale),
+            "UNKNOWN" => Ok(Freshness::Unknown),
+            other => Err(DomainError::InvalidValue(format!(
+                "unknown freshness: {other}"
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for Freshness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Evidence captured within this many seconds of the reference time is FRESH.
+/// (ARCHITECTURE.md §7.5; threshold confirmed via the Sprint 002 support note.)
+pub const FRESH_WINDOW_SECS: i64 = 3600;
+
+/// Evidence captured within this many seconds of the reference time is AGING
+/// (but past the FRESH window). (ARCHITECTURE.md §7.5; support note threshold.)
+pub const AGING_WINDOW_SECS: i64 = 86400;
+
+/// Returns true only when `loc` is non-empty and does not exactly equal any
+/// value in `secrets`. Adapter conformance checks use this to guarantee that no
+/// raw secret value is ever persisted as provenance (`source_locator`).
+pub fn source_locator_is_safe(loc: &str, secrets: &[&str]) -> bool {
+    if loc.trim().is_empty() {
+        return false;
+    }
+    !secrets.contains(&loc)
+}
+
 /// A record of why Pico believes a security claim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Evidence {
@@ -146,6 +211,27 @@ impl Evidence {
             sensitivity,
             metadata: None,
         })
+    }
+
+    /// Classify the freshness of this evidence relative to `reference`.
+    ///
+    /// Age is the signed duration from `captured_at` to `reference`. A negative
+    /// age (reference before capture) is `Unknown`. Otherwise the age is
+    /// compared against [`FRESH_WINDOW_SECS`] and [`AGING_WINDOW_SECS`]. This
+    /// does not read or mutate the stored `freshness` field.
+    pub fn freshness_state(&self, reference: DateTime<Utc>) -> Freshness {
+        let age_secs = reference
+            .signed_duration_since(self.captured_at)
+            .num_seconds();
+        if age_secs < 0 {
+            Freshness::Unknown
+        } else if age_secs <= FRESH_WINDOW_SECS {
+            Freshness::Fresh
+        } else if age_secs <= AGING_WINDOW_SECS {
+            Freshness::Aging
+        } else {
+            Freshness::Stale
+        }
     }
 }
 
@@ -231,5 +317,64 @@ mod tests {
             assert_eq!(Sensitivity::from_str(s.as_str()).unwrap(), s);
         }
         assert!(Sensitivity::from_str("TOP_SECRET").is_err());
+    }
+
+    #[test]
+    fn freshness_round_trips() {
+        for f in [
+            Freshness::Fresh,
+            Freshness::Aging,
+            Freshness::Stale,
+            Freshness::Unknown,
+        ] {
+            assert_eq!(Freshness::from_str(f.as_str()).unwrap(), f);
+        }
+        assert!(Freshness::from_str("REALLY_FRESH").is_err());
+    }
+
+    #[test]
+    fn evidence_freshness_classification() {
+        let base = Utc::now();
+        let mut ev = Evidence::new(
+            "scan_1",
+            EvidenceClass::Direct,
+            "opencode_config",
+            "~/.config/opencode/opencode.json",
+            "permission.bash",
+            "allow",
+            Sensitivity::Internal,
+        )
+        .unwrap();
+        ev.captured_at = base;
+
+        // Age zero and up to the fresh window => Fresh.
+        assert_eq!(ev.freshness_state(base), Freshness::Fresh);
+        assert_eq!(
+            ev.freshness_state(base + chrono::Duration::seconds(FRESH_WINDOW_SECS)),
+            Freshness::Fresh
+        );
+
+        // Just past the fresh window => Aging.
+        assert_eq!(
+            ev.freshness_state(base + chrono::Duration::seconds(FRESH_WINDOW_SECS + 1)),
+            Freshness::Aging
+        );
+        // At the aging boundary => Aging.
+        assert_eq!(
+            ev.freshness_state(base + chrono::Duration::seconds(AGING_WINDOW_SECS)),
+            Freshness::Aging
+        );
+
+        // Past the aging window => Stale.
+        assert_eq!(
+            ev.freshness_state(base + chrono::Duration::seconds(AGING_WINDOW_SECS + 1)),
+            Freshness::Stale
+        );
+
+        // Reference before capture => Unknown.
+        assert_eq!(
+            ev.freshness_state(base - chrono::Duration::seconds(10)),
+            Freshness::Unknown
+        );
     }
 }

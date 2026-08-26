@@ -2,14 +2,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
 use crate::analysis::{
     AnalysisResult, AnalysisStatus, AttackPath, AuthorityResolution, BoundaryDecision,
     CandidateDisposition, CapabilityClass, InfluenceStrength, SinkImpact, SourceTrust,
 };
+use crate::domain::evidence::Freshness;
 use crate::domain::{Evidence, EvidenceClass, ScanStatus};
+use crate::findings::confidence::freshness_confidence;
 use crate::graph::SecurityGraph;
 
 use super::model::{
@@ -78,7 +80,7 @@ pub fn generate_with_scan_status(
         if path.disposition != CandidateDisposition::Active {
             continue;
         }
-        let Some(candidate) = eligible_candidate(graph, path) else {
+        let Some(candidate) = eligible_candidate(graph, path, scan_status) else {
             continue;
         };
         let key = grouping_key(graph, path, candidate.severity, candidate.confidence);
@@ -131,7 +133,11 @@ struct Candidate<'a> {
     confidence: Confidence,
 }
 
-fn eligible_candidate<'a>(graph: &'a SecurityGraph, path: &'a AttackPath) -> Option<Candidate<'a>> {
+fn eligible_candidate<'a>(
+    graph: &'a SecurityGraph,
+    path: &'a AttackPath,
+    scan_status: ScanStatus,
+) -> Option<Candidate<'a>> {
     if !matches!(
         path.source_trust,
         SourceTrust::PublicExternal | SourceTrust::OpenWorld | SourceTrust::AuthenticatedExternal
@@ -162,6 +168,9 @@ fn eligible_candidate<'a>(graph: &'a SecurityGraph, path: &'a AttackPath) -> Opt
         return None;
     }
     if !critical_edges_are_confirmed(graph, path) {
+        return None;
+    }
+    if !critical_edges_are_confirmable(graph, path, scan_status) {
         return None;
     }
     let path_evidence = all_path_evidence(graph, path)?;
@@ -219,6 +228,51 @@ fn critical_edges_are_confirmed(graph: &SecurityGraph, path: &AttackPath) -> boo
                 )
             })
         })
+}
+
+fn critical_edges_are_confirmable(
+    graph: &SecurityGraph,
+    path: &AttackPath,
+    scan_status: ScanStatus,
+) -> bool {
+    let reference = Utc::now();
+    path.influence_edges
+        .iter()
+        .chain(path.authority_edges.iter())
+        .all(|edge_ref| {
+            let relationship = match graph.edge(&edge_ref.relationship_id) {
+                Some(relationship) => relationship,
+                None => return false,
+            };
+            let edge_freshness =
+                edge_supporting_freshness(graph, &relationship.relationship_id, reference);
+            freshness_confidence(edge_freshness, scan_status).may_be_confirmed
+        })
+}
+
+/// The freshness of a critical edge is driven by its weakest (oldest-captured)
+/// supporting Evidence relative to `reference`.
+fn edge_supporting_freshness(
+    graph: &SecurityGraph,
+    relationship_id: &str,
+    reference: DateTime<Utc>,
+) -> Freshness {
+    let mut oldest: Option<&Evidence> = None;
+    for id in graph.evidence_index.relationship_evidence(relationship_id) {
+        if let Some(evidence) = graph.evidence_index.evidence(id) {
+            match oldest {
+                None => oldest = Some(evidence),
+                Some(current) if evidence.captured_at < current.captured_at => {
+                    oldest = Some(evidence)
+                }
+                _ => {}
+            }
+        }
+    }
+    match oldest {
+        Some(evidence) => evidence.freshness_state(reference),
+        None => Freshness::Unknown,
+    }
 }
 
 fn all_path_evidence<'a>(graph: &'a SecurityGraph, path: &AttackPath) -> Option<Vec<&'a Evidence>> {
@@ -679,6 +733,7 @@ mod tests {
     use super::*;
     use crate::analysis::{AnalysisLimits, AnalysisResult};
     use crate::domain::{EvidenceClass, RelationshipState, Sensitivity};
+    use crate::findings::confidence::freshness_confidence;
     use crate::graph::{EdgeUsability, GraphEdge, GraphEvidenceIndex, GraphNode, SecurityRole};
     use serde_json::json;
 
@@ -867,5 +922,36 @@ mod tests {
             second.findings[0].fingerprint
         );
         assert_ne!(first.findings[0].id, second.findings[0].id);
+    }
+
+    #[test]
+    fn stale_evidence_cannot_produce_confirmed_edge() {
+        assert!(
+            !freshness_confidence(
+                crate::domain::evidence::Freshness::Stale,
+                ScanStatus::Complete
+            )
+            .may_be_confirmed
+        );
+    }
+
+    #[test]
+    fn partial_scan_evidence_never_upgrades_confidence() {
+        let confirmed = freshness_confidence(
+            crate::domain::evidence::Freshness::Fresh,
+            ScanStatus::Partial,
+        );
+        assert!(!confirmed.may_be_confirmed);
+        assert!(confirmed.penalty >= 0.1);
+    }
+
+    #[test]
+    fn stale_backed_security_critical_edge_suppresses_finding() {
+        let (mut graph, analysis) = fixture();
+        for evidence in graph.evidence_index.by_evidence_id.values_mut() {
+            evidence.captured_at = Utc::now() - chrono::Duration::days(2);
+        }
+        let result = generate(&graph, &analysis, &FindingLimits::default());
+        assert!(result.findings.is_empty());
     }
 }

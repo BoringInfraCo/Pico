@@ -243,6 +243,7 @@ struct SafeDetail {
     scope_note: String,
     severity_basis: String,
     confidence_basis: String,
+    weakest_evidence: String,
     reasons: Vec<SafeReasonView>,
     paths: Vec<SafeExplainedPath>,
     evidence: Vec<SafeEvidenceView>,
@@ -271,6 +272,7 @@ impl SafeDetail {
             scope_note: terminal_safe(&detail.scope_note),
             severity_basis: terminal_safe(&detail.severity_basis),
             confidence_basis: terminal_safe(&detail.confidence_basis),
+            weakest_evidence: terminal_safe(&detail.weakest_evidence),
             reasons: detail.reasons.iter().map(SafeReasonView::new).collect(),
             paths: detail.paths.iter().map(SafeExplainedPath::new).collect(),
             evidence: detail.evidence.iter().map(SafeEvidenceView::new).collect(),
@@ -352,6 +354,7 @@ struct SafePathStep {
     to_resource: SafeResourceView,
     relationship_state: String,
     evidence_ids: Vec<String>,
+    supporting_evidence: Vec<SafeEdgeEvidenceProvenance>,
 }
 
 impl SafePathStep {
@@ -366,6 +369,30 @@ impl SafePathStep {
             to_resource: SafeResourceView::new(&step.to_resource),
             relationship_state: terminal_safe(&step.relationship_state),
             evidence_ids: safe_strings(&step.evidence_ids),
+            supporting_evidence: step
+                .supporting_evidence
+                .iter()
+                .map(SafeEdgeEvidenceProvenance::new)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SafeEdgeEvidenceProvenance {
+    evidence_id: String,
+    safe_source_locator: Option<String>,
+    captured_at: String,
+    freshness: String,
+}
+
+impl SafeEdgeEvidenceProvenance {
+    fn new(provenance: &crate::application::findings::EdgeEvidenceProvenance) -> Self {
+        SafeEdgeEvidenceProvenance {
+            evidence_id: terminal_safe(&provenance.evidence_id),
+            safe_source_locator: safe_optional(provenance.safe_source_locator.as_deref()),
+            captured_at: terminal_safe(&provenance.captured_at),
+            freshness: terminal_safe(&provenance.freshness),
         }
     }
 }

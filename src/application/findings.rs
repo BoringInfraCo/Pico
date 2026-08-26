@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -114,6 +115,7 @@ pub struct FindingDetail {
     pub scope_note: String,
     pub severity_basis: String,
     pub confidence_basis: String,
+    pub weakest_evidence: String,
     pub reasons: Vec<ReasonView>,
     pub paths: Vec<ExplainedPath>,
     pub evidence: Vec<EvidenceView>,
@@ -154,6 +156,17 @@ pub struct PathStep {
     pub to_resource: ResourceView,
     pub relationship_state: String,
     pub evidence_ids: Vec<String>,
+    pub supporting_evidence: Vec<EdgeEvidenceProvenance>,
+}
+
+/// Minimized provenance for one piece of evidence supporting a security-critical
+/// edge (SPRINT-014 R6/R7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EdgeEvidenceProvenance {
+    pub evidence_id: String,
+    pub safe_source_locator: Option<String>,
+    pub captured_at: String,
+    pub freshness: String,
 }
 
 /// Historical graph node identity and labels.
@@ -499,6 +512,66 @@ fn contiguous_positions(
     Ok(())
 }
 
+fn check_finding_provenance(conn: &Connection, record: &FindingRecord) -> Result<(), PicoError> {
+    let paths_repo = AttackPathRepo::new(conn);
+    let finding_repo = FindingRepo::new(conn);
+    let relationship_repo = RelationshipRepo::new(conn);
+    let evidence_repo = EvidenceRepo::new(conn);
+
+    let links: Vec<FindingPathRecord> = finding_repo.list_paths(&record.id)?;
+    let finding_evidence_ids: BTreeSet<String> = finding_repo
+        .list_evidence(&record.id)?
+        .into_iter()
+        .map(|row| row.evidence_id)
+        .collect();
+    let relationship_evidence = relationship_repo.evidence_links()?;
+
+    for link in &links {
+        let edges = paths_repo.list_edges(&link.attack_path_id)?;
+        for edge in &edges {
+            let relationship_id = &edge.relationship_id;
+            let edge_evidence: Vec<String> = relationship_evidence
+                .iter()
+                .filter(|(rel, _)| rel == relationship_id)
+                .map(|(_, evidence)| evidence.clone())
+                .collect();
+            let linked: Vec<String> = edge_evidence
+                .into_iter()
+                .filter(|evidence| finding_evidence_ids.contains(evidence))
+                .collect();
+            if linked.is_empty() {
+                return Err(integrity(format!(
+                    "security-critical edge lacks provenance: relationship {relationship_id} on finding {} has no linked same-scan evidence",
+                    record.id
+                )));
+            }
+            let mut has_classified = false;
+            for evidence_id in &linked {
+                let Some(evidence) = evidence_repo.get(evidence_id)? else {
+                    continue;
+                };
+                let locator_ok = !evidence.source_locator.trim().is_empty();
+                let freshness_ok = evidence
+                    .freshness
+                    .as_deref()
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false);
+                if locator_ok && freshness_ok {
+                    has_classified = true;
+                    break;
+                }
+            }
+            if !has_classified {
+                return Err(integrity(format!(
+                    "security-critical edge lacks provenance: relationship {relationship_id} on finding {} has no evidence with both a source locator and a freshness classification",
+                    record.id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn linked_paths(
     conn: &Connection,
     record: &FindingRecord,
@@ -723,6 +796,7 @@ fn path_steps(
     graph: &SecurityGraph,
     path: &AttackPathRecord,
     edges: &[AttackPathEdgeRecord],
+    reference: DateTime<Utc>,
 ) -> Result<Vec<PathStep>, PicoError> {
     if edges.is_empty() {
         return Err(integrity(format!("attack path {} has no edges", path.id)));
@@ -791,6 +865,7 @@ fn path_steps(
                 .evidence_index
                 .relationship_evidence(&edge.relationship_id)
                 .to_vec(),
+            supporting_evidence: edge_provenance(graph, &relationship.relationship_id, reference)?,
         });
         current = to.clone();
         previous_phase = Some(edge.phase.as_str());
@@ -802,6 +877,71 @@ fn path_steps(
         )));
     }
     Ok(steps)
+}
+
+fn edge_provenance(
+    graph: &SecurityGraph,
+    relationship_id: &str,
+    reference: DateTime<Utc>,
+) -> Result<Vec<EdgeEvidenceProvenance>, PicoError> {
+    let mut provenance = Vec::new();
+    for evidence_id in graph.evidence_index.relationship_evidence(relationship_id) {
+        let Some(evidence) = graph.evidence_index.evidence(evidence_id) else {
+            continue;
+        };
+        let freshness = evidence.freshness_state(reference);
+        provenance.push(EdgeEvidenceProvenance {
+            evidence_id: bounded_string("evidence id", &evidence.id)?,
+            safe_source_locator: if safe_source_locator(&evidence.source_locator) {
+                Some(evidence.source_locator.clone())
+            } else {
+                None
+            },
+            captured_at: codec::ts_to_text(evidence.captured_at),
+            freshness: bounded_string("evidence freshness", freshness.as_str())?,
+        });
+    }
+    provenance.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
+    Ok(provenance)
+}
+
+/// Identify the weakest (oldest-captured, or STALE) supporting evidence among
+/// the security-critical edges (SPRINT-014 R9).
+fn weakest_edge_provenance(
+    graph: &SecurityGraph,
+    paths: &[ExplainedPath],
+    reference: DateTime<Utc>,
+) -> String {
+    let mut oldest: Option<(&Evidence, &str)> = None;
+    for path in paths {
+        for step in &path.steps {
+            for evidence_id in &step.evidence_ids {
+                let Some(evidence) = graph.evidence_index.evidence(evidence_id) else {
+                    continue;
+                };
+                let better = match oldest {
+                    None => true,
+                    Some((current, _)) => evidence.captured_at < current.captured_at,
+                };
+                if better {
+                    oldest = Some((evidence, step.relationship_id.as_str()));
+                }
+            }
+        }
+    }
+    match oldest {
+        Some((evidence, relationship_id)) => {
+            let freshness = evidence.freshness_state(reference);
+            format!(
+                "Weakest evidence: {} on edge {} captured {} (freshness {})",
+                evidence.id,
+                relationship_id,
+                codec::ts_to_text(evidence.captured_at),
+                freshness.as_str()
+            )
+        }
+        None => "Weakest evidence: none recorded for the security-critical edges.".to_string(),
+    }
 }
 
 fn boundary_views(path: &AttackPathRecord) -> Result<Vec<BoundaryView>, PicoError> {
@@ -842,6 +982,7 @@ fn explained_paths(
     record: &FindingRecord,
     paths: &[AttackPathRecord],
     finding_evidence_ids: &BTreeSet<String>,
+    reference: DateTime<Utc>,
 ) -> Result<Vec<ExplainedPath>, PicoError> {
     let paths_repo = AttackPathRepo::new(conn);
     let mut output = Vec::with_capacity(paths.len());
@@ -853,7 +994,7 @@ fn explained_paths(
                 path.id
             )));
         }
-        let steps = path_steps(graph, path, &edges)?;
+        let steps = path_steps(graph, path, &edges, reference)?;
         let path_evidence_rows = paths_repo.list_evidence(&path.id)?;
         contiguous_positions(
             &format!("attack path {} evidence", path.id),
@@ -1156,10 +1297,16 @@ fn compose_detail(conn: &Connection, finding_id: &str) -> Result<FindingDetail, 
     })?;
     let (finding_version, severity, confidence) = validate_finding_header(&record)?;
     let scan = validate_scan_and_analysis(conn, &record)?;
+    let reference = scan
+        .completed_at
+        .as_deref()
+        .and_then(|text| codec::text_to_ts(text).ok())
+        .unwrap_or_else(Utc::now);
     let paths = linked_paths(conn, &record)?;
     let evidence = finding_evidence_views(conn, &record)?;
     let graph = historical_graph(conn, &record)?;
-    let explained = explained_paths(conn, &graph, &record, &paths, &evidence.ids)?;
+    let explained = explained_paths(conn, &graph, &record, &paths, &evidence.ids, reference)?;
+    check_finding_provenance(conn, &record)?;
 
     let linked_path_ids: BTreeSet<String> = paths.iter().map(|path| path.id.clone()).collect();
     let mut path_edges_by_phase: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -1180,6 +1327,7 @@ fn compose_detail(conn: &Connection, finding_id: &str) -> Result<FindingDetail, 
     let newest_complete = scans.newest_complete()?;
     let newest_attempt = scans.newest_attempt()?;
     let (_, warning) = freshness_context(&newest_complete, &newest_attempt);
+    let weakest_evidence = weakest_edge_provenance(&graph, &explained, reference);
     let currentness = match &newest_complete {
         Some(latest) if latest.id == record.scan_id => Currentness::LatestComplete,
         Some(latest) => Currentness::Historical {
@@ -1209,6 +1357,7 @@ fn compose_detail(conn: &Connection, finding_id: &str) -> Result<FindingDetail, 
             explained.first().map(|path| path.source_trust.as_str()),
         ),
         confidence_basis: confidence_basis(confidence),
+        weakest_evidence,
         reasons,
         paths: explained,
         evidence: evidence.views,
@@ -1231,6 +1380,7 @@ fn summarize_scan(conn: &Connection, scan_id: &str) -> Result<Vec<FindingSummary
     let mut parsed = Vec::with_capacity(records.len());
     for record in &records {
         validate_finding_header(record)?;
+        check_finding_provenance(conn, record)?;
         let linked = linked_paths(conn, record)?;
         let mut sinks = BTreeSet::new();
         for path in &linked {
