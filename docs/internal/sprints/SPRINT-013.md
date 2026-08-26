@@ -1,10 +1,10 @@
 # Pico — Sprint 013: Authority-Resolution Tiers — Visible, Persisted, Tested
 
-**Status:** READY
+**Status:** DONE
 **Sprint:** 013
 **Phase:** v0.2 — Evidence and Authority Depth
 **Type:** Implementation
-**Baseline:** `(set at execution; currently main HEAD)`
+**Baseline:** `0105023` (pre-S013 main HEAD)
 **Depends on:** Sprint 012
 **Canonical docs:** `PRODUCT_DEFINITION.md`, `TECHNICAL.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `docs/internal/sprints/SPRINT-012.md`, `docs/internal/dogfood/classification-gap.md`, `docs/internal/dogfood/evidence.md`
 
@@ -779,6 +779,93 @@ Claim exactly what the matrix shows: the four tiers are now explicit, persisted,
 and each covered by a deterministic fixture, and the token-scope requirement for
 each is documented — including the precise UNKNOWN-vs-BEHAVIORAL_READ_ONLY
 distinction the Sprint 012 dogfood exposed.
+
+## 27.1 Completion Record (executed 2026-08-26)
+
+```text
+completion date: 2026-08-26
+baseline (pre-S013 HEAD): 0105023
+new commits:
+  - test(discovery): cover SCOPED and BEHAVIORAL_READ_ONLY authority tiers
+  - test(discovery): cover EXACT blocked authority resolution
+  - test(interface): assert authority_resolution in CLI + MCP + relationship store
+  - docs(sprints): add Sprint 013 authority-resolution support matrix + completion
+repository state: main; pushed to origin/main
+
+new fixtures (src/discovery/cloudflare.rs):
+  F-A scoped_write_with_unresolved_account_scope  -> resolution Scoped,  state Unknown
+  F-B behavioral_read_only_when_policy_readable_no_write
+                                                  -> resolution BehavioralReadOnly, state Unknown,
+                                                     unknown_reasons contains WORKERS_SCRIPTS_WRITE_UNRESOLVED
+  F-C blocked_authority_is_exact                   -> state Blocked, resolution Exact,
+                                                     permission_state DENIED_OR_OUT_OF_SCOPE
+  (EXACT-derived and UNKNOWN-policy-denied tiers already covered by pre-existing fixtures)
+
+logic change (discovery only, no schema/engine/Finding-semantics change):
+  authority_for resolution: `write_allowed && scope == InScope`  ->  `write_allowed && scope != OutOfScope`
+  makes the SCOPED tier reachable for the allow+write+UNKNOWN-scope case (Sprint 012 gap).
+
+CLI/MCP visibility test additions:
+  - sprint010_cli_test.rs: detail_rendering test asserts "Authority resolution: EXACT"
+    in the explained-path view; NEW persisted_can_mutate_relationship_exposes_authority_resolution_tier
+    queries the RelationshipRepo and asserts metadata.authority_resolution == "EXACT" independently.
+  - sprint011_mcp_golden_test.rs: get_finding payload asserts paths[0].authority_resolution == "EXACT".
+
+relationship-metadata queryability: PASS (V2 — field retrievable from persisted store, not only path summary)
+
+support matrix: docs/internal/sprints/SPRINT-013-support-matrix.md
+  - one row per tier (EXACT-derived / EXACT-blocked / SCOPED / BEHAVIORAL_READ_ONLY / UNKNOWN)
+  - states token scope required per tier; documents the User Details: Read limit (UNKNOWN collapse)
+    as a SUPPORT LIMIT, not a defect (cites SPRINT-013 §8).
+
+validation matrix (R1-R10):
+  R1  EXACT-derived            FIXTURE-VERIFIED  (pre-existing cloudflare unit test)
+  R2  UNKNOWN policy-denied    FIXTURE-VERIFIED  (pre-existing read_only_listing_survives_policy_read_failure)
+  R3  SCOPED                   NEW-FIXTURE       (F-A scoped_write_with_unresolved_account_scope)
+  R4  BEHAVIORAL_READ_ONLY     NEW-FIXTURE       (F-B behavioral_read_only_when_policy_readable_no_write)
+  R5  EXACT-blocked           NEW-FIXTURE       (F-C blocked_authority_is_exact)
+  R6  CLI surfaced             FIXTURE-VERIFIED + NEW explained-path assertion
+  R7  MCP surfaced             FIXTURE-VERIFIED + NEW get_finding assertion
+  R8  persisted metadata       FIXTURE-VERIFIED + NEW RelationshipRepo query assertion
+  R9  support matrix           DOC-VERIFIED      (SPRINT-013-support-matrix.md)
+  R10 no Finding-semantics     FIXTURE-VERIFIED  (unknown_production_is_not_a_finding) + clippy/test green
+
+secret-sweep: ZERO (no real token value in code or new docs; the leaked S012 token
+  cfut_***REDACTED*** remains revoke-pending in dashboard — tracked in SPRINT-012.md / runbook.md).
+  rg sweep for cfut_ / account id outside the already-redacted dogfood docs returned nothing new.
+
+optional live re-run: GAP-RECORDED — Sprint 013 is fixture/output-driven by contract (§5);
+  no new live dogfood required; it inherits Sprint 012 live evidence. Live BEHAVIORAL_READ_ONLY
+  demonstration would require a token with User Details: Read (§22.7) — not performed; documented gap.
+
+comprehension: NOT RUN (self-comprehension gate is v0.1-only; v0.2 sprints are
+  validated by the fixture matrix above, not an independent comprehension proxy).
+
+usefulness judgments: tiers are now operator-actionable (the Sprint 012 UNKNOWN was
+  not; the distinction was invisible). Useful as a read-only diagnostic layer.
+
+defect list: EMPTY (the SCOPED-unreachable condition was a latent gap, now closed by
+  the contained authority_for change; carried as F-A coverage, not a security defect).
+
+architecture pressure-test: authority-resolution is a separate axis from sink_impact
+  production classification (§8). No cross-contamination: tiers never feed Finding
+  eligibility; engine gate (unknown_production_is_not_a_finding) unchanged.
+
+advancement decision record:
+  Sprint 013 is DONE and self-contained within its stated scope (§2 non-goals honored:
+  no live production classification, no new providers/agents, no enforcement, no
+  multi-agent, no history, no runtime). It advances the v0.2 authority-depth objective
+  (ROADMAP §6) by making the four tiers explicit, persisted, and individually tested.
+  It does NOT claim production classification is solved. Recommended: proceed to the next
+  v0.2 sprint (authority-depth or provenance) with this as the foundation.
+
+follow-ups (named, owned, unambiguous):
+  - F-U1 (founder): revoke leaked S012 token 6b1a59bb84dd680a1dde77f49b3f357b in dashboard.
+  - F-U2 (next v0.2 sprint): optionally demonstrate BEHAVIORAL_READ_ONLY live with a
+    User-Details:Read token against the disposable account (3e2742bacdabcada586f921ad89bac77).
+  - F-U3 (roadmap): consider promoting authority_resolution into the MCP `can_mutate`
+    relationship payload schema explicitly (currently surfaced via explained-path only).
+```
 
 ---
 
