@@ -326,19 +326,20 @@ impl<T: GetTransport> Client<T> {
         // account and Worker facts the token is still permitted to list, so it
         // is recorded as a problem and treated as an empty policy instead of
         // aborting the whole inspection.
-        let token_details: Option<Value> = match self.get(&format!("/user/tokens/{token_id}"), token) {
-            Ok(response) => match parse_success(&response) {
-                Ok(value) => value.get("result").cloned(),
+        let token_details: Option<Value> =
+            match self.get(&format!("/user/tokens/{token_id}"), token) {
+                Ok(response) => match parse_success(&response) {
+                    Ok(value) => value.get("result").cloned(),
+                    Err(error) => {
+                        result.problems.push(error);
+                        None
+                    }
+                },
                 Err(error) => {
                     result.problems.push(error);
                     None
                 }
-            },
-            Err(error) => {
-                result.problems.push(error);
-                None
-            }
-        };
+            };
 
         let permission_groups = match self.get("/user/tokens/permission_groups", token) {
             Ok(response) => match parse_success(&response) {
@@ -656,7 +657,7 @@ fn authority_for(
     if !facts.write_allowed {
         unknown.push("WORKERS_SCRIPTS_WRITE_UNRESOLVED".to_string());
     }
-    let resolution = if facts.write_allowed && scope == ScopeState::InScope {
+    let resolution = if facts.write_allowed && scope != ScopeState::OutOfScope {
         AuthorityResolution::Scoped
     } else if !write_group_ids.is_empty() {
         AuthorityResolution::BehavioralReadOnly
@@ -818,5 +819,117 @@ mod tests {
         assert!(!is_allowlisted_path("/accounts/a/workers/scripts/worker"));
         assert!(!is_allowlisted_path("/user/tokens/verify?x=1"));
         assert!(is_allowlisted_path("/user/tokens/verify"));
+    }
+
+    #[test]
+    fn scoped_write_with_unresolved_account_scope() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            response(r#"{"result":{"policies":[{"effect":"allow","permission_groups":[{"id":"write-id","name":"Workers Scripts Write"}],"resources":{}}]}}"#),
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[{"id":"write-id","name":"Workers Scripts Write"}]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result.credential_status, Some(CredentialStatus::Active));
+        assert_eq!(
+            result.authorities[0].resolution,
+            AuthorityResolution::Scoped
+        );
+        assert_eq!(result.authorities[0].state, RelationshipState::Unknown);
+    }
+
+    #[test]
+    fn behavioral_read_only_when_policy_readable_no_write() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            response(r#"{"result":{"policies":[]}}"#),
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[{"id":"write-id","name":"Workers Scripts Write"}]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result.credential_status, Some(CredentialStatus::Active));
+        assert_eq!(
+            result.authorities[0].resolution,
+            AuthorityResolution::BehavioralReadOnly
+        );
+        assert_eq!(result.authorities[0].state, RelationshipState::Unknown);
+        assert!(result.authorities[0]
+            .unknown_reasons
+            .contains(&"WORKERS_SCRIPTS_WRITE_UNRESOLVED".to_string()));
+    }
+
+    #[test]
+    fn blocked_authority_is_exact() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            response(r#"{"result":{"policies":[{"effect":"deny","permission_groups":[{"id":"write-id","name":"Workers Scripts Write"}],"resources":{"com.cloudflare.api.account":{"account-1234567890123456":"*"}}}]}}"#),
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[{"id":"write-id","name":"Workers Scripts Write"}]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result.credential_status, Some(CredentialStatus::Active));
+        assert_eq!(result.authorities[0].state, RelationshipState::Blocked);
+        assert_eq!(result.authorities[0].resolution, AuthorityResolution::Exact);
+        assert_eq!(
+            result.authorities[0].permission_state,
+            "DENIED_OR_OUT_OF_SCOPE"
+        );
     }
 }
