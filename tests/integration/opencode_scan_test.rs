@@ -93,7 +93,7 @@ fn bash_policy_states_remain_distinct() {
         (
             include_str!("../fixtures/opencode/ask/opencode.json"),
             "ASK",
-            "DERIVED",
+            "UNKNOWN",
         ),
         (
             include_str!("../fixtures/opencode/deny/opencode.json"),
