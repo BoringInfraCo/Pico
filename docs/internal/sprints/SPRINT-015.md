@@ -1,6 +1,6 @@
 # Pico — Sprint 015: Deterministic Finding Stability, Path Deduplication, and Remediation Cut Points
 
-**Status:** READY
+**Status:** DONE
 
 **Sprint:** 015
 **Phase:** v0.2 — Evidence and Authority Depth
@@ -191,28 +191,80 @@ Do not amend previous commits. Do not push unless explicitly instructed. Do not 
 
 ---
 
-# 12. Completion Evidence (filled at execution)
-
-When validation concludes, set `Status: DONE` (or `BLOCKED`) and record:
+# 12. Completion Evidence (executed 2026-08-26)
 
 ```text
-completion date and verified baseline
-commits (authoring; any defect fixes; evidence record)
-repository state
-new fixtures (R1–R10) and their assertions
-CLI/MCP deduplication + stable-id surfacing test additions
-fingerprint/stability result
-secret-sweep result
-optional live re-run outcome (or GAP-RECORDED with reason)
-comprehension result (PASS/FAIL/NOT RUN + confusion points)
-usefulness judgments
-defect list and dispositions (expected empty)
-architecture pressure-test answers
-advancement decision record
-follow-ups (named, owned, unambiguous)
-```
+completion date: 2026-08-26
+baseline (pre-S015 HEAD): 861fd4b
+new commits:
+  - test(findings): fingerprint stability, dedup, and remediation cut-point fixtures (R1–R7)
+  - feat(cli/mcp): surface fingerprint, grouped-path count, and remediation cut point (R8–R10)
+  - docs(sprints): Sprint 015 support note + completion evidence
+repository state: main; pushed to origin/main
 
-Do not claim v0.2 depth is "closed" merely because findings are stable. Claim exactly what the matrix shows: fingerprints are deterministic and stable, deduplication groups same-sink paths without hiding distinct boundaries, and remediation cut points are deterministic.
+new fixtures / assertions (R1–R10):
+  R1  finding_fingerprint_stable_across_identical_scans (engine.rs) — identical graph run
+      twice => equal finding fingerprint (deterministic, not random).
+  R2  finding_fingerprint_flips_on_security_significant_change — pushing a HardDeny boundary
+      evaluation on the critical Bash edge flips the path + finding fingerprint.
+  R3  same_sink_paths_with_identical_edges_deduplicate — N>=2 same-sink paths with identical
+      edges + boundaries => ONE finding, attack_path_fingerprints.len()==N (grouped, recorded).
+  R4  distinct_boundaries_remain_distinct_after_deduplication — two same-sink paths, one with an
+      interrupting boundary => NOT collapsed; both path fingerprints retained and differ.
+  R5  severity_confidence_independence_stable — identical inputs => stable; changing only the
+      severity driver leaves confidence unchanged (independent axes).
+  R6  cut_point_thresholds_are_deterministic — identical inputs => byte-identical severity/confidence.
+  R7  remediation_targets_correct_relationship — ENFORCE_BASH_APPROVAL_OR_DENY targets the
+      can_execute edge id, stable across identical runs.
+  R8  CLI detail now renders fingerprint, "Grouped paths: N", and human-readable remediation
+      cut points (e.g., "Agent -> Bash (can_execute)"); sprint010_cli_test.rs extended.
+  R9  MCP SafeDetail/SafeRemediationView carry fingerprint, grouped-path count, rule_id +
+      target_relationship_ids; sprint011_mcp_golden_test.rs extended.
+  R10 finding_fingerprint_and_remediation_targets_contain_no_raw_secret (sprint010) — fingerprint
+      and target relationship ids contain neither TEST_SECRET_SHOULD_NOT_PERSIST nor synthetic-token;
+      credential canonical keys are the fingerprint form only.
+
+CLI/MCP deduplication + stable-id surfacing: PASS (R8/R9).
+fingerprint/stability result: PASS (R1–R7) — existing sha256 fingerprint over path fingerprints
+  (which include boundary evaluations) + severity + confidence + remediation rule ids; identical
+  scans reproduce; security-significant changes flip predictably.
+secret-sweep result: ZERO — fingerprints are sha256 digests; no raw secret in any surfaced field.
+
+optional live re-run: GAP-RECORDED — Sprint 015 is fixture/output-driven by contract (§5); it
+  inherits the Sprint 012 live evidence. Stability/dedup are validated by fixtures without a new
+  live dogfood.
+
+comprehension: NOT RUN (self-comprehension gate is v0.1-only; v0.2 sprints validated by the fixture matrix).
+
+usefulness judgments: stable fingerprints make "is this the same finding as last scan?" answerable,
+  and deduplication-without-hiding means a developer sees one finding per real risk while distinct
+  boundaries (deny/approval/sandbox) stay visible — directly serving ROADMAP §13.7.
+
+defect list: EMPTY — the fingerprint/dedup logic was already deterministic; this sprint proves it
+  with fixtures and adds surfacing. No behavioral regression; golden path still yields 1 finding.
+
+architecture pressure-test:
+  - Finding identity is a deterministic sha256 over the existing analyzed domain (Boundary/AttackPath/
+    Finding); no new domain object.
+  - Deduplication uses the existing grouping_key + path fingerprint; materially distinct boundaries
+    stay distinct because boundary evaluations are part of the path fingerprint.
+  - Severity/confidence remain separate axes (ARCHITECTURE §2.4); this sprint locks cut points via tests.
+  - Secret-safety preserved: fingerprints hash relationship/evidence refs, never raw secret values.
+
+advancement decision record:
+  Sprint 015 is DONE and self-contained within its stated scope (§3 non-goals honored: no history UX,
+  no runtime observation, no new agents/providers, sink_impact remains UNKNOWN out of scope). It
+  advances the v0.2 depth objective (ROADMAP §6: validate finding stability + deduplication, refine
+  deterministic cut points) and makes finding identity and grouping honest and explainable. It does
+  NOT claim v0.2 depth is "closed". Recommended: continue with the next v0.2 sprint (016).
+
+follow-ups (named, owned, unambiguous):
+  - F-U1 (founder): revoke leaked S012 token 6b1a59bb84dd680a1dde77f49b3f357b in dashboard (still pending).
+  - F-U2 (next v0.2 sprint): optionally live-confirm fingerprint stability across two real scans of
+    the disposable account (3e2742bacdabcada586f921ad89bac77) to exercise R1/R2 against real state.
+  - F-U3 (roadmap): consider exposing the fingerprint in `pico scan` machine-readable output so CI can
+    detect "same finding recurred" without a hosted service.
+```
 
 ---
 
