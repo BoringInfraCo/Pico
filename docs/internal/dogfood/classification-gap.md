@@ -144,6 +144,43 @@ Do not silently change reachability semantics during the run.
 
 ---
 
+## 3.1 Second Live Gap — Token-Policy Read Denial Discarded Safe Facts (FOUND & FIXED live)
+
+A second defect surfaced during the first live run and is now fixed (it is
+recorded here as the counterpart to §3, because §8.1 demands exact code
+locations and honesty about them):
+
+1. `inspect_live` (src/discovery/cloudflare.rs) reached the
+   `/user/tokens/{token_id}` step and, on a denied read (HTTP 403), **bailed
+   ENTIRELY** — discarding the account and Worker facts the token COULD
+   safely read.
+2. Consequence observed in the first live run: **0 accounts, 0 workers** even
+   though the token was permitted to list them. The account/Worker facts were
+   thrown away solely because the token lacked permission to read its own
+   policy.
+
+This is distinct from the §3 reachability gate: §3 prevented `inspect_live`
+from running at all from the shipped CLI (dead code); §3.1 is about behavior
+once it does run — a non-fatal policy-read denial must not erase readable
+facts.
+
+**Fix (commit "fix(discovery): keep read-only Cloudflare facts when
+token-policy read is denied"):** the policy-read failure is now non-fatal —
+src/discovery/cloudflare.rs:324-341 records the denial as a `problem` and
+treats the policy as empty, while still projecting accounts/workers and
+setting authority to UNKNOWN. Regression test:
+`read_only_listing_survives_policy_read_failure`
+(src/discovery/cloudflare.rs:775). After this fix the live run showed the
+real Worker (`pico-dogfood-worker`) and a UNKNOWN-resolution authority edge.
+
+This fix changes no Finding semantics, schema, or tool surface (SPRINT-012
+§13 / §17). It is a §13 MAJOR-class defect dispositioned as an in-sprint fix
+because it is small, contained, and free of Finding-semantic change — the
+honest PARTIAL (with a recorded problem and UNKNOWN authority) is preserved,
+not weakened.
+
+---
+
 # 4. Fetched-but-Unused Provider Fields Inventory
 
 What the adapter reads vs. what Cloudflare returns on allowlisted endpoints:

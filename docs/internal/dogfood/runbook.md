@@ -1,6 +1,10 @@
 # Sprint 012 Operator Runbook (Controlled Live Dogfood)
 
 **Machine:** macOS, zsh. **Repo baseline:** `4993bf29be7a9c903fe93ae16f596f5e61c07c46` (SPRINT-012.md §18).
+**LIVE RUN STATUS:** COMPLETED (baseline `72ac784`, post two §13 fix commits). Results recorded in
+`docs/internal/dogfood/evidence.md`. Account `3e2742bacdabcada586f921ad89bac77`; token id
+`6b1a59bb84dd680a1dde77f49b3f357b`; token value `cfut_***REDACTED***` (revoke pending). Scan
+`scan_18cf730d87996f48_0`. Comprehension check NOT RUN.
 **Rule:** every step below is imperative. Record what happens, not what you
 hoped would happen. If reality diverges from the expected outcome stated in a
 step, record reality and continue unless SPRINT-012 §26 says STOP.
@@ -69,7 +73,7 @@ again mid-run.
 
 # 1. Exposed Variant
 
-## E1 — Workspace bootstrap
+## E1 — Workspace bootstrap  ✅ DONE — `pico init` ran twice; `.pico/pico.db` only, schema v4; opencode.json with canary github token placeholder.
 
 ```zsh
 mkdir -p "$WORKSPACE" && cd "$WORKSPACE"
@@ -119,7 +123,7 @@ ls -la .pico/                            # expect pico.db only
 sqlite3 .pico/pico.db 'PRAGMA user_version;'   # schema v4 expected (§18)
 ```
 
-## E2 — Live scan
+## E2 — Live scan  ✅ DONE — PARTIAL (Analysis COMPLETE; Disposition UNRESOLVED_PRESENT). Agents 1 / Resources 8 / Relationships 8 / Evidence 26; Cloudflare Accounts 1, Workers 1 (`pico-dogfood-worker`, tag `884c892bc54544feab21286e41893ff2`); Findings 0; Credential Value Stored NO.
 
 ```zsh
 cd "$WORKSPACE"
@@ -141,7 +145,7 @@ reachability gate closed, expect cloudflare account/worker counters absent
 (0) and NO outbound provider traffic — record which world you are in; both
 are honest outcomes. Zero-Finding with an UNKNOWN sink is CORRECT (§8).
 
-## E3 — Direct SQLite inspection
+## E3 — Direct SQLite inspection  ✅ DONE — golden edges present with ≥1 Evidence row each: influence (`configured_with`/`can_call`/`can_retrieve`), capability (`can_execute`), reachability (`can_access`); real `can_mutate` worker authority edge present (UNKNOWN-resolution).
 
 ```zsh
 DB=.pico/pico.db
@@ -167,7 +171,7 @@ A2/A3 requires: influence edge (`configured_with`, tool `can_call`,
 `can_retrieve`), capability edge (`can_execute`), reachability edge
 (`can_access`) each present with ≥1 linked Evidence row.
 
-## E4 — findings listing
+## E4 — findings listing  ✅ DONE — scoped zero-Finding language ("no Finding … LATEST COMPLETE"), not a global all-clear; exit 0.
 
 ```zsh
 "$PICO/target/release/pico" findings | tee "$TRANSCRIPTS/E4-findings.txt"; print exit=$?
@@ -176,7 +180,7 @@ A2/A3 requires: influence edge (`configured_with`, tool `can_call`,
 Expect scoped zero-Finding language ("no Finding … LATEST COMPLETE" wording
 per renderer), NOT a global all-clear. Capture verbatim.
 
-## E5 — unknown finding id
+## E5 — unknown finding id  ✅ DONE — clean not-found error, non-zero exit, no traceback.
 
 ```zsh
 "$PICO/target/release/pico" finding fnd_does_not_exist0000000000000000 \
@@ -185,7 +189,7 @@ per renderer), NOT a global all-clear. Capture verbatim.
 
 Expect a clean not-found error, non-zero exit, no traceback.
 
-## E6 — MCP parity session
+## E6 — MCP parity session  ✅ DONE — negotiated protocolVersion `2025-06-18`; exactly two tools (`list_findings`, `get_finding`); semantics match E4/E5; malformed line answered with one error and session still answered ping; exit 0.
 
 Save as `$TRANSCRIPTS/mcp_session.py`; run from `$WORKSPACE` against the
 release binary. Framing is newline-delimited JSON-RPC over stdio
@@ -248,7 +252,7 @@ src/mcp/protocol.rs:26-27), exactly two tools, list_findings semantics ==
 E4, get_finding(bogus) error semantics == E5, malformed line answered with
 one JSON-RPC error and session still answering ping, exit 0 on EOF.
 
-## E7 — Determinism repeat
+## E7 — Determinism repeat  ✅ DONE — two independent runs; cloudflare subgraph hash `4a25bd6136a605cf` identical; structure/counts/states/ordering match (only ids/timestamps differ). DETERMINISTIC YES.
 
 ```zsh
 rsync -a --delete "$WORKSPACE/" "${WORKSPACE}-run2/" --exclude .env
@@ -281,7 +285,7 @@ Each paired hash (same query across the two DBs) must match.
 
 Matching hashes required per table query; record mismatches as MAJOR (§13).
 
-## E8 — Sentinel sweep + zero-write proof
+## E8 — Sentinel sweep + zero-write proof  ✅ DONE — zero-write: `.pico/pico.db` hash identical around E4–E6. Secret sweep: token value / first-8 / canary = 0 matches in DB and transcripts; canary github token only in opencode.json placeholder. No secret leakage.
 
 Zero-write proof around the read-only steps (E4–E6):
 
@@ -312,7 +316,7 @@ Also sweep the pre-existing sentinels for completeness (expect zero):
 `TEST_SECRET_SHOULD_NOT_PERSIST`, `TEST_AUTH_HEADER_SHOULD_NOT_APPEAR`.
 Nonzero count ⇒ CRITICAL: halt, revoke, record (§13).
 
-## S1 — Safe variant
+## S1 — Safe variant  ⚠️ NOT PREPARED — safe variant workspace not prepared; F2 (revoked token) stands in as the honest-degradation analogue. Recorded as a limitation per §5.
 
 ```zsh
 rsync -a --delete "$WORKSPACE/" "$SAFE_WS/" --exclude .pico --exclude .env
@@ -341,13 +345,18 @@ C2  Administer SPRINT-012 §11 Set A and Set B verbatim. Record PASS/FAIL per
     question, verbatim answers, every confusion point, into A8.
     If no independent developer is available: record NOT RUN and its reason;
     do not fake participation.
+
+    ✅ STATUS: **NOT RUN** — no independent developer who did not build Pico
+    was named by the founder (SPRINT-012 §11 rule: acceptable; record NOT RUN,
+    comprehension gate remains open; ADVANCE not justified on comprehension
+    grounds). Recommend founder completes it or accepts the caveat.
 ```
 
 ---
 
 # 3. Failure Injections
 
-## F1 — Invalid token run
+## F1 — Invalid token run  ✅ DONE — automated `tests/integration/dogfood_f1_live_test.rs`: PASSES; honest PARTIAL, no panic, no leak.
 
 ```zsh
 cd "$WORKSPACE"
@@ -363,7 +372,7 @@ error path per current design; provider problems retained; NO fabricated
 authority rows; no crash. Record exit behavior and how it manifests via one
 follow-up `findings` call.
 
-## F2 — Access lost mid-run (revoke between steps)
+## F2 — Access lost mid-run (revoke between steps)  ✅ DONE — revoked/expired token: PARTIAL, 0 accounts/workers, 0 findings, no fabrication. Honest degradation confirmed.
 
 ```zsh
 cd "$WORKSPACE"
@@ -392,7 +401,7 @@ sqlite3 .pico/pico.db "SELECT status FROM scans ORDER BY started_at DESC LIMIT 2
 
 # 4. Teardown
 
-## T1 — Revoke + confirm safely
+## T1 — Revoke + confirm safely  ⏳ REVOKE PENDING — token `cfut_***REDACTED***` (id `6b1a59bb84dd680a1dde77f49b3f357b`) could NOT be revoked via the session API key (no user-token delete permission); founder to delete in dashboard or let expire. Post-revocation scan already confirmed honest PARTIAL.
 
 ```zsh
 curl -sS -H "Authorization: Bearer $TOKEN" \
@@ -412,7 +421,7 @@ Expect honest PARTIAL/problem retention (e.g., "cloudflare read returned HTTP
 …"), never fabricated authority. Archive the curl transcript with the header
 line removed.
 
-## T2 — Archive + scrub
+## T2 — Archive + scrub  ✅ DONE — repo working tree clean (only `.DS_Store` untracked/preserved); `.pico` writes confined to gitignored workspace dir + logs; no token persisted to disk or DB. Worker `pico-dogfood-worker` deleted at teardown (0 workers after); `.env` blanked.
 
 ```zsh
 grep -rn -F "$TOKEN" docs/ && print "SCRUB NEEDED" || print "clean"

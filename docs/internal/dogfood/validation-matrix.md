@@ -44,16 +44,59 @@ Notes as PENDING-RUN. Do not upgrade any cell from a run that did not happen.
 | 15 | Unfamiliar developer can explain path, why it matters, how known, uncertainty, ≥1 cut point | NOT RUN — OPEN | none | No automated suite can prove this; satisfied only by §11 comprehension check (C1/C2). NOT RUN is acceptable only if no independent developer; gate then blocks ADVANCE |
 | 16 | MCP interface returns same underlying Finding as CLI; no second scanner | FIXTURE-VERIFIED | sprint011_mcp_golden_test.rs::`golden_session_serves_list_and_detail_matching_the_query_service`, ::`sessions_are_byte_deterministic_and_write_nothing`, ::`two_paths_reaching_one_sink_surface_through_both_tools`; sprint011_mcp_test.rs::`golden_stdio_session_completes_initialize_tools_list_and_list_findings`, ::`mcp_sources_are_structurally_free_of_scan_and_provider_machinery` | Real-data parity PENDING-RUN (E6) |
 
+## Live Dogfood Results (run `scan_18cf730d87996f48_0`, baseline `72ac784`)
+
+The live run (see `docs/internal/dogfood/evidence.md`) upgrades several rows
+from PENDING-RUN. Status vocabulary is unchanged; a Fixture cell may now carry a
+matching LIVE-VERIFIED note. The comprehension criterion (row 15) remains the
+only OPEN item.
+
+| # | Criterion | Fixture status | Live status | Notes |
+|---|-----------|----------------|-------------|-------|
+| 1 | `pico init` idempotent, safe local state | FIXTURE-VERIFIED | LIVE-VERIFIED (E1) | two live `init` runs → `.pico/pico.db` only, schema v4 |
+| 2 | `pico scan` completes same bounded pipeline on fixtures AND controlled real environment | FIXTURE-VERIFIED | LIVE-VERIFIED (E2/E7) | live `scan` completed PARTIAL (Analysis COMPLETE); two runs deterministic |
+| 3 | Detects supported OpenCode instance; resolves effective Bash + relevant MCP permissions | FIXTURE-VERIFIED | LIVE-VERIFIED (E2/E3) | real opencode instance + bash/credential edges present |
+| 4 | Distinguishes GitHub external influence from mere GitHub product presence | FIXTURE-VERIFIED | LIVE-VERIFIED (E3) | canary github token present as product presence only, no influence fabrications |
+| 5 | Establishes Bash→Cloudflare credential reachability without persisting its value | FIXTURE-VERIFIED | LIVE-VERIFIED (E8) | credential OBSERVED/REACHABLE/ACTIVE; Credential Value Stored: NO; 0 token matches in DB |
+| 6 | Worker write authority from read-only evidence, or honest UNKNOWN without claiming a path | FIXTURE-VERIFIED | LIVE-VERIFIED (E2/E3) | real `can_mutate` edge, authority UNKNOWN, 2 unresolved candidates, 0 active paths |
+| 7 | Hard deny/approval/sandbox/scope boundary blocks only the path it actually interrupts | FIXTURE-VERIFIED | GAP-RECORDED (live) | no live boundary exercised; honest UNRESOLVED path retained, 0 Blocked |
+| 8 | Unblocked fixture produces expected UNTRUSTED_TO_PRODUCTION Finding | FIXTURE-VERIFIED | GAP-RECORDED (live) | confirmed: live can never emit — sink_impact UNKNOWN; 0 Findings is correct |
+| 9 | Blocked and scoped fixtures do NOT produce the active attack path | FIXTURE-VERIFIED | GAP-RECORDED (live) | no live blocked/scoped variant; F2 confirms no fabrication on revoked token |
+| 10 | Every security-critical edge has inspectable provenance, freshness, confidence | FIXTURE-VERIFIED | LIVE-VERIFIED (E4/E6) | edges carry Evidence links; CLI + MCP render same real state |
+| 11 | Repeat analysis over same graph ⇒ same paths/severity/confidence/identity | FIXTURE-VERIFIED | LIVE-VERIFIED (E7) | cloudflare subgraph hash `4a25bd6136a605cf` identical across two runs |
+| 12 | Secret canaries zero occurrences in DB, logs, diagnostics, exports | FIXTURE-VERIFIED | LIVE-VERIFIED (E8) | token value / first-8 / canary: 0 matches in `.pico` DB; canary github token only in opencode.json placeholder |
+| 13 | Provider clients cannot invoke operations outside read/introspection allowlists | FIXTURE-VERIFIED | LIVE-VERIFIED (§7/A4) | every live call within §22.7 ALLOW; no write scope on token |
+| 14 | Partial adapter failure ⇒ PARTIAL scan, retained useful evidence, no false certainty | FIXTURE-VERIFIED | LIVE-VERIFIED (F1/F2) | invalid token PASSES honest PARTIAL; revoked token PARTIAL, 0 findings, no fabrication |
+| 15 | Unfamiliar developer can explain path, why it matters, how known, uncertainty, ≥1 cut point | NOT RUN — OPEN | **NOT RUN** | no independent developer named by founder; gate remains open (see evidence.md §5/§6) |
+| 16 | MCP interface returns same underlying Finding as CLI; no second scanner | FIXTURE-VERIFIED | LIVE-VERIFIED (E6/MCP) | `list_findings` + `get_finding` across CLI and `pico mcp` surface identical real 0-findings state |
+
+### Additional rows (post-run)
+
+| # | Extra criterion | Status | Notes |
+|---|-----------------|--------|-------|
+| X1 | MCP parity holds on real data | LIVE-VERIFIED (E6) | two tools, semantics match CLI, no second scanner |
+| X2 | Live classification gap precisely characterized (§8/§8.1) | CONFIRMED | live behavior matches classification-gap.md (sink_impact UNKNOWN); plus Defect 2 added to that doc §3.1 |
+| X3 | Safe variant demonstrates absence-of-path honestly | NOT PREPARED | safe variant not prepared; F2 (revoked token) stands in as honest-degradation analogue |
+| X4 | Both failure injections behave honestly (F1/F2) | LIVE-VERIFIED | F1 PASSES, F2 PARTIAL/no fabrication |
+| X5 | Comprehension check administered per rules | **NOT RUN** | no independent developer available; founder to complete or accept caveat |
+| X6 | Usefulness judgment captured (§12) | NOT CAPTURED | blocked by NOT RUN comprehension check |
+
+**Live-validation ship-condition for the pipeline: MET.** The comprehension
+gate (row 15 / X5) is the only OPEN item and is explicitly recorded as NOT RUN,
+not faked.
+
 ## Additional rows (SPRINT-012.md §21)
 
-| # | Extra criterion | Status | Evidence artifact | Notes |
-|---|-----------------|--------|-------------------|-------|
-| X1 | MCP parity holds on real data | PENDING | — | Fill from E6 transcript (A6) after run |
-| X2 | Live classification gap precisely characterized (§8/§8.1) | PENDING | docs/internal/dogfood/classification-gap.md (A9) drafted | Characterization exists at planning time; confirm against live behavior during E2, then close this row |
-| X3 | Safe variant demonstrates absence-of-path honestly | PENDING | — | Fill from S1, or record safe-not-prepared limitation (§5) |
-| X4 | Both failure injections behave honestly (F1/F2) | PENDING | — | Fill from F1/F2 transcripts (§16) |
-| X5 | Comprehension check administered per rules | PENDING | — | PASS/FAIL/NOT RUN per §11 rules |
-| X6 | Usefulness judgment captured (§12) | PENDING | — | Verbatim judgments from participant + founder |
+These rows (X1–X6) are now resolved by the live run and recorded in the
+**Live Dogfood Results** section above. Summary:
+
+- X1 MCP parity: LIVE-VERIFIED (E6)
+- X2 classification gap: CONFIRMED (matches classification-gap.md; Defect 2
+  added to that doc §3.1)
+- X3 safe variant: NOT PREPARED (F2 stands in as honest-degradation analogue)
+- X4 F1/F2 honest: LIVE-VERIFIED
+- X5 comprehension: **NOT RUN**
+- X6 usefulness: NOT CAPTURED (blocked by NOT RUN comprehension check)
 
 ## Fill-in rules
 

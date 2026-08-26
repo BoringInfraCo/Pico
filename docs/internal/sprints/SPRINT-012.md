@@ -1,6 +1,6 @@
 # Pico — Sprint 012: First Real Proof — Controlled Live Dogfood
 
-**Status:** READY
+**Status:** DONE (live validated; comprehension NOT RUN)
 **Sprint:** 012
 **Phase:** v0.1 — Golden Path Proof
 **Type:** Validation
@@ -861,6 +861,82 @@ often the most valuable one.
 # 27. Completion Evidence
 
 When validation concludes, set `Status: COMPLETE` (or `BLOCKED`) and record:
+
+> **Recorded live outcome (Sprint 012 executed).** See
+> `docs/internal/dogfood/evidence.md` for the full narrative, captured numbers,
+> defect log, and validation table. Summary below; `Status` header changed to
+> `DONE (live validated; comprehension NOT RUN)`.
+>
+> ```text
+> completion date: (recorded in evidence.md)
+> verified baseline: 72ac784 (post two §13 defect-fix commits; 4993bf2 was the
+>                    pre-fix baseline per §18)
+> commits:
+>   - 72ac784 "fix(discovery): reach operator environment for live provider
+>     introspection"  (defect 1 — OPERATOR_REACHABILITY=Proven)
+>   - "fix(discovery): keep read-only Cloudflare facts when token-policy read
+>     is denied"  (defect 2 — non-fatal policy-read 403)
+> repository state: clean working tree (only .DS_Store untracked/preserved)
+> environment manifest:
+>   account: 3e2742bacdabcada586f921ad89bac77 (Ounce-leads35@icloud.com's Account)
+>   token id: 6b1a59bb84dd680a1dde77f49b3f357b (value cfut_***REDACTED***, revoke pending)
+>   workers observed: 1 (pico-dogfood-worker, deleted at teardown -> 0)
+>   token scopes: Account:Account Settings:Read + Account:Workers Scripts:Read
+>   variants run: exposed | safe NOT prepared
+> execution:
+>   pico init/scan: PASS (scan PARTIAL; Analysis COMPLETE; Disposition UNRESOLVED_PRESENT)
+>   counters: Agents 1 / Resources 8 / Relationships 8 / Evidence 26
+>   CLI explanation on real data: scoped zero-Finding language, UNKNOWN-justified
+>   MCP parity on real data: PASS (two tools surface same 0-findings state)
+>   Determinism across runs: PASS (cloudflare subgraph hash 4a25bd6136a605cf)
+>   Zero-write proof: PASS (.pico/pico.db hash stable around read-only steps)
+>   Secret sweep: ZERO (token value / first-8 / canary absent in DB+transcripts)
+> failure injections:
+>   F1 invalid token: PASSES — honest PARTIAL, no panic, no leak
+>   F2 revoked/expired token: PARTIAL, 0 accounts/workers, 0 findings, no fabrication
+> validation matrix:
+>   FIXTURE-VERIFIED: 16 (rows 1-16) with live upgrades recorded in
+>                     docs/internal/dogfood/validation-matrix.md
+>   LIVE-VERIFIED: rows 1-6,10-14,16 + X1,X4
+>   GAP-RECORDED: rows 7,8,9 (live half)
+>   NOT-APPLICABLE: none
+> classification gap:
+>   Confirmed at src/discovery/cloudflare.rs:456 (live sink_impact None) +
+>   src/findings/engine.rs:149 (eligibility blocks live Finding);
+>   plus second gap §3.1 (token-policy 403 discarded facts) now FIXED.
+>   proposal recorded: YES (classification-gap.md §5 P1-P3)
+> comprehension:
+>   Participant role: NONE named
+>   Set A/B results: NOT RUN
+>   Confusion points: NONE recorded (gate open)
+> usefulness judgments: NOT CAPTURED (blocked by NOT RUN comprehension)
+> safety:
+>   Provider calls within allowlist: PROVEN
+>   Writes performed: 0 (token never deployed/modified/deleted anything;
+>                      worker deleted by founder, not Pico)
+>   Token revoked: PENDING (dashboard/ expiry; session key lacks perms)
+> defects:
+>   CRITICAL: 0 | MAJOR: 2 (both fixed in-sprint, regression-tested,
+>   no Finding-semantic change) | MINOR: 0
+> advancement decision record:
+>   Decision: live-validation ship-condition MET; comprehension gate OPEN.
+>   (Per §2 default, do not claim ADVANCE on comprehension grounds.)
+> verification:
+>   cargo test etc. green per the two fix commits' regression tests
+> repository:
+>   branch/HEAD/origin-main/ahead-behind per git; tree: clean except .DS_Store
+> follow-ups:
+>   - founder completes §11 comprehension check or accepts caveat
+>   - founder revokes token 6b1a59bb84dd680a1dde77f49b3f357b in dashboard
+>   - classification mechanism (classification-gap.md P1/P2/P3) -> follow-up sprint
+> ```
+>
+> Do not claim the full v0.1 exit gate while any gate remains NOT RUN, and do
+> not claim it merely because the run completed. Claim exactly what the matrix
+> shows: the pipeline is validated LIVE end-to-end (real API, real account/
+> worker, real authority edge, honest zero-Findings UNKNOWN outcome, no secret
+> leakage, deterministic, graceful degradation), with the comprehension gate
+> explicitly left open.
 
 ```text
 completion date and verified baseline
