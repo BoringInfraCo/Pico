@@ -657,6 +657,70 @@ fn secret_sentinels_never_appear_across_the_golden_session() {
 }
 
 #[test]
+fn mcp_payloads_surface_fingerprint_grouped_count_and_remediation_cut_point() {
+    let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    let ws = workspace.path();
+    let list = payload_of(&handled(ws, &list_call(4)));
+    let summary = &list["findings"][0];
+    assert!(
+        summary.get("fingerprint").is_some(),
+        "list payload must surface the finding fingerprint"
+    );
+    assert!(
+        !summary["fingerprint"].as_str().unwrap().is_empty(),
+        "finding fingerprint must be populated"
+    );
+    assert!(
+        summary.get("attack_path_count").is_some(),
+        "list payload must surface the grouped-path count"
+    );
+    assert_eq!(summary["attack_path_count"], json!(1));
+
+    let finding_id = summary["id"].as_str().unwrap().to_string();
+    let detail = payload_of(&handled(ws, &get_call(5, &finding_id)));
+    assert!(
+        detail.get("fingerprint").is_some(),
+        "get_finding payload must surface the finding fingerprint"
+    );
+    assert!(
+        !detail["fingerprint"].as_str().unwrap().is_empty(),
+        "finding fingerprint must be populated"
+    );
+
+    let fps = detail["attack_path_fingerprints"]
+        .as_array()
+        .expect("get_finding payload must surface the grouped-path fingerprint list");
+    let paths = detail["paths"].as_array().unwrap();
+    assert_eq!(
+        fps.len(),
+        paths.len(),
+        "grouped-path fingerprint count must equal the rendered path count"
+    );
+
+    let remediations = detail["remediations"].as_array().unwrap();
+    assert!(!remediations.is_empty());
+    for remediation in remediations {
+        assert!(
+            remediation.get("rule_id").is_some(),
+            "remediation must surface the rule_id cut point"
+        );
+        assert!(
+            remediation.get("target_relationship_ids").is_some(),
+            "remediation must surface target_relationship_ids"
+        );
+        let descriptions = remediation
+            .get("target_relationship_descriptions")
+            .expect("remediation must surface a human-readable cut point")
+            .as_array()
+            .unwrap();
+        assert!(
+            !descriptions.is_empty(),
+            "every cut point must have a human-readable target relationship"
+        );
+    }
+}
+
+#[test]
 fn control_characters_cannot_break_the_json_envelope() {
     let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
     let ws = workspace.path();

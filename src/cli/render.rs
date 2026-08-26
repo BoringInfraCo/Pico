@@ -130,6 +130,10 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
         "Fingerprint: {}\n",
         terminal_safe(&detail.fingerprint)
     ));
+    out.push_str(&format!(
+        "Grouped paths: {}\n",
+        detail.attack_path_fingerprints.len()
+    ));
     out.push_str(&format!("Version: {}\n", detail.finding_version));
     out.push_str(&format!(
         "Class: {}\n",
@@ -422,6 +426,15 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
                     .join(", "),
             );
             out.push('\n');
+        }
+        out.push_str("   Target relationship (human-readable):");
+        if remediation.target_relationship_descriptions.is_empty() {
+            out.push_str(" none\n");
+        } else {
+            out.push('\n');
+            for description in &remediation.target_relationship_descriptions {
+                out.push_str(&format!("     - {}\n", terminal_safe(description)));
+            }
         }
     }
     out.push_str(&terminal_safe(&detail.remediation_note));

@@ -102,6 +102,7 @@ pub enum Currentness {
 pub struct FindingDetail {
     pub id: String,
     pub fingerprint: String,
+    pub attack_path_fingerprints: Vec<String>,
     pub finding_version: u32,
     pub scan: ScanBrief,
     pub currentness: Currentness,
@@ -222,6 +223,7 @@ pub struct RemediationView {
     pub target_resource_ids: Vec<String>,
     pub target_resources: Vec<ResourceView>,
     pub target_relationship_ids: Vec<String>,
+    pub target_relationship_descriptions: Vec<String>,
 }
 
 /// Disambiguated list outcome shared verbatim by CLI and MCP surfaces
@@ -1174,6 +1176,31 @@ fn remediation_views(
             .iter()
             .map(|resource_id| resource_view(graph, resource_id))
             .collect::<Result<Vec<_>, _>>()?;
+        let label_of = |node_id: &str| -> String {
+            graph
+                .node(node_id)
+                .map(|node| {
+                    if node.name.is_empty() {
+                        node.canonical_key.clone()
+                    } else {
+                        node.name.clone()
+                    }
+                })
+                .unwrap_or_else(|| node_id.to_string())
+        };
+        let target_relationship_descriptions = remediation
+            .target_relationship_ids
+            .iter()
+            .map(|relationship_id| match graph.edge(relationship_id) {
+                Some(edge) => format!(
+                    "{} -> {} ({})",
+                    label_of(&edge.from_resource_id),
+                    label_of(&edge.to_resource_id),
+                    edge.kind
+                ),
+                None => relationship_id.clone(),
+            })
+            .collect::<Vec<_>>();
         views.push(RemediationView {
             position: remediation.position,
             rule_id: bounded_string("remediation rule", &remediation.rule_id)?,
@@ -1187,6 +1214,7 @@ fn remediation_views(
             target_resource_ids: remediation.target_resource_ids.clone(),
             target_resources,
             target_relationship_ids: remediation.target_relationship_ids.clone(),
+            target_relationship_descriptions,
         });
     }
     Ok(views)
@@ -1341,6 +1369,10 @@ fn compose_detail(conn: &Connection, finding_id: &str) -> Result<FindingDetail, 
     let detail = FindingDetail {
         id: bounded_string("finding id", &record.id)?,
         fingerprint: bounded_string("finding fingerprint", &record.fingerprint)?,
+        attack_path_fingerprints: explained
+            .iter()
+            .map(|path| path.fingerprint.clone())
+            .collect(),
         finding_version,
         scan,
         currentness,

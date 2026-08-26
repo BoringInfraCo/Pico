@@ -230,6 +230,7 @@ impl SafeCurrentness {
 struct SafeDetail {
     id: String,
     fingerprint: String,
+    attack_path_fingerprints: Vec<String>,
     finding_version: u32,
     scan: SafeScanBrief,
     currentness: SafeCurrentness,
@@ -259,6 +260,7 @@ impl SafeDetail {
         SafeDetail {
             id: terminal_safe(&detail.id),
             fingerprint: terminal_safe(&detail.fingerprint),
+            attack_path_fingerprints: safe_strings(&detail.attack_path_fingerprints),
             finding_version: detail.finding_version,
             scan: SafeScanBrief::new(&detail.scan),
             currentness: SafeCurrentness::new(&detail.currentness),
@@ -477,6 +479,7 @@ struct SafeRemediationView {
     target_resource_ids: Vec<String>,
     target_resources: Vec<SafeResourceView>,
     target_relationship_ids: Vec<String>,
+    target_relationship_descriptions: Vec<String>,
 }
 
 impl SafeRemediationView {
@@ -495,6 +498,9 @@ impl SafeRemediationView {
                 .map(SafeResourceView::new)
                 .collect(),
             target_relationship_ids: safe_strings(&remediation.target_relationship_ids),
+            target_relationship_descriptions: safe_strings(
+                &remediation.target_relationship_descriptions,
+            ),
         }
     }
 }

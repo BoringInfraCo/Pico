@@ -392,13 +392,139 @@ fn explained_path_surfaces_per_edge_evidence_provenance() {
 }
 
 #[test]
-fn finding_explanation_flags_oldest_evidence() {
+fn rendered_finding_explanation_flags_oldest_evidence() {
     let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
     let list = FindingQueryService::list_latest(workspace.path()).unwrap();
     let detail = FindingQueryService::get(workspace.path(), &list.findings[0].id).unwrap();
     let rendered = render_finding_detail(&detail);
     assert!(rendered.contains("Weakest evidence:"));
     assert!(rendered.contains("freshness="));
+}
+
+#[test]
+fn surfaced_finding_exposes_fingerprint_and_remediation_cut_point() {
+    let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    let list = FindingQueryService::list_latest(workspace.path()).unwrap();
+    let summary = &list.findings[0];
+    let detail = FindingQueryService::get(workspace.path(), &summary.id).unwrap();
+
+    let rendered_list = render_findings_list(&list);
+    let rendered_detail = render_finding_detail(&detail);
+
+    // The finding fingerprint must be surfaced in both the list and the detail.
+    assert!(
+        !summary.fingerprint.is_empty(),
+        "summary fingerprint must be populated"
+    );
+    assert_eq!(summary.fingerprint, detail.fingerprint);
+    assert!(
+        rendered_list.contains(&format!("Fingerprint: {}", summary.fingerprint)),
+        "list must surface the finding fingerprint"
+    );
+    assert!(
+        rendered_detail.contains(&format!("Fingerprint: {}", detail.fingerprint)),
+        "detail must surface the finding fingerprint"
+    );
+
+    // The grouped-path count (len of attack_path_fingerprints) must be exposed.
+    assert_eq!(
+        detail.attack_path_fingerprints.len() as u64,
+        summary.attack_path_count
+    );
+    assert!(
+        rendered_detail.contains(&format!(
+            "Grouped paths: {}",
+            detail.attack_path_fingerprints.len()
+        )),
+        "detail must surface the grouped-path count"
+    );
+
+    // The remediation cut point must carry the rule_id and a human-readable
+    // target relationship derived from the cut edge endpoints.
+    assert!(!detail.remediations.is_empty());
+    for remediation in &detail.remediations {
+        assert!(
+            rendered_detail.contains(&remediation.rule_id),
+            "remediation rule_id {} must be rendered",
+            remediation.rule_id
+        );
+        assert!(
+            !remediation.target_relationship_descriptions.is_empty(),
+            "remediation {} must have a human-readable cut point",
+            remediation.rule_id
+        );
+        for description in &remediation.target_relationship_descriptions {
+            assert!(
+                rendered_detail.contains(description),
+                "human-readable cut point '{}' must be rendered",
+                description
+            );
+        }
+    }
+}
+
+#[test]
+fn finding_fingerprint_and_remediation_targets_contain_no_raw_secret() {
+    let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    let list = FindingQueryService::list_latest(workspace.path()).unwrap();
+    let summary = &list.findings[0];
+    assert!(!summary.fingerprint.contains(SECRET_SENTINEL));
+    assert!(!summary.fingerprint.contains("synthetic-token"));
+    assert_ne!(summary.fingerprint, "synthetic-token");
+
+    let detail = FindingQueryService::get(workspace.path(), &summary.id).unwrap();
+    assert!(!detail.fingerprint.contains(SECRET_SENTINEL));
+    assert!(!detail.fingerprint.contains("synthetic-token"));
+
+    for remediation in &detail.remediations {
+        for id in &remediation.target_relationship_ids {
+            assert!(
+                !id.contains(SECRET_SENTINEL),
+                "remediation relationship id leaked the secret sentinel: {id}"
+            );
+            assert!(
+                !id.contains("synthetic-token"),
+                "remediation relationship id leaked the token value: {id}"
+            );
+        }
+        for description in &remediation.target_relationship_descriptions {
+            assert!(!description.contains(SECRET_SENTINEL));
+            assert!(!description.contains("synthetic-token"));
+        }
+    }
+
+    // Canonical credential keys carry only the credential fingerprint, never the
+    // raw token value.
+    let mut saw_credential = false;
+    let mut check_key = |key: &str| {
+        assert!(!key.contains("synthetic-token"));
+        if key.starts_with("credential:") {
+            saw_credential = true;
+            assert!(
+                key.starts_with("credential:cloudflare:"),
+                "credential key must be the fingerprint form, got {key}"
+            );
+            assert!(
+                !key.contains("synthetic-token"),
+                "credential key must not embed the token value: {key}"
+            );
+        }
+    };
+    for path in &detail.paths {
+        for step in &path.steps {
+            check_key(&step.from_resource.canonical_key);
+            check_key(&step.to_resource.canonical_key);
+        }
+    }
+    for remediation in &detail.remediations {
+        for resource in &remediation.target_resources {
+            check_key(&resource.canonical_key);
+        }
+    }
+    assert!(
+        saw_credential,
+        "expected a credential resource in the golden path"
+    );
 }
 
 #[test]
