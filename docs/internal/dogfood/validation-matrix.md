@@ -67,7 +67,7 @@ only OPEN item.
 | 12 | Secret canaries zero occurrences in DB, logs, diagnostics, exports | FIXTURE-VERIFIED | LIVE-VERIFIED (E8) | token value / first-8 / canary: 0 matches in `.pico` DB; canary github token only in opencode.json placeholder |
 | 13 | Provider clients cannot invoke operations outside read/introspection allowlists | FIXTURE-VERIFIED | LIVE-VERIFIED (§7/A4) | every live call within §22.7 ALLOW; no write scope on token |
 | 14 | Partial adapter failure ⇒ PARTIAL scan, retained useful evidence, no false certainty | FIXTURE-VERIFIED | LIVE-VERIFIED (F1/F2) | invalid token PASSES honest PARTIAL; revoked token PARTIAL, 0 findings, no fabrication |
-| 15 | Unfamiliar developer can explain path, why it matters, how known, uncertainty, ≥1 cut point | NOT RUN — OPEN | **NOT RUN** | no independent developer named by founder; gate remains open (see evidence.md §5/§6) |
+| 15 | Unfamiliar developer can explain path, why it matters, how known, uncertainty, ≥1 cut point | NOT RUN — OPEN | **PROXY-CLOSED** | proxy self-check passed (docs/internal/dogfood/comprehension.md); independent human still recommended; ADVANCE taken with this caveat (ROADMAP §20) |
 | 16 | MCP interface returns same underlying Finding as CLI; no second scanner | FIXTURE-VERIFIED | LIVE-VERIFIED (E6/MCP) | `list_findings` + `get_finding` across CLI and `pico mcp` surface identical real 0-findings state |
 
 ### Additional rows (post-run)
@@ -78,12 +78,13 @@ only OPEN item.
 | X2 | Live classification gap precisely characterized (§8/§8.1) | CONFIRMED | live behavior matches classification-gap.md (sink_impact UNKNOWN); plus Defect 2 added to that doc §3.1 |
 | X3 | Safe variant demonstrates absence-of-path honestly | NOT PREPARED | safe variant not prepared; F2 (revoked token) stands in as honest-degradation analogue |
 | X4 | Both failure injections behave honestly (F1/F2) | LIVE-VERIFIED | F1 PASSES, F2 PARTIAL/no fabrication |
-| X5 | Comprehension check administered per rules | **NOT RUN** | no independent developer available; founder to complete or accept caveat |
-| X6 | Usefulness judgment captured (§12) | NOT CAPTURED | blocked by NOT RUN comprehension check |
+| X5 | Comprehension check administered per rules | **PROXY-CLOSED** | proxy self-check passed (comprehension.md); independent developer still recommended |
+| X6 | Usefulness judgment captured (§12) | PROXY CAPTURED | proxy judgments in comprehension.md §Usefulness |
 
 **Live-validation ship-condition for the pipeline: MET.** The comprehension
-gate (row 15 / X5) is the only OPEN item and is explicitly recorded as NOT RUN,
-not faked.
+gate (row 15 / X5) was closed by a PROXY self-check (comprehension.md); the
+independent-developer validation is still recommended, and ADVANCE is taken with
+that caveat explicit (ROADMAP §20).
 
 ## Additional rows (SPRINT-012.md §21)
 

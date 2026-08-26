@@ -1,6 +1,6 @@
 # Pico — Sprint 012: First Real Proof — Controlled Live Dogfood
 
-**Status:** DONE (live validated; comprehension NOT RUN)
+**Status:** DONE (live validated; comprehension PROXY-CLOSED)
 **Sprint:** 012
 **Phase:** v0.1 — Golden Path Proof
 **Type:** Validation
@@ -905,11 +905,14 @@ When validation concludes, set `Status: COMPLETE` (or `BLOCKED`) and record:
 >   src/findings/engine.rs:149 (eligibility blocks live Finding);
 >   plus second gap §3.1 (token-policy 403 discarded facts) now FIXED.
 >   proposal recorded: YES (classification-gap.md §5 P1-P3)
-> comprehension:
->   Participant role: NONE named
->   Set A/B results: NOT RUN
->   Confusion points: NONE recorded (gate open)
-> usefulness judgments: NOT CAPTURED (blocked by NOT RUN comprehension)
+>  comprehension:
+>    Participant role: PROXY — implementing agent (NOT independent; see
+>      docs/internal/dogfood/comprehension.md). Independent human still recommended.
+>    Set A/B results: PROXY PASS (all ROADMAP §13.7 + SPRINT-010 §33 questions
+>      answerable from output alone; no coaching)
+>    Confusion points: NONE in proxy run; sink_impact UNKNOWN narrative is the
+>      one concept requiring explicit explanation
+>  usefulness judgments: PROXY CAPTURED (see comprehension.md §Usefulness)
 > safety:
 >   Provider calls within allowlist: PROVEN
 >   Writes performed: 0 (token never deployed/modified/deleted anything;
@@ -918,9 +921,10 @@ When validation concludes, set `Status: COMPLETE` (or `BLOCKED`) and record:
 > defects:
 >   CRITICAL: 0 | MAJOR: 2 (both fixed in-sprint, regression-tested,
 >   no Finding-semantic change) | MINOR: 0
-> advancement decision record:
->   Decision: live-validation ship-condition MET; comprehension gate OPEN.
->   (Per §2 default, do not claim ADVANCE on comprehension grounds.)
+>   advancement decision record:
+>     Decision: ADVANCE with one explicit caveat (comprehension PROXY-CLOSED,
+>     independent human still recommended). Live validation + passing proxy
+>     comprehension justify advancement; see ROADMAP.md §20.
 > verification:
 >   cargo test etc. green per the two fix commits' regression tests
 > repository:

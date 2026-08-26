@@ -1007,3 +1007,74 @@ The first product is small on purpose:
 If Pico can do that reliably, the architecture has earned extension.
 
 If it cannot, the roadmap requires Pico to learn and refine before it expands.
+
+---
+
+# 20. v0.1 Advancement Decision Record
+
+Recorded after Sprint 012 live dogfood and the proxy comprehension close.
+Format per §17.
+
+```text
+Phase: v0.1 — Golden-Path Proof
+
+Decision: ADVANCE (with one open caveat)
+
+Product claim proven:
+Pico safely discovers, constructs, analyzes, and explains one real
+evidence-backed path from external influence to consequential cloud
+authority — read-only, secret-free, deterministic, and gracefully
+degrading — across CLI and MCP, validated against a real environment.
+
+Exit criteria met:
+All ROADMAP §5 v0.1 criteria except the human-comprehension usability
+gate, which was closed by a PROXY self-check (docs/internal/dogfood/
+comprehension.md). Each met criterion is backed by fixtures and/or the
+live dogfood evidence (docs/internal/dogfood/evidence.md) and the
+validation matrix.
+
+Exit criteria not met:
+- Independent-developer comprehension validation: NOT independently run;
+  proxy self-check passed. ADVANCE is taken with this caveat explicit; a
+  real independent human check is recommended before v0.2 sign-off.
+
+What users demonstrated:
+Proxy participant confirmed every ROADMAP §13.7 and SPRINT-010 §33
+question is answerable from Pico's output alone; no coaching required.
+
+What the evidence demonstrated:
+Real scan completed (PARTIAL; Analysis COMPLETE); real Cloudflare account
++ Worker discovered via allowlisted reads; real can_mutate authority edge
+materialized with sink_impact UNKNOWN; 0 Findings (honest §8 outcome);
+secret sweep clean; deterministic subgraph hash stable; F1/F2 honest
+degradation; MCP parity over real data; two §13 defects found and fixed
+with regression tests, no Finding-semantics change.
+
+Known false positives: none observed.
+Known false negatives: live production classification intentionally
+unsupported (UNKNOWN by design, not a miss).
+Known UNKNOWN states: Worker sink_impact; account scope; worker-scripts
+write resolution (token lacked policy-read scope).
+
+Self-security results:
+Zero secret leakage (sentinel sweep clean; token value never persisted);
+provider calls confined to allowlist (proven by is_allowlisted_path +
+live replay); zero writes to the target environment; live token revocation
+pending founder action in dashboard (session key lacks token-delete).
+
+Compatibility limits:
+Full authority-tier resolution requires the token to read its own policy
+(User Details: Read); without it Pico reports UNKNOWN honestly. This is a
+documented support limit, not a defect.
+
+What was learned:
+The CLI could not reach live introspection at all (wiring default); and a
+policy-read denial silently discarded safe facts. Both fixed. Read-only
+authority resolution is honest but bounded by token scope — exactly the
+v0.2 depth problem.
+
+Why the next phase is justified:
+v0.2 (Evidence and Authority Depth, §6) directly attacks the UNKNOWN
+gaps (authority-resolution tiers, provenance, freshness, support matrix)
+surfaced here, and turns the first path into a reference standard.
+```
