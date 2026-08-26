@@ -418,6 +418,18 @@ fn golden_session_serves_list_and_detail_matching_the_query_service() {
         detail["boundary_summary"],
         json!("No proven enforced boundary recorded for this scan interrupts this path.")
     );
+
+    let path = &detail["paths"][0];
+    assert_eq!(
+        path["authority_resolution"],
+        json!("EXACT"),
+        "MCP get_finding must surface the EXACT authority-resolution tier for the can_mutate path"
+    );
+    assert_eq!(
+        path["authority_resolution"],
+        json!("EXACT"),
+        "MCP authority_resolution must match the tier the CLI explained-path view shows"
+    );
     assert!(detail["scope_note"]
         .as_str()
         .unwrap()

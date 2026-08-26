@@ -15,7 +15,7 @@ use pico::discovery::cloudflare::{
 };
 use pico::discovery::{discover_with_environment, EnvironmentReachability};
 use pico::domain::{RelationshipState, ScanStatus};
-use pico::persistence::{Database, ScanRepo};
+use pico::persistence::{Database, RelationshipRepo, ScanRepo};
 use tempfile::tempdir;
 
 const SECRET_SENTINEL: &str = "TEST_SECRET_SHOULD_NOT_PERSIST";
@@ -176,6 +176,11 @@ fn detail_rendering_presents_sections_in_deterministic_order() {
     assert!(rendered.contains("INFLUENCE REVERSE"));
     assert!(rendered.contains("AUTHORITY FORWARD"));
     assert!(rendered.contains("Supporting evidence:"));
+
+    assert!(
+        rendered.contains("Authority resolution: EXACT"),
+        "explained-path view must surface the EXACT authority-resolution tier"
+    );
 
     for code in [
         "EXTERNAL_INFLUENCE_SOURCE",
@@ -371,6 +376,41 @@ fn unknown_and_empty_ids_fail_exactly() {
 
     let empty = FindingQueryService::get(workspace.path(), "").unwrap_err();
     assert!(matches!(empty, pico::shared::PicoError::Usage(_)));
+}
+
+#[test]
+fn persisted_can_mutate_relationship_exposes_authority_resolution_tier() {
+    let (workspace, scan) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    assert_eq!(scan.status, ScanStatus::Complete);
+    assert_eq!(
+        scan.authority_resolution.as_deref(),
+        Some("EXACT"),
+        "the in-memory scan summary must carry the tier the CLI surfaces"
+    );
+
+    let db = open_rw(workspace.path());
+    let relationships = RelationshipRepo::new(db.connection());
+    let can_mutate: Vec<_> = relationships
+        .list()
+        .unwrap()
+        .into_iter()
+        .filter(|relationship| relationship.kind == "can_mutate")
+        .collect();
+    assert_eq!(can_mutate.len(), 1, "exactly one can_mutate relationship");
+
+    let metadata = can_mutate[0]
+        .metadata
+        .as_ref()
+        .expect("can_mutate relationship must carry metadata");
+    let persisted = metadata
+        .get("authority_resolution")
+        .and_then(serde_json::Value::as_str)
+        .expect("authority_resolution must be present in the persisted metadata");
+    assert_eq!(
+        persisted, "EXACT",
+        "the authority-resolution tier must be independently retrievable from the relationship store"
+    );
+    assert_eq!(persisted, scan.authority_resolution.as_deref().unwrap());
 }
 
 #[test]
