@@ -4,56 +4,69 @@
 //! security logic, and no provider interpretation. Every persisted string is
 //! passed through `terminal_safe` so untrusted text cannot spoof the layout.
 
-use crate::application::{FindingDetail, FindingList, FindingSummary};
+use crate::application::{
+    findings_list_guidance, findings_list_state, FindingDetail, FindingList, FindingSummary,
+    FindingsListState,
+};
 use crate::shared::terminal_safe;
 
 /// Renders `pico findings` for the selected scan snapshot.
 pub fn render_findings_list(list: &FindingList) -> String {
     let mut out = String::new();
     out.push_str("Pico Findings\n\n");
-    match &list.selected_scan {
-        None => {
-            if list.newest_scan_attempt.is_none() {
-                out.push_str("No scans have been run yet in this workspace.\n");
-                out.push_str("Run `pico scan` to discover the paths agents create.\n");
-            } else if let Some(attempt) = &list.newest_scan_attempt {
-                out.push_str("No COMPLETE scan exists in this workspace.\n");
-                out.push_str(&format!(
-                    "Newest scan attempt: {} ({})\n",
-                    terminal_safe(&attempt.id),
-                    terminal_safe(&attempt.status)
-                ));
-                out.push_str("Run `pico scan` and let it complete to produce results.\n");
-                out.push_str("This is not an all-clear; no authoritative scan exists.\n");
+    let state = findings_list_state(list);
+    if state != FindingsListState::ResultsAvailable {
+        let guidance = findings_list_guidance(state, list);
+        if state == FindingsListState::NoScans {
+            for line in &guidance {
+                out.push_str(line);
+                out.push('\n');
             }
             return out;
         }
-        Some(selected) => {
-            out.push_str(&format!("Scan: {}\n", terminal_safe(&selected.id)));
-            out.push_str(&format!("Status: {}\n", terminal_safe(&selected.status)));
+        out.push_str(&guidance[0]);
+        out.push('\n');
+        if let Some(attempt) = &list.newest_scan_attempt {
             out.push_str(&format!(
-                "Completed: {}\n",
-                selected
-                    .completed_at
-                    .as_deref()
-                    .map(terminal_safe)
-                    .unwrap_or_else(|| "n/a".to_string())
+                "Newest scan attempt: {} ({})\n",
+                terminal_safe(&attempt.id),
+                terminal_safe(&attempt.status)
             ));
-            out.push_str(match list.freshness {
-                crate::application::Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
-                crate::application::Freshness::NewerIncomplete => {
-                    "Freshness: NEWER INCOMPLETE ATTEMPT\n"
-                }
-            });
-            if let Some(warning) = &list.freshness_warning {
-                out.push('\n');
-                for line in warning.split('\n') {
-                    out.push_str(&terminal_safe(line));
-                    out.push('\n');
-                }
-            }
-            out.push_str(&format!("Findings: {}\n", list.findings.len()));
         }
+        out.push_str("Run `pico scan` and let it complete to produce results.\n");
+        out.push_str(&guidance[1]);
+        out.push('\n');
+        return out;
+    }
+    let selected = match &list.selected_scan {
+        Some(scan) => scan,
+        None => return out,
+    };
+    {
+        out.push_str(&format!("Scan: {}\n", terminal_safe(&selected.id)));
+        out.push_str(&format!("Status: {}\n", terminal_safe(&selected.status)));
+        out.push_str(&format!(
+            "Completed: {}\n",
+            selected
+                .completed_at
+                .as_deref()
+                .map(terminal_safe)
+                .unwrap_or_else(|| "n/a".to_string())
+        ));
+        out.push_str(match list.freshness {
+            crate::application::Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
+            crate::application::Freshness::NewerIncomplete => {
+                "Freshness: NEWER INCOMPLETE ATTEMPT\n"
+            }
+        });
+        if let Some(warning) = &list.freshness_warning {
+            out.push('\n');
+            for line in warning.split('\n') {
+                out.push_str(&terminal_safe(line));
+                out.push('\n');
+            }
+        }
+        out.push_str(&format!("Findings: {}\n", list.findings.len()));
     }
 
     for summary in &list.findings {
@@ -64,11 +77,12 @@ pub fn render_findings_list(list: &FindingList) -> String {
         out.push('\n');
     }
 
-    if list.selected_scan.is_some() && list.findings.is_empty() {
+    if list.findings.is_empty() {
         out.push('\n');
-        out.push_str(
-            "No Findings were produced for this COMPLETE scan within Pico's supported scope.\n",
-        );
+        for line in findings_list_guidance(FindingsListState::ResultsAvailable, list) {
+            out.push_str(&line);
+            out.push('\n');
+        }
     }
     out
 }

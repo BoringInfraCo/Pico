@@ -67,8 +67,10 @@ pub struct ScanBrief {
 
 /// Whether displayed results describe the newest complete state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Freshness {
     LatestComplete,
+    #[serde(rename = "NEWER_INCOMPLETE_ATTEMPT")]
     NewerIncomplete,
 }
 
@@ -88,6 +90,7 @@ pub struct FindingSummary {
 
 /// Whether a detail view describes the latest complete state or history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Currentness {
     LatestComplete,
     Historical { newer_complete_scan_id: String },
@@ -206,6 +209,59 @@ pub struct RemediationView {
     pub target_resource_ids: Vec<String>,
     pub target_resources: Vec<ResourceView>,
     pub target_relationship_ids: Vec<String>,
+}
+
+/// Disambiguated list outcome shared verbatim by CLI and MCP surfaces
+/// (SPRINT-011.md §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FindingsListState {
+    NoScans,
+    NoCompleteScan,
+    ResultsAvailable,
+}
+
+const GUIDANCE_NO_SCANS: &[&str] = &[
+    "No scans have been run yet in this workspace.",
+    "Run `pico scan` to discover the paths agents create.",
+];
+
+const GUIDANCE_NO_COMPLETE_SCAN: &[&str] = &[
+    "No COMPLETE scan exists in this workspace.",
+    "This is not an all-clear; no authoritative scan exists.",
+];
+
+const GUIDANCE_ZERO_FINDINGS: &str =
+    "No Findings were produced for this COMPLETE scan within Pico's supported scope.";
+const GUIDANCE_RESULTS_AVAILABLE: &str = "Run get_finding with a listed ID to inspect it.";
+
+/// Classifies a composed list into the fixed shared states.
+pub fn findings_list_state(list: &FindingList) -> FindingsListState {
+    if list.selected_scan.is_some() {
+        FindingsListState::ResultsAvailable
+    } else if list.newest_scan_attempt.is_some() {
+        FindingsListState::NoCompleteScan
+    } else {
+        FindingsListState::NoScans
+    }
+}
+
+/// Returns the fixed provider-neutral guidance sentences for a list state.
+pub fn findings_list_guidance(state: FindingsListState, list: &FindingList) -> Vec<String> {
+    match state {
+        FindingsListState::NoScans => GUIDANCE_NO_SCANS.iter().map(|l| (*l).to_string()).collect(),
+        FindingsListState::NoCompleteScan => GUIDANCE_NO_COMPLETE_SCAN
+            .iter()
+            .map(|l| (*l).to_string())
+            .collect(),
+        FindingsListState::ResultsAvailable => {
+            if list.findings.is_empty() {
+                vec![GUIDANCE_ZERO_FINDINGS.to_string()]
+            } else {
+                vec![GUIDANCE_RESULTS_AVAILABLE.to_string()]
+            }
+        }
+    }
 }
 
 /// Deterministic navigation IDs for a generated Finding result, ordered by

@@ -23,3 +23,7 @@ mod sprint009_finding_test;
 mod sprint010_cli_test;
 #[path = "integration/sprint010_finding_query_test.rs"]
 mod sprint010_finding_query_test;
+#[path = "integration/sprint011_mcp_golden_test.rs"]
+mod sprint011_mcp_golden_test;
+#[path = "integration/sprint011_mcp_test.rs"]
+mod sprint011_mcp_test;

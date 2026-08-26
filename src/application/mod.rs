@@ -9,9 +9,9 @@ pub mod init;
 pub mod scan;
 
 pub use findings::{
-    finding_navigation_ids, BoundaryView, Currentness, EvidenceView, ExplainedPath, FindingDetail,
-    FindingList, FindingQueryService, FindingSummary, Freshness, PathStep, ReasonView,
-    RemediationView, ResourceView, ScanBrief,
+    finding_navigation_ids, findings_list_guidance, findings_list_state, BoundaryView, Currentness,
+    EvidenceView, ExplainedPath, FindingDetail, FindingList, FindingQueryService, FindingSummary,
+    FindingsListState, Freshness, PathStep, ReasonView, RemediationView, ResourceView, ScanBrief,
 };
 pub use init::{InitResult, InitService};
 pub use scan::{ScanResult, ScanService};

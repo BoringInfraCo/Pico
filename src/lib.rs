@@ -13,5 +13,6 @@ pub mod discovery;
 pub mod domain;
 pub mod findings;
 pub mod graph;
+pub mod mcp;
 pub mod persistence;
 pub mod shared;

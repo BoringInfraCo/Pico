@@ -36,6 +36,8 @@ enum Command {
     Findings,
     /// Show one Finding by its exact ID.
     Finding { id: String },
+    /// Serve Pico findings to coding agents over MCP (stdio).
+    Mcp,
 }
 
 /// Runs the parsed CLI command.
@@ -45,6 +47,7 @@ pub fn run() -> Result<(), PicoError> {
         Command::Scan => run_scan(),
         Command::Findings => run_findings(),
         Command::Finding { id } => run_finding(&id),
+        Command::Mcp => crate::mcp::run(),
     }
 }
 
