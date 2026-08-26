@@ -731,7 +731,12 @@ fn field(output: &mut String, label: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::{AnalysisLimits, AnalysisResult};
+    use crate::analysis::{
+        AnalysisLimits, AnalysisResult, AnalysisStatus, AttackPath, AuthorityResolution,
+        BoundaryDecision, BoundaryEvaluation, BoundaryKind, CandidateDisposition, CapabilityClass,
+        InfluenceStrength, PathEdgeRef, PathPhase, SinkImpact, SourceTrust, TraversalDirection,
+        ANALYSIS_VERSION,
+    };
     use crate::domain::{EvidenceClass, RelationshipState, Sensitivity};
     use crate::findings::confidence::freshness_confidence;
     use crate::graph::{EdgeUsability, GraphEdge, GraphEvidenceIndex, GraphNode, SecurityRole};
@@ -953,5 +958,366 @@ mod tests {
         }
         let result = generate(&graph, &analysis, &FindingLimits::default());
         assert!(result.findings.is_empty());
+    }
+
+    // --- Fingerprint / boundary / threshold fixtures (golden path untouched) ---
+
+    /// Build a graph that mirrors [`fixture`] but also exposes a second
+    /// externally-reachable influence route (`actor -> tool2 -> source`) so a
+    /// test can construct two candidate AttackPaths whose security-critical
+    /// (authority) edges are identical while the influence segment differs.
+    fn two_route_graph() -> SecurityGraph {
+        let (mut graph, _analysis) = fixture();
+        graph.nodes.push(GraphNode {
+            resource_id: "tool2".into(),
+            canonical_key: "mcp:github:tool2".into(),
+            kind: "fixture".into(),
+            provider: "fixture".into(),
+            name: "tool2".into(),
+            safe_metadata: None,
+            roles: vec![SecurityRole::Capability],
+        });
+        for (id, from, to, kind) in [
+            ("call2", "actor", "tool2", "can_call"),
+            ("retrieve2", "tool2", "source", "can_retrieve"),
+        ] {
+            let edge = GraphEdge {
+                relationship_id: id.into(),
+                canonical_key: format!("{from}|{kind}|{to}"),
+                from_resource_id: from.into(),
+                to_resource_id: to.into(),
+                kind: kind.into(),
+                state: RelationshipState::Derived,
+                usability: EdgeUsability::Traversable,
+                safe_metadata: None,
+                evidence_ids: vec![format!("ev-{id}")],
+            };
+            graph
+                .outgoing_index
+                .entry(from.into())
+                .or_default()
+                .push(id.into());
+            graph
+                .incoming_index
+                .entry(to.into())
+                .or_default()
+                .push(id.into());
+            let mut item = Evidence::new(
+                &graph.scan_id,
+                EvidenceClass::Derived,
+                "fixture",
+                "fixture",
+                &edge.canonical_key,
+                "observed",
+                Sensitivity::Internal,
+            )
+            .unwrap();
+            item.id = format!("ev-{id}");
+            graph
+                .evidence_index
+                .by_evidence_id
+                .insert(item.id.clone(), item);
+            graph
+                .evidence_index
+                .by_relationship_id
+                .insert(id.into(), edge.evidence_ids.clone());
+            graph.edges.push(edge);
+        }
+        graph
+    }
+
+    /// Construct an eligible candidate AttackPath reaching the production sink.
+    /// `influence`/`authority` are relationship ids present in `graph`.
+    fn candidate_path(
+        graph: &SecurityGraph,
+        id: &str,
+        source_trust: SourceTrust,
+        influence: &[&str],
+        authority: &[&str],
+        boundaries: Vec<BoundaryEvaluation>,
+    ) -> AttackPath {
+        let influence_edges = influence
+            .iter()
+            .enumerate()
+            .map(|(i, rid)| PathEdgeRef {
+                relationship_id: (*rid).into(),
+                phase: PathPhase::Influence,
+                traversal: TraversalDirection::Forward,
+                position: i,
+            })
+            .collect::<Vec<_>>();
+        let authority_edges = authority
+            .iter()
+            .enumerate()
+            .map(|(i, rid)| PathEdgeRef {
+                relationship_id: (*rid).into(),
+                phase: PathPhase::Authority,
+                traversal: TraversalDirection::Forward,
+                position: i,
+            })
+            .collect::<Vec<_>>();
+        let mut evidence_ids = vec!["ev-production".to_string()];
+        for rid in influence.iter().chain(authority.iter()) {
+            evidence_ids.push(format!("ev-{rid}"));
+        }
+        AttackPath {
+            id: id.into(),
+            scan_id: graph.scan_id.clone(),
+            fingerprint: String::new(),
+            analysis_version: ANALYSIS_VERSION,
+            source_resource_id: "source".into(),
+            actor_resource_id: "actor".into(),
+            sink_resource_id: "sink".into(),
+            influence_edges,
+            authority_edges,
+            boundary_evaluations: boundaries,
+            source_trust,
+            influence_strength: InfluenceStrength::AgentRetrievable,
+            capability: CapabilityClass::Execute,
+            authority_resolution: AuthorityResolution::Exact,
+            sink_impact: SinkImpact::Production,
+            evidence_ids,
+            disposition: CandidateDisposition::Active,
+        }
+        .with_fingerprint(graph)
+    }
+
+    fn analysis_of(scan_id: &str, paths: Vec<AttackPath>) -> AnalysisResult {
+        AnalysisResult {
+            scan_id: scan_id.into(),
+            analysis_version: ANALYSIS_VERSION,
+            status: AnalysisStatus::Complete,
+            candidate_disposition: CandidateDisposition::Active,
+            influence_paths: Vec::new(),
+            authority_paths: Vec::new(),
+            boundary_evaluations: Vec::new(),
+            attack_paths: paths,
+            unresolved_candidate_count: 0,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// R1: identical scans must yield byte-identical finding fingerprints (no
+    /// randomness in identity).
+    #[test]
+    fn finding_fingerprint_stable_across_identical_scans() {
+        let (graph, analysis) = fixture();
+        let first = generate(&graph, &analysis, &FindingLimits::default());
+        let (graph2, analysis2) = fixture();
+        let second = generate(&graph2, &analysis2, &FindingLimits::default());
+        assert_eq!(first.findings.len(), 1);
+        assert_eq!(second.findings.len(), 1);
+        assert_eq!(
+            first.findings[0].fingerprint,
+            second.findings[0].fingerprint
+        );
+    }
+
+    /// R2: a security-significant change (a HardDeny boundary now guards the
+    /// critical Bash execution edge) must flip the finding fingerprint in the
+    /// expected direction while still producing exactly one finding.
+    #[test]
+    fn finding_fingerprint_flips_on_security_significant_change() {
+        let (graph, analysis) = fixture();
+        let base = generate(&graph, &analysis, &FindingLimits::default());
+        assert_eq!(base.findings.len(), 1);
+        let mut changed = analysis.clone();
+        let mut path = changed.attack_paths[0].clone();
+        path.boundary_evaluations.push(BoundaryEvaluation {
+            kind: BoundaryKind::HardDeny,
+            affected_resource_ids: vec!["bash".into()],
+            affected_relationship_ids: vec!["execute".into()],
+            enforcement: "fixture".into(),
+            interrupted_phase: None,
+            decision: BoundaryDecision::DoesNotInterrupt,
+            evidence_ids: Vec::new(),
+        });
+        path = path.with_fingerprint(&graph);
+        changed.attack_paths[0] = path;
+        let flipped = generate(&graph, &changed, &FindingLimits::default());
+        assert_eq!(flipped.findings.len(), 1);
+        assert_ne!(
+            base.findings[0].fingerprint,
+            flipped.findings[0].fingerprint
+        );
+        assert_ne!(
+            base.findings[0].attack_path_fingerprints[0],
+            flipped.findings[0].attack_path_fingerprints[0]
+        );
+    }
+
+    /// R3: N (>=2) candidate paths to the same sink with identical security-
+    /// critical (authority) edges and identical boundary evaluations are
+    /// grouped into exactly ONE finding, but every distinct candidate path
+    /// fingerprint is retained (`attack_path_fingerprints.len() == N`).
+    #[test]
+    fn same_sink_paths_with_identical_edges_deduplicate() {
+        let graph = two_route_graph();
+        let pa = candidate_path(
+            &graph,
+            "p-a",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let pb = candidate_path(
+            &graph,
+            "p-b",
+            SourceTrust::PublicExternal,
+            &["call2", "retrieve2"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let analysis = analysis_of(&graph.scan_id, vec![pa.clone(), pb.clone()]);
+        let result = generate(&graph, &analysis, &FindingLimits::default());
+        assert_eq!(result.status, FindingGenerationStatus::Complete);
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "identical critical edges group into one finding"
+        );
+        assert_eq!(
+            result.findings[0].attack_path_fingerprints.len(),
+            2,
+            "both candidate paths recorded"
+        );
+        assert!(result.findings[0]
+            .attack_path_fingerprints
+            .contains(&pa.fingerprint));
+        assert!(result.findings[0]
+            .attack_path_fingerprints
+            .contains(&pb.fingerprint));
+    }
+
+    /// R4: two candidate paths to the same sink with identical edges but
+    /// DIFFERENT boundary evaluations (one carries a HardDeny boundary, the
+    /// other none) are NOT collapsed into a single boundary-less story. Both
+    /// distinct path fingerprints are retained and the boundary difference is
+    /// observable in the output (the fingerprints differ).
+    #[test]
+    fn distinct_boundaries_remain_distinct_after_deduplication() {
+        let graph = two_route_graph();
+        let boundary = BoundaryEvaluation {
+            kind: BoundaryKind::HardDeny,
+            affected_resource_ids: vec!["bash".into()],
+            affected_relationship_ids: vec!["execute".into()],
+            enforcement: "fixture".into(),
+            interrupted_phase: None,
+            decision: BoundaryDecision::DoesNotInterrupt,
+            evidence_ids: Vec::new(),
+        };
+        let guarded = candidate_path(
+            &graph,
+            "p-guarded",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            vec![boundary],
+        );
+        let unguarded = candidate_path(
+            &graph,
+            "p-unguarded",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let analysis = analysis_of(&graph.scan_id, vec![guarded.clone(), unguarded.clone()]);
+        let result = generate(&graph, &analysis, &FindingLimits::default());
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(
+            result.findings[0].attack_path_fingerprints.len(),
+            2,
+            "both boundary states retained"
+        );
+        let fps = result.findings[0].attack_path_fingerprints.clone();
+        assert!(fps.contains(&guarded.fingerprint));
+        assert!(fps.contains(&unguarded.fingerprint));
+        assert_ne!(
+            guarded.fingerprint, unguarded.fingerprint,
+            "boundary difference is observable in the fingerprint"
+        );
+    }
+
+    /// R5: severity and confidence are each deterministic across identical runs
+    /// and are independent axes — changing only the severity driver (source
+    /// trust) does not silently alter the confidence cut point.
+    #[test]
+    fn severity_confidence_independence_stable() {
+        let (graph, analysis) = fixture();
+        let first = generate(&graph, &analysis, &FindingLimits::default());
+        let (graph2, analysis2) = fixture();
+        let second = generate(&graph2, &analysis2, &FindingLimits::default());
+        assert_eq!(first.findings[0].severity, second.findings[0].severity);
+        assert_eq!(first.findings[0].confidence, second.findings[0].confidence);
+
+        // Change only the severity input (AuthenticatedExternal -> High) and
+        // confirm the confidence axis is untouched.
+        let mut auth_analysis = analysis.clone();
+        auth_analysis.attack_paths[0] = candidate_path(
+            &graph,
+            "p-auth",
+            SourceTrust::AuthenticatedExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let auth = generate(&graph, &auth_analysis, &FindingLimits::default());
+        assert_eq!(auth.findings[0].severity, Severity::High);
+        assert_eq!(
+            auth.findings[0].confidence, first.findings[0].confidence,
+            "confidence axis is independent of the severity driver"
+        );
+    }
+
+    /// R6: for identical inputs the severity and confidence cut points the
+    /// engine assigns are byte-identical across runs.
+    ///
+    /// Support note — observed thresholds (from `eligible_candidate`):
+    /// severity is `Critical` when `source_trust` is PublicExternal|OpenWorld,
+    /// `High` when AuthenticatedExternal (else suppressed); confidence is `High`
+    /// iff every path + production Evidence is non-Inferred and of class
+    /// Direct|Declared|Derived (else suppressed). For the golden PUBLIC_EXTERNAL
+    /// graph these resolve to `Severity::Critical` + `Confidence::High`,
+    /// identical across runs.
+    #[test]
+    fn cut_point_thresholds_are_deterministic() {
+        let (graph, analysis) = fixture();
+        let first = generate(&graph, &analysis, &FindingLimits::default());
+        let (graph2, analysis2) = fixture();
+        let second = generate(&graph2, &analysis2, &FindingLimits::default());
+        assert_eq!(first.findings[0].severity, second.findings[0].severity);
+        assert_eq!(first.findings[0].confidence, second.findings[0].confidence);
+        assert_eq!(first.findings[0].severity, Severity::Critical);
+        assert_eq!(first.findings[0].confidence, Confidence::High);
+    }
+
+    /// R7: the produced finding targets the correct relationship for the
+    /// Bash-execution remediation and is stable across identical runs. The
+    /// `ENFORCE_BASH_APPROVAL_OR_DENY` rule maps (in `remediations`) to the
+    /// `can_execute` edge, whose relationship id is `execute`.
+    #[test]
+    fn remediation_targets_correct_relationship() {
+        let (graph, analysis) = fixture();
+        let first = generate(&graph, &analysis, &FindingLimits::default());
+        let (graph2, analysis2) = fixture();
+        let second = generate(&graph2, &analysis2, &FindingLimits::default());
+        let find = |result: &FindingResult| {
+            result.findings[0]
+                .remediations
+                .iter()
+                .find(|m| m.rule_id == "ENFORCE_BASH_APPROVAL_OR_DENY")
+                .expect("ENFORCE_BASH_APPROVAL_OR_DENY remediation present")
+                .clone()
+        };
+        let ra = find(&first);
+        let rb = find(&second);
+        assert_eq!(ra.target_relationship_ids, vec!["execute".to_string()]);
+        assert_eq!(rb.target_relationship_ids, vec!["execute".to_string()]);
+        assert_eq!(
+            ra.target_relationship_ids, rb.target_relationship_ids,
+            "remediation target is stable across identical runs"
+        );
     }
 }
