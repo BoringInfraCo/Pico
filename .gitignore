@@ -8,3 +8,5 @@ docs/internal/**
 !docs/internal/ROADMAP.md
 !docs/internal/sprints/
 !docs/internal/sprints/**
+!docs/internal/dogfood/
+!docs/internal/dogfood/**
