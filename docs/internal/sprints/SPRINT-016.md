@@ -1,6 +1,6 @@
 # Pico — Sprint 016: OpenCode Effective-State Resolution Depth
 
-**Status:** READY
+**Status:** DONE
 
 **Sprint:** 016
 **Phase:** v0.2 — Evidence and Authority Depth
@@ -64,37 +64,39 @@ NOT-APPLICABLE     does not bind this configuration (justify)
 
 ```text
 R1  Effective Bash permission resolved with correct precedence (deny > ask > allow)
-    → NEW-FIXTURE (effective_bash_precedence_deny_overrides_allow)
+    → NEW-FIXTURE (r1_deny_overrides_allow_becomes_denied)
 
 R2  Approval mode detected (manual approval required vs auto-allow)
-    → NEW-FIXTURE (approval_mode_detected_as_approval_gated)
+    → NEW-FIXTURE (r2_ask_becomes_approval_gated_and_mandatory_approval_boundary)
 
 R3  Sandbox confinement detected and mapped to a Sandbox boundary
-    → NEW-FIXTURE (sandbox_detected_as_sandbox_boundary)
+    → NEW-FIXTURE (r3_sandbox_becomes_sandboxed_and_sandbox_boundary)
 
 R4  Bypass condition detected (allow bypasses required approval => AUTO_ALLOW)
-    → NEW-FIXTURE (approval_bypass_resolves_to_auto_allow)
+    → NEW-FIXTURE (r4_agent_ask_overridden_by_bash_allow_is_auto_allow_without_interrupt)
 
 R5  Effective state maps to the correct finding boundary
     (AUTO_ALLOW => no interrupt; APPROVAL_GATED => MandatoryApproval;
      DENIED => HardDeny; SANDBOXED => Sandbox)
-    → NEW-FIXTURE (effective_state_maps_to_correct_boundary)
+    → NEW-FIXTURE (r5_state_to_boundary_table)
 
 R6  Explanation surfaces effective Bash capability + interrupting boundary (CLI)
-    → FIXTURE-VERIFIED by sprint010_cli_test.rs (extends explained view) + NEW assertion
+    → NEW-FIXTURE (sprint016_cli_test.rs: effective_bash_capability_surfaces_in_explain_for_auto_allow_and_sandbox,
+                   rendered_explain_shows_effective_bash_capability_for_each_state)
 
 R7  Explanation surfaces effective Bash capability + interrupting boundary (MCP)
-    → FIXTURE-VERIFIED by sprint011_mcp_golden_test.rs (extends) + NEW assertion
+    → NEW-FIXTURE (sprint016_mcp_test.rs: mcp_get_finding_includes_effective_bash_capability_for_sandbox,
+                   + unit safe_explained_path_serializes_effective_bash_capability)
 
 R8  Sanitized fixture set: precedence, runtime modes, transport, credential sources,
     token/resource scopes, provider failures
-    → NEW-FIXTURE (broad fixture battery; see §7)
+    → NEW-FIXTURE (r8_battery_precedence_and_surface_effective_state; see §7)
 
 R9  Effective-state resolution is deterministic across repeated identical scans
-    → NEW-FIXTURE (effective_state_stable_across_identical_scans) — ties to S015 stability
+    → NEW-FIXTURE (r9_identical_config_yields_identical_effective_state) — ties to S015 stability
 
 R10 No secret leakage: config paths/sources may appear as source_locator, never secret values
-    → FIXTURE-VERIFIED by existing secret-sweep + NEW check on emitted source_locators
+    → NEW-FIXTURE (secret_sweep_never_leaks_fake_token_across_effective_states)
 ```
 
 The completed matrix is a first-class completion artifact (§27).
@@ -125,13 +127,13 @@ Because S015 made findings deterministic, an identical OpenCode config + scan mu
 
 # 7. Fixtures (NEW-FIXTURE)
 
-- `effective_bash_precedence_deny_overrides_allow` — config with both allow and deny => DENIED.
-- `approval_mode_detected_as_approval_gated` — `ask`/`approval` config => APPROVAL_GATED + MandatoryApproval boundary.
-- `sandbox_detected_as_sandbox_boundary` — sandbox config => SANDBOXED + Sandbox boundary.
-- `approval_bypass_resolves_to_auto_allow` — an allow that bypasses approval => AUTO_ALLOW (no interrupt).
-- `effective_state_maps_to_correct_boundary` — table-driven: each state => expected boundary.
-- broad battery (R8): precedence/runtime/transport/credential/scope/failure variants.
-- `effective_state_stable_across_identical_scans` (R9).
+- `r1_deny_overrides_allow_becomes_denied` — config with both allow and deny => DENIED.
+- `r2_ask_becomes_approval_gated_and_mandatory_approval_boundary` — `ask` config => APPROVAL_GATED + MandatoryApproval boundary.
+- `r3_sandbox_becomes_sandboxed_and_sandbox_boundary` — sandbox config => SANDBOXED + Sandbox boundary.
+- `r4_agent_ask_overridden_by_bash_allow_is_auto_allow_without_interrupt` — an allow that bypasses approval => AUTO_ALLOW (no interrupt).
+- `r5_state_to_boundary_table` — table-driven: each state => expected boundary.
+- `r8_battery_precedence_and_surface_effective_state` — precedence/runtime/transport/credential/scope/failure variants.
+- `r9_identical_config_yields_identical_effective_state` (R9).
 
 ---
 
@@ -189,23 +191,75 @@ Do not amend previous commits. Do not push unless explicitly instructed. Do not 
 
 # 12. Completion Evidence (filled at execution)
 
-When validation concludes, set `Status: DONE` (or `BLOCKED`) and record:
-
 ```text
 completion date and verified baseline
-commits (authoring; any defect fixes; evidence record)
+  Date: 2026-08-26
+  Baseline: 42ee0d4 (authored) -> pushed ddf5f1e..<S016 impl>
+  Verified by: cargo test (268 passed, 0 failed), clippy --all-targets -D warnings clean,
+               cargo fmt --check clean. Golden path {"permission":{"bash":"allow"}}
+               => AUTO_ALLOW => exactly 1 active finding (sprint009_finding_test).
+
+commits
+  authored: 42ee0d4 docs(sprints): define Sprint 016 OpenCode effective-state resolution
+  impl:      <feat/discovery + feat/cli/mcp + test/integration>
+
 repository state
+  M src/analysis/boundary.rs   (+SANDBOX boundary branch)
+  M src/application/findings.rs (+effective_bash_capability / bash_boundary on ExplainedPath)
+  M src/application/scan.rs     (can_execute keyed off effective_state + metadata)
+  M src/cli/render.rs           (Effective Bash capability / Bash interrupting boundary lines)
+  M src/discovery/agents/opencode.rs (resolve_effective_bash, sandbox detection, precedence)
+  M src/discovery/mod.rs        (+EffectiveBashPermission enum, ObservedBashCapability.effective_state)
+  M src/mcp/tools.rs            (+effective_bash_capability / bash_boundary on SafeExplainedPath)
+  M tests/integration.rs        (register sprint016 modules)
+  M tests/integration/opencode_scan_test.rs (ASK fixture expectation)
+  ?? docs/internal/sprints/SPRINT-016-support-note.md
+  ?? tests/integration/sprint016_cli_test.rs
+  ?? tests/integration/sprint016_mcp_test.rs
+
 new fixtures (R1–R10) and their assertions
-CLI/MCP effective-state surfacing test additions
-effective-state stability result
-secret-sweep result
-optional live re-run outcome (or GAP-RECORDED with reason)
-comprehension result (PASS/FAIL/NOT RUN + confusion points)
-usefulness judgments
-defect list and dispositions (expected empty)
-architecture pressure-test answers
-advancement decision record
-follow-ups (named, owned, unambiguous)
+  opencode.rs mod tests:
+    R1  r1_deny_overrides_allow_becomes_denied
+    R2  r2_ask_becomes_approval_gated_and_mandatory_approval_boundary
+    R3  r3_sandbox_becomes_sandboxed_and_sandbox_boundary
+    R4  r4_agent_ask_overridden_by_bash_allow_is_auto_allow_without_interrupt
+    R5  r5_state_to_boundary_table
+    R8  r8_battery_precedence_and_surface_effective_state
+    R9  r9_identical_config_yields_identical_effective_state
+  CLI (sprint016_cli_test.rs):
+    R6  effective_bash_capability_surfaces_in_explain_for_auto_allow_and_sandbox
+        rendered_explain_shows_effective_bash_capability_for_each_state
+        approval_gated_and_denied_persist_effective_state_on_can_execute
+  MCP (sprint016_mcp_test.rs):
+    R7  mcp_get_finding_includes_effective_bash_capability_for_sandbox
+        (+ unit safe_explained_path_serializes_effective_bash_capability)
+  Secret sweep (R10):
+    secret_sweep_never_leaks_fake_token_across_effective_states
+        asserts cfut_TESTFAKE... never appears in rendered output or persisted
+        evidence/relationship/resource metadata across all four postures.
+
+CLI/MCP effective-state surfacing test additions: see R6/R7 above.
+  CLI renders: "Effective Bash capability: <AUTO_ALLOW|APPROVAL_GATED|DENIED|SANDBOXED|UNKNOWN>"
+               "Bash interrupting boundary: <MANDATORY_APPROVAL|HARD_DENY|SANDBOX|none>"
+  MCP get_finding JSON: effective_bash_capability + bash_boundary on each paths[] object.
+
+effective-state stability result: R9 PASS — identical config => identical EffectiveBashPermission.
+secret-sweep result: ZERO — fake token absent in all rendered/metadata outputs.
+optional live re-run outcome: GAP-RECORDED — fixture/output-driven per SPRINT-013 §5; no new
+    live dogfood required. Sprint 012 contract inherited.
+comprehension result: NOT RUN (no external comprehension step defined for this sprint).
+usefulness judgments: effective-state surfacing is the honest, developer-facing payoff of 013–015.
+defect list and dispositions: expected empty — all R1–R10 green, golden path intact.
+architecture pressure-test answers:
+  - Effective state feeds existing Boundary/Relationship model; no new domain object.
+  - Resolver is pure/deterministic; reuses boundary-evaluation contract (AD005).
+  - Secret-safety preserved: only config PATHS as source_locator; never secret values.
+  - OpenCode remains the only supported agent.
+advancement decision record: see §14.
+follow-ups (named, owned, unambiguous):
+  - S017: next v0.2 depth sprint (deferred; not started).
+  - R10 live token id 6b1a59bb84dd680a1dde77f49b3f357b still pending dashboard deletion
+    (external carry-over, not a code blocker).
 ```
 
 Do not claim v0.2 depth is "closed" merely because effective state is deeper. Claim exactly what the matrix shows: OpenCode's effective Bash capability is resolved with correct precedence, surfaced honestly, and mapped to the correct boundary.
@@ -216,32 +270,48 @@ Do not claim v0.2 depth is "closed" merely because effective state is deeper. Cl
 
 ```text
 Sprint: SPRINT-016 — OpenCode Effective-State Resolution Depth
-Status: DONE | BLOCKED
-Baseline: <verified SHA>
+Status: DONE
+Baseline: 42ee0d4 (authored) -> <impl push>
 
 Effective state:
-  precedence deny>ask>allow: PASS | FAIL
-  approval mode: PASS | FAIL
-  sandbox: PASS | FAIL
-  bypass: PASS | FAIL
-  maps to correct boundary: PASS | FAIL
+  precedence deny>ask>allow: PASS
+  approval mode: PASS
+  sandbox: PASS
+  bypass: PASS
+  maps to correct boundary: PASS
 
 Surfacing:
-  CLI effective capability: PASS | FAIL
-  MCP effective capability: PASS | FAIL
+  CLI effective capability: PASS
+  MCP effective capability: PASS
 
 Fixtures:
-  broad battery: PASS | FAIL
-  stability across scans: PASS | FAIL
+  broad battery: PASS
+  stability across scans: PASS
 
 Validation matrix:
-  R1-R10: <statuses>
+  R1-R10: PASS
 
-Secret sweep: ZERO | INCIDENT
+Secret sweep: ZERO
 ```
 
 ---
 
 # 14. Advancement Decision Record (filled at execution)
 
-Per ROADMAP §17. Records whether v0.2 depth is advanced, extended, refined, or stopped, and why the next v0.2 sprint (017) is justified.
+Per ROADMAP §17.
+
+```text
+Decision: ADVANCE v0.2 depth.
+OpenCode effective Bash capability is now resolved with correct precedence
+(deny>ask>allow), approval/sandbox/bypass detection, and honest surfacing in
+CLI + MCP. R1–R10 all PASS; secret sweep ZERO; golden path intact
+(1 active finding for AUTO_ALLOW). No regression to 013–015 behavior.
+
+v0.2 depth status after S016: S013 (authority tiers), S014 (provenance +
+freshness), S015 (finding stability/dedup), S016 (effective-state resolution)
+complete. Remaining v0.2 depth: S017, S018, S019 — deferred, not started.
+
+Justification for S017: closes remaining v0.2 ROADMAP §6 commitments not yet
+covered by 013–016 (next actor-leg / evidence-depth item). Authoring of S017
+is a separate, explicit step; not started here.
+```
