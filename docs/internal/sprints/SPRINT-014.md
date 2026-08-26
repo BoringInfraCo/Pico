@@ -1,6 +1,6 @@
 # Pico — Sprint 014: Evidence Provenance, Freshness, and Canonical-Identity Stability
 
-**Status:** READY
+**Status:** DONE
 
 **Sprint:** 014
 **Phase:** v0.2 — Evidence and Authority Depth
@@ -196,28 +196,81 @@ Do not amend previous commits. Do not push unless explicitly instructed. Do not 
 
 ---
 
-# 12. Completion Evidence (filled at execution)
-
-When validation concludes, set `Status: DONE` (or `BLOCKED`) and record:
+# 12. Completion Evidence (executed 2026-08-26)
 
 ```text
-completion date and verified baseline
-commits (authoring; any defect fixes; evidence record)
-repository state
-new fixtures (R1–R10) and their assertions
-CLI/MCP provenance-surfacing test additions
-canonical-identity stability result
-secret-sweep result
-optional live re-run outcome (or GAP-RECORDED with reason)
-comprehension result (PASS/FAIL/NOT RUN + confusion points)
-usefulness judgments
-defect list and dispositions (expected empty)
-architecture pressure-test answers
-advancement decision record
-follow-ups (named, owned, unambiguous)
-```
+completion date: 2026-08-26
+baseline (pre-S014 HEAD): 6459e68
+new commits:
+  - feat(domain): add Freshness enum + freshness_state classifier + conformance helper
+  - test(domain): evidence freshness classification, canonical stability, adapter conformance
+  - feat(findings): freshness-aware confidence gate + provenance integrity check
+  - feat(cli/mcp): surface per-edge provenance (source, captured_at, freshness) + weakest edge
+  - docs(sprints): Sprint 014 support note + completion evidence
+repository state: main; pushed to origin/main
 
-Do not claim v0.2 depth is "closed" merely because provenance is stricter. Claim exactly what the matrix shows: security-critical edges now carry provenance, freshness is classified and constrains confidence, and canonical identity is stable across repeated scans.
+new fixtures / assertions (R1–R10):
+  R1  missing_provenance_on_security_critical_edge_is_integrity_error
+      (tests/persistence/finding_query_integrity_test.rs) — FindingQueryService::get/list
+      return an integrity error containing "security-critical edge lacks provenance"
+      when an attack-path edge has no same-scan evidence with source_locator + freshness.
+  R2  evidence_freshness_classification (src/domain/evidence.rs) — Fresh/Aging/Stale/Unknown
+      by captured_at age vs reference; freshness_state() + freshness_round_trips.
+  R3  stale_evidence_cannot_produce_confirmed_edge — freshness_confidence(Stale,Complete)
+      => may_be_confirmed=false; plus engine test stale_backed_security_critical_edge_suppresses_finding.
+  R4  partial_scan_evidence_never_upgrades_confidence — freshness_confidence(Fresh,Partial)
+      => may_be_confirmed=false, penalty>=0.1; engine integration via critical_edges_are_confirmable.
+  R5  repeated_scan_produces_stable_canonical_identities (src/discovery/cloudflare.rs) — no
+      canonical_key volatility found; identical entities yield identical keys, no churn.
+  R6  CLI explained-path now carries EdgeEvidenceProvenance (safe_source_locator, captured_at,
+      freshness); sprint010_cli_test.rs extended to assert per-edge provenance.
+  R7  MCP SafeExplainedPath carries supporting_evidence; sprint011_mcp_golden_test.rs extended.
+  R8  adapter_conformance_emits_provenance_without_secrets (src/discovery/mod.rs) — both adapters
+      emit non-empty source_locator, never a secret sentinel; source_locator_is_safe helper.
+  R9  weakest_edge_provenance surfaces "Weakest evidence: <id> on edge <rel> captured <ts>
+      (freshness <X>)"; finding_explanation_flags_oldest_evidence added.
+  R10 no Evidence source_locator contains a raw secret (sentinel sweep in tests + R8 helper).
+
+CLI/MCP provenance-surfacing: PASS (R6/R7) — fields populated from persisted, classified freshness.
+canonical-identity stability: PASS (R5) — no volatility; regression test added.
+secret-sweep result: ZERO — only intentional sentinels (TEST_SECRET_SHOULD_NOT_PERSIST / synthetic-token)
+  appear in tests/docs; no real secret in code or persisted state.
+
+optional live re-run: GAP-RECORDED — Sprint 014 is fixture/output-driven by contract (§5);
+  it inherits the Sprint 012 live evidence. Freshness semantics are validated by fixtures
+  (including a 2-day-old captured_at => Stale => finding suppressed) without a new live dogfood.
+
+comprehension: NOT RUN (self-comprehension gate is v0.1-only; v0.2 sprints validated by the
+  fixture matrix above).
+
+usefulness judgments: provenance + freshness turn "Pico believes X" into "Pico believes X because
+  <locator> at <time>, freshness <Y>" — directly answers the weakest-evidence question (ROADMAP §13.7).
+
+defect list: EMPTY — the only behavioral change is additive: STALE/PARTIAL evidence now correctly
+  suppresses/penalizes findings; FRESH+COMPLETE golden path is byte-for-byte unchanged (verified:
+  golden scan still yields finding_count == 1).
+
+architecture pressure-test:
+  - Provenance is explanation/integrity metadata over the existing Evidence model; no new domain object.
+  - Freshness constrains existing confidence/state logic via a pure helper + a confirmability gate;
+    no second risk engine introduced.
+  - Canonical identity stability is a determinism property; no graph-model change.
+  - Secret-safety preserved: source_locator is an identifier/path, never a secret (ARCHITECTURE §7.7).
+
+advancement decision record:
+  Sprint 014 is DONE and self-contained within its stated scope (§3 non-goals honored: no history
+  UX, no runtime observation, no new agents/providers, sink_impact remains UNKNOWN out of scope).
+  It advances the v0.2 depth objective (ROADMAP §6: harden provenance + freshness + canonical
+  identity) and makes evidence trustworthy across time and repetition. It does NOT claim v0.2 depth
+  is "closed" — remaining v0.2 slices (e.g., 015–019) cover the rest of §6. Recommended: continue
+  with the next v0.2 sprint.
+
+follow-ups (named, owned, unambiguous):
+  - F-U1 (founder): revoke leaked S012 token 6b1a59bb84dd680a1dde77f49b3f357b in dashboard (still pending).
+  - F-U2 (next v0.2 sprint): optionally live-confirm freshness on the disposable account with a
+    PARTIAL-scan replay (deny one adapter) to exercise R4 end-to-end against real state.
+  - F-U3 (roadmap): consider persisting freshness windows in config so they are tunable without code.
+```
 
 ---
 
