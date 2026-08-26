@@ -379,6 +379,45 @@ fn unknown_and_empty_ids_fail_exactly() {
 }
 
 #[test]
+fn explained_path_surfaces_per_edge_evidence_provenance() {
+    let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    let list = FindingQueryService::list_latest(workspace.path()).unwrap();
+    let detail = FindingQueryService::get(workspace.path(), &list.findings[0].id).unwrap();
+    let rendered = render_finding_detail(&detail);
+
+    assert!(rendered.contains("freshness=FRESH"));
+    assert!(rendered.contains("captured="));
+    assert!(rendered.contains("locator="));
+    assert!(rendered.contains("Weakest evidence:"));
+}
+
+#[test]
+fn finding_explanation_flags_oldest_evidence() {
+    let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    let list = FindingQueryService::list_latest(workspace.path()).unwrap();
+    let detail = FindingQueryService::get(workspace.path(), &list.findings[0].id).unwrap();
+    let rendered = render_finding_detail(&detail);
+    assert!(rendered.contains("Weakest evidence:"));
+    assert!(rendered.contains("freshness="));
+}
+
+#[test]
+fn evidence_source_locators_never_contain_raw_secrets() {
+    let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    let db = open_rw(workspace.path());
+    let locators: String = db
+        .connection()
+        .query_row(
+            "SELECT COALESCE(GROUP_CONCAT(source_locator), '') FROM evidence",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!locators.contains(SECRET_SENTINEL));
+    assert!(!locators.contains("synthetic-token"));
+}
+
+#[test]
 fn persisted_can_mutate_relationship_exposes_authority_resolution_tier() {
     let (workspace, scan) = scan_with_classification(Some("PRODUCTION"), "checkout");
     assert_eq!(scan.status, ScanStatus::Complete);

@@ -391,3 +391,30 @@ fn non_production_sink_impact_on_linked_path_is_an_integrity_error() {
         .to_string()
         .contains("does not impact PRODUCTION"));
 }
+
+#[test]
+fn missing_provenance_on_security_critical_edge_is_integrity_error() {
+    let message = detail_error_after(|db| {
+        let conn = db.connection();
+        let relationship_id: String = conn
+            .query_row(
+                "SELECT relationship_id FROM attack_path_edges LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let evidence_id: String = conn
+            .query_row(
+                "SELECT evidence_id FROM relationship_evidence WHERE relationship_id = ?1 LIMIT 1",
+                [relationship_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE evidence SET freshness = NULL WHERE id = ?1",
+            [evidence_id],
+        )
+        .unwrap();
+    });
+    assert!(message.contains("security-critical edge lacks provenance"));
+}

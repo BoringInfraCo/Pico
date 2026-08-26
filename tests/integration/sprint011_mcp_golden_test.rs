@@ -588,6 +588,32 @@ fn empty_states_carry_distinct_non_all_clear_guidance() {
 }
 
 #[test]
+fn get_finding_surfaces_per_edge_evidence_provenance() {
+    let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
+    let ws = workspace.path();
+    let finding_id = {
+        let payload = payload_of(&handled(ws, &list_call(4)));
+        payload["findings"][0]["id"].as_str().unwrap().to_string()
+    };
+    let detail = payload_of(&handled(ws, &get_call(5, &finding_id)));
+
+    let step = &detail["paths"][0]["steps"][0];
+    let provenance = step["supporting_evidence"].as_array().unwrap();
+    assert!(!provenance.is_empty(), "edge carries provenance");
+    let first = &provenance[0];
+    assert!(first.get("evidence_id").is_some());
+    assert!(first.get("safe_source_locator").is_some());
+    assert_eq!(first["freshness"], json!("FRESH"));
+    assert!(first.get("captured_at").is_some());
+
+    assert!(detail.get("weakest_evidence").is_some());
+    assert!(detail["weakest_evidence"]
+        .as_str()
+        .unwrap()
+        .contains("Weakest evidence:"));
+}
+
+#[test]
 fn two_paths_reaching_one_sink_surface_through_both_tools() {
     let (workspace, _) = scan_with_classification(Some("PRODUCTION"), "checkout");
     let ws = workspace.path();
