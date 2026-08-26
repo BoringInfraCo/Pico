@@ -321,25 +321,23 @@ impl<T: GetTransport> Client<T> {
             return result;
         };
 
-        let details = match self.get(&format!("/user/tokens/{token_id}"), token) {
-            Ok(response) => response,
+        // Reading the token's own policy is required only to resolve write
+        // authority. A failure here must not discard the safe, read-only
+        // account and Worker facts the token is still permitted to list, so it
+        // is recorded as a problem and treated as an empty policy instead of
+        // aborting the whole inspection.
+        let token_details: Option<Value> = match self.get(&format!("/user/tokens/{token_id}"), token) {
+            Ok(response) => match parse_success(&response) {
+                Ok(value) => value.get("result").cloned(),
+                Err(error) => {
+                    result.problems.push(error);
+                    None
+                }
+            },
             Err(error) => {
                 result.problems.push(error);
-                return result;
+                None
             }
-        };
-        let details_json = match parse_success(&details) {
-            Ok(value) => value,
-            Err(error) => {
-                result.problems.push(error);
-                return result;
-            }
-        };
-        let Some(token_details) = details_json.get("result") else {
-            result
-                .problems
-                .push("cloudflare token details missing".to_string());
-            return result;
         };
 
         let permission_groups = match self.get("/user/tokens/permission_groups", token) {
@@ -360,7 +358,7 @@ impl<T: GetTransport> Client<T> {
             .filter(|(_, name)| is_workers_write(name))
             .map(|(id, _)| id.clone())
             .collect();
-        let policy_facts = policy_facts(token_details, &write_group_ids);
+        let policy_facts = policy_facts(token_details.as_ref(), &write_group_ids);
 
         let accounts = match self.get("/accounts", token) {
             Ok(response) => match parse_success(&response) {
@@ -557,9 +555,12 @@ impl PolicyFacts {
     }
 }
 
-fn policy_facts(token: &Value, write_group_ids: &HashSet<String>) -> PolicyFacts {
+fn policy_facts(token: Option<&Value>, write_group_ids: &HashSet<String>) -> PolicyFacts {
     let mut facts = PolicyFacts::default();
-    let Some(policies) = token.get("policies").and_then(Value::as_array) else {
+    let Some(policies) = token
+        .and_then(|token| token.get("policies"))
+        .and_then(Value::as_array)
+    else {
         return facts;
     };
     for policy in policies {
@@ -768,6 +769,48 @@ mod tests {
             AuthorityResolution::Unknown
         );
         assert_eq!(result.authorities[0].state, RelationshipState::Unknown);
+    }
+
+    #[test]
+    fn read_only_listing_survives_policy_read_failure() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        // Token details denied: inspection must NOT bail; account and Worker
+        // facts the token can still read must be projected, authority Unknown.
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            GetResponse {
+                status: 403,
+                body: r#"{"success":false,"errors":[{"code":1000,"message":"not authorized"}]}"#
+                    .to_string(),
+                redirected_to: None,
+            },
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("synthetic", "fingerprint");
+        assert_eq!(result.credential_status, Some(CredentialStatus::Active));
+        assert_eq!(result.accounts.len(), 1);
+        assert_eq!(result.workers.len(), 1);
+        assert_eq!(result.authorities[0].state, RelationshipState::Unknown);
+        assert!(!result.problems.is_empty());
     }
 
     #[test]
