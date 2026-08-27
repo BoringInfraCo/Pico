@@ -33,3 +33,7 @@ mod sprint011_mcp_test;
 mod sprint016_cli_test;
 #[path = "integration/sprint016_mcp_test.rs"]
 mod sprint016_mcp_test;
+#[path = "integration/sprint017_cli_test.rs"]
+mod sprint017_cli_test;
+#[path = "integration/sprint017_mcp_test.rs"]
+mod sprint017_mcp_test;
