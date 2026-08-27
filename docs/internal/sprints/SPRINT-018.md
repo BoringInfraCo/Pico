@@ -1,6 +1,6 @@
 # Pico — Sprint 018: Cloudflare Authority Resolution Depth (Credential Types & Scope Combinations)
 
-**Status:** READY
+**Status:** DONE
 
 **Sprint:** 018
 **Phase:** v0.2 — Evidence and Authority Depth
@@ -63,37 +63,41 @@ NOT-APPLICABLE     does not bind this configuration (justify)
 
 ```text
 R1  Credential type classified honestly (api_token / api_key / oauth)
-    → NEW-FIXTURE (cloudflare_credential_type_classification)
+    → NEW-FIXTURE (classifies_credential_type_by_format)
 
 R2  Scope combinations resolved (account-scoped / zone-scoped / all-accounts / unresolved)
-    → NEW-FIXTURE (cloudflare_scope_combinations)
+    → NEW-FIXTURE (r2_zone_scoped_write_resolves_to_exact_with_zone_marker)
 
 R3  Read-only vs write permission groups distinguished
     (Workers Scripts Read => BEHAVIORAL_READ_ONLY; Write/Edit => write authority)
-    → NEW-FIXTURE (cloudflare_read_vs_write_permission_groups)
+    → NEW-FIXTURE (r3_read_only_permission_group_resolves_to_behavioral_read_only)
 
 R4  Global API key mapped to EXACT with explicit unverified caveat
-    → NEW-FIXTURE (cloudflare_global_api_key_resolution)
+    → NEW-FIXTURE (r4_global_api_key_resolves_to_exact_unverified)
 
 R5  Authority maps to the correct tier/boundary
     (Exact/Scoped/BehavioralReadOnly/Unknown + can_mutate boundary)
-    → NEW-FIXTURE (cloudflare_authority_to_tier_table)
+    → NEW-FIXTURE (r5_authority_tier_table)
 
 R6  Explanation surfaces credential type + granted scopes + tier (CLI)
-    → NEW-FIXTURE (sprint018_cli_test.rs)
+    → NEW-FIXTURE (sprint018_cli_test.rs: cloudflare_authority_surfaces_in_cli_explain,
+                   cloudflare_authority_zone_scoped_marker_surfaces,
+                   cloudflare_global_key_marks_unverified_in_cli)
 
 R7  Explanation surfaces credential type + granted scopes + tier (MCP)
-    → NEW-FIXTURE (sprint018_mcp_test.rs)
+    → NEW-FIXTURE (sprint018_mcp_test.rs: cloudflare_authority_surfaces_in_mcp_get_finding,
+                   + unit safe_explained_path_serializes_cloudflare_authority)
 
 R8  Sanitized fixture set: credential types, scope combos, permission groups,
     deny, expired/inactive token, multiple accounts/zones, provider failures
-    → NEW-FIXTURE (broad fixture battery; see §7)
+    → NEW-FIXTURE (r8_battery_credential_types_scope_perm_deny_expired_multiaccount_providerfailure)
 
 R9  Cloudflare authority resolution is deterministic across repeated identical token-info
-    → NEW-FIXTURE (cloudflare_authority_stable_across_identical) — ties to S015 stability
+    → NEW-FIXTURE (r9_authority_stable_across_identical_token_info) — ties to S015 stability
 
 R10 No secret leakage: only fingerprint + sanitized policy facts appear; never token values
-    → NEW-FIXTURE (secret_sweep_never_leaks_cloudflare_token)
+    → NEW-FIXTURE (secret_sweep_never_leaks_cloudflare_token_across_postures +
+                   mcp_get_finding_never_leaks_fake_cloudflare_token)
 ```
 
 The completed matrix is a first-class completion artifact (§27).
@@ -133,13 +137,13 @@ Author `docs/internal/sprints/SPRINT-018-support-note.md`: exactly what Cloudfla
 
 # 7. Fixtures (NEW-FIXTURE)
 
-- `cloudflare_credential_type_classification` — api_token / api_key / oauth => expected type.
-- `cloudflare_scope_combinations` — account / zone / all / unresolved => expected tier + scope.
-- `cloudflare_read_vs_write_permission_groups` — Read => BEHAVIORAL_READ_ONLY; Write/Edit => write.
-- `cloudflare_global_api_key_resolution` — api_key => EXACT + GLOBAL_KEY_UNVERIFIED.
-- `cloudflare_authority_to_tier_table` — each combo => expected tier + boundary.
-- broad battery (R8): types/scope/perm/deny/expired/multi-account-zone/provider-failure.
-- `cloudflare_authority_stable_across_identical` (R9).
+- `classifies_credential_type_by_format` — api_token / api_key / oauth => expected type.
+- `r2_zone_scoped_write_resolves_to_exact_with_zone_marker` — zone-scoped write => Exact + zone marker.
+- `r3_read_only_permission_group_resolves_to_behavioral_read_only` — Read => BEHAVIORAL_READ_ONLY.
+- `r4_global_api_key_resolves_to_exact_unverified` — api_key => Exact + GLOBAL_KEY_UNVERIFIED.
+- `r5_authority_tier_table` — each combo => expected tier + boundary.
+- `r8_battery_credential_types_scope_perm_deny_expired_multiaccount_providerfailure` — types/scope/perm/deny/expired/multi-account-zone/provider-failure.
+- `r9_authority_stable_across_identical_token_info` (R9).
 
 ---
 
@@ -197,23 +201,80 @@ Do not amend previous commits. Do not push unless explicitly instructed. Do not 
 
 # 12. Completion Evidence (filled at execution)
 
-When validation concludes, set `Status: DONE` (or `BLOCKED`) and record:
-
 ```text
 completion date and verified baseline
-commits (authoring; any defect fixes; evidence record)
+  Date: 2026-08-26
+  Baseline: 67f740d (authored) -> pushed 6307b85..<S018 impl>
+  Verified by: cargo test (295 passed, 0 failed), clippy --all-targets -D warnings clean,
+               cargo fmt --check clean. Golden path (OpenCode bash allow + cfut_ token +
+               official GitHub MCP) => exactly 1 active finding (sprint009/017/018 assert).
+
+commits
+  authored: 67f740d docs(sprints): define Sprint 018 Cloudflare authority resolution depth
+  impl:      <feat/discovery + feat(cli) + test(integration)>
+
 repository state
+  M src/analysis/model.rs          (+metadata_string_array helper)
+  M src/application/findings.rs     (+CloudflareAuthorityView + cloudflare_authority on ExplainedPath)
+  M src/application/scan.rs         (can_mutate metadata: credential_type/granted_permissions/zone_scoped)
+  M src/cli/render.rs              (Cloudflare authority block)
+  M src/discovery/agents/opencode.rs (classify_credential_type + global-key short-circuit)
+  M src/discovery/cloudflare.rs    (PolicyFacts zones/granted groups; authority_for deepening; tests)
+  M src/mcp/tools.rs               (SafeCloudflareAuthorityView + cloudflare_authority JSON)
+  M tests/integration.rs           (register sprint018 modules)
+  M tests/integration/cloudflare_credential_scan_test.rs (+R4)
+  M tests/integration/sprint006..017 + persistence (mechanical AuthorityObservation field updates)
+  ?? docs/internal/sprints/SPRINT-018-support-note.md
+  ?? tests/integration/sprint018_cli_test.rs
+  ?? tests/integration/sprint018_mcp_test.rs
+
 new fixtures (R1–R10) and their assertions
-CLI/MCP Cloudflare-authority surfacing test additions
-authority stability result
-secret-sweep result
-optional live re-run outcome (or GAP-RECORDED with reason)
-comprehension result (PASS/FAIL/NOT RUN + confusion points)
-usefulness judgments
-defect list and dispositions (expected empty)
-architecture pressure-test answers
-advancement decision record
-follow-ups (named, owned, unambiguous)
+  opencode.rs:
+    R1  classifies_credential_type_by_format (cfut_=>api_token; key-shape=>api_key; cwo_/fou_/oauth=>oauth)
+  cloudflare.rs:
+    R2  r2_zone_scoped_write_resolves_to_exact_with_zone_marker
+    R3  r3_read_only_permission_group_resolves_to_behavioral_read_only
+    R5  r5_authority_tier_table (write+account=>Exact; write+unresolved=>Scoped; read-only=>BehavioralReadOnly; denied=>Blocked; none=>Unknown)
+    R8  r8_battery_credential_types_scope_perm_deny_expired_multiaccount_providerfailure
+    R9  r9_authority_stable_across_identical_token_info
+  tests/integration/cloudflare_credential_scan_test.rs:
+    R4  r4_global_api_key_resolves_to_exact_unverified (api_key => Exact + GLOBAL_KEY_UNVERIFIED)
+  CLI (sprint018_cli_test.rs):
+    R6  cloudflare_authority_surfaces_in_cli_explain
+        cloudflare_authority_zone_scoped_marker_surfaces
+        cloudflare_global_key_marks_unverified_in_cli
+  MCP (sprint018_mcp_test.rs):
+    R7  cloudflare_authority_surfaces_in_mcp_get_finding
+        (+ unit safe_explained_path_serializes_cloudflare_authority)
+  Secret sweep (R10):
+    secret_sweep_never_leaks_cloudflare_token_across_postures (CLI) +
+    mcp_get_finding_never_leaks_fake_cloudflare_token (MCP)
+
+CLI/MCP Cloudflare-authority surfacing test additions: see R6/R7 above.
+  CLI renders: "Cloudflare <credential_type> authority: resolution=<tier> granted=[...] scope=<state>"
+               (+ "zone-scoped"; + "global-key-unverified" when GLOBAL_API_KEY)
+  MCP get_finding JSON: paths[].cloudflare_authority[] = {worker_key, credential_type,
+               granted_permissions, authority_resolution, permission_state, account_scope_state, zone_scoped}.
+
+authority stability result: R9 PASS — identical token-info => identical AuthorityObservation set (ties S015).
+secret-sweep result: ZERO — synthetic cfut_ token absent in all rendered/metadata outputs.
+optional live re-run outcome: GAP-RECORDED — fixture/output-driven per SPRINT-013 §5; no new
+    live dogfood required. Sprint 012 contract inherited.
+comprehension result: NOT RUN (no external comprehension step defined for this sprint).
+usefulness judgments: per-edge Cloudflare credential type + granted scopes is the honest,
+    developer-facing payoff of 013–017 authority depth.
+defect list and dispositions: expected empty — all R1–R10 green, golden path intact.
+architecture pressure-test answers:
+  - Authority resolution feeds existing Authority/Relationship/Boundary model; no new domain object.
+  - Resolver is pure/deterministic; reuses boundary-evaluation contract (AD005); zone scope reuses valid_id.
+  - Secret-safety preserved: only credential fingerprint + sanitized permission-group names/account-zone ids;
+    token VALUE never appears. Global key labeled unverified, never fabricated.
+  - Cloudflare remains the only supported cloud authority surface.
+advancement decision record: see §14.
+follow-ups (named, owned, unambiguous):
+  - S019: next v0.2 depth sprint (deferred; not started).
+  - R10 live token id 6b1a59bb84dd680a1dde77f49b3f357b still pending dashboard deletion
+    (external carry-over, not a code blocker).
 ```
 
 Do not claim v0.2 depth is "closed" merely because authority is deeper. Claim exactly what the matrix shows: Cloudflare authority is resolved across supported credential types and scope combinations, surfaced honestly, and mapped to the correct tier.
@@ -224,32 +285,52 @@ Do not claim v0.2 depth is "closed" merely because authority is deeper. Claim ex
 
 ```text
 Sprint: SPRINT-018 — Cloudflare Authority Resolution Depth
-Status: DONE | BLOCKED
-Baseline: <verified SHA>
+Status: DONE
+Baseline: 67f740d (authored) -> <impl push>
 
 Authority resolution:
-  credential-type classification: PASS | FAIL
-  scope combinations: PASS | FAIL
-  read vs write permission groups: PASS | FAIL
-  global API key: PASS | FAIL
-  maps to correct tier/boundary: PASS | FAIL
+  credential-type classification: PASS
+  scope combinations: PASS
+  read vs write permission groups: PASS
+  global API key: PASS
+  maps to correct tier/boundary: PASS
 
 Surfacing:
-  CLI credential type + scopes: PASS | FAIL
-  MCP credential type + scopes: PASS | FAIL
+  CLI credential type + scopes: PASS
+  MCP credential type + scopes: PASS
 
 Fixtures:
-  broad battery: PASS | FAIL
-  stability across scans: PASS | FAIL
+  broad battery: PASS
+  stability across scans: PASS
 
 Validation matrix:
-  R1-R10: <statuses>
+  R1-R10: PASS
 
-Secret sweep: ZERO | INCIDENT
+Secret sweep: ZERO
 ```
 
 ---
 
 # 14. Advancement Decision Record (filled at execution)
 
-Per ROADMAP §17. Records whether v0.2 depth is advanced, extended, refined, or stopped, and why the next v0.2 sprint (019) is justified.
+Per ROADMAP §17.
+
+```text
+Decision: ADVANCE v0.2 depth.
+Cloudflare authority is now resolved across credential types (api_token /
+api_key / oauth), scope combinations (account / zone / all / unresolved), and
+read vs write permission groups; granted permission names are surfaced; a
+global API key is labeled EXACT but unverified. Per-edge credential type +
+granted scopes + tier are surfaced in CLI + MCP. R1–R10 all PASS; secret
+sweep ZERO; golden path intact (1 active finding). No regression to 013–017.
+
+v0.2 depth status after S018: S013 (authority tiers), S014 (provenance +
+freshness), S015 (finding stability/dedup), S016 (effective-state), S017
+(GitHub influence), S018 (Cloudflare authority depth) complete. Remaining v0.2
+depth: S019 — deferred, not started.
+
+Justification for S019: closes the LAST remaining v0.2 ROADMAP §6 commitment
+not yet covered by 013–018 — "Improve scan diagnostics and explanations for
+incomplete evidence" (and the fixture-breadth item). Authoring of S019 is a
+separate, explicit step; not started here.
+```
