@@ -18,7 +18,9 @@ pub use findings::{
     FindingEvidenceRecord, FindingPathRecord, FindingReasonRecord, FindingRecord,
     FindingRemediationRecord, FindingRepo,
 };
-pub use repos::{EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo};
+pub use repos::{
+    EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanDiagnosticsRepo, ScanRepo,
+};
 
 /// Helpers for serializing domain values to SQLite text columns.
 pub mod codec {

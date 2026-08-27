@@ -11,15 +11,17 @@ use crate::domain::{
     Observation, Relationship, RelationshipState, Resource, Scan, ScanStatus, Sensitivity,
     GRAPH_SNAPSHOT_VERSION,
 };
+use crate::findings::diagnostics::{ProviderDiagnostic, ScanDiagnostics};
 use crate::findings::{
-    generate_with_scan_status, FindingGenerationStatus, FindingLimits, FindingResult,
+    eligibility_diagnostics, generate_with_scan_status, FindingGenerationStatus, FindingLimits,
+    FindingResult,
 };
 use crate::graph::{project, ProjectionInput, SecurityGraph};
 use crate::persistence::{
     AttackPathEdgeRecord, AttackPathEvidenceRecord, AttackPathRecord, AttackPathRepo, Database,
     EvidenceRepo, FindingEvidenceRecord, FindingPathRecord, FindingReasonRecord, FindingRecord,
     FindingRemediationRecord, FindingRepo, ObservationRepo, RelationshipRepo, ResourceRepo,
-    ScanAnalysisRecord, ScanAnalysisRepo, ScanRepo,
+    ScanAnalysisRecord, ScanAnalysisRepo, ScanDiagnosticsRepo, ScanRepo,
 };
 use crate::shared::{PicoError, PICO_VERSION};
 use chrono::Utc;
@@ -64,6 +66,10 @@ pub struct ScanResult {
     pub active_attack_path_count: u64,
     pub blocked_attack_path_count: u64,
     pub unresolved_candidate_count: u64,
+    /// Structured, machine-readable diagnostics for the scan (per-provider
+    /// status, suppression reasons, and confidence-reduction notes). A rendered
+    /// projection of the same facts also lives on `findings.diagnostics`.
+    pub diagnostics_detail: Option<ScanDiagnostics>,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -774,6 +780,24 @@ impl ScanService {
         };
         scan_repo.update(&completed)?;
 
+        let provider_statuses =
+            build_provider_statuses(&discovered.problems, discovered.cloudflare.as_ref());
+        let partial_reason = provider_statuses
+            .iter()
+            .find(|status| !status.reachable)
+            .map(|status| status.name.clone());
+        let (suppressed, reduced_confidence) =
+            eligibility_diagnostics(&graph, &analysis, desired_status, &findings.findings);
+        let diagnostics_detail = ScanDiagnostics {
+            provider_statuses,
+            scan_status: desired_status.as_str().to_string(),
+            partial_reason,
+            suppressed,
+            reduced_confidence,
+        };
+
+        persist_scan_diagnostics(db.connection(), &completed.id, &diagnostics_detail)?;
+
         let resource_count = resource_repo.count()?;
         let relationship_count = relationship_repo.count()?;
         let evidence_count = evidence_repo.count()?;
@@ -839,8 +863,29 @@ impl ScanService {
                 .filter(|path| path.disposition == CandidateDisposition::Blocked)
                 .count() as u64,
             unresolved_candidate_count: analysis.unresolved_candidate_count as u64,
+            diagnostics_detail: Some(diagnostics_detail),
         })
     }
+}
+
+/// Persist the structured, machine-readable scan diagnostics (SPRINT-019).
+///
+/// The diagnostics are a scan-scoped projection over already-sanitized discovery
+/// facts; `validate_secret_safe` is applied defensively so a secret-shaped value
+/// can never be written into the diagnostics blob.
+fn persist_scan_diagnostics(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    detail: &ScanDiagnostics,
+) -> Result<(), PicoError> {
+    let value = serde_json::to_value(detail).map_err(|error| {
+        PicoError::scan(format!("scan diagnostics serialization failed: {error}"))
+    })?;
+    validate_secret_safe(&value)?;
+    let text = serde_json::to_string(&value)
+        .map_err(|error| PicoError::scan(format!("scan diagnostics encoding failed: {error}")))?;
+    ScanDiagnosticsRepo::new(connection).upsert(scan_id, &text)?;
+    Ok(())
 }
 
 fn persist_finding_results(
@@ -914,6 +959,41 @@ fn persist_finding_results(
         }
     }
     Ok(())
+}
+
+/// Reconstruct per-provider reachability diagnostics from a `DiscoveryResult`.
+///
+/// The OpenCode local adapter reports its problems on the aggregate
+/// `DiscoveryResult::problems` field; the Cloudflare provider adapter keeps its
+/// own sanitized `problems` list on `ProviderResult`. Cloudflare problems are
+/// merged into the aggregate only when the credential is reachable, so the
+/// OpenCode problems are reconstructed as the aggregate minus the Cloudflare
+/// set. Both lists are already sanitized by the discovery layer.
+fn build_provider_statuses(
+    problems: &[String],
+    cloudflare: Option<&discovery::cloudflare::ProviderResult>,
+) -> Vec<ProviderDiagnostic> {
+    let cloudflare_problems: Vec<String> = cloudflare
+        .map(|result| result.problems.clone())
+        .unwrap_or_default();
+    let opencode_problems: Vec<String> = problems
+        .iter()
+        .filter(|problem| !cloudflare_problems.contains(problem))
+        .cloned()
+        .collect();
+    let mut statuses = vec![ProviderDiagnostic {
+        name: "opencode".to_string(),
+        reachable: opencode_problems.is_empty(),
+        problems: opencode_problems,
+    }];
+    if let Some(cloudflare) = cloudflare {
+        statuses.push(ProviderDiagnostic {
+            name: "cloudflare".to_string(),
+            reachable: cloudflare.problems.is_empty(),
+            problems: cloudflare.problems.clone(),
+        });
+    }
+    statuses
 }
 
 fn persist_analysis_results(

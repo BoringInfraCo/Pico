@@ -642,3 +642,42 @@ fn row_to_observation(row: &Row<'_>) -> rusqlite::Result<Observation> {
         metadata: codec::text_to_opt_json(row.get(7)?),
     })
 }
+
+/// Repository for persisted, machine-readable `ScanDiagnostics` (SPRINT-019).
+///
+/// The diagnostics are a scan-scoped projection over already-sanitized discovery
+/// facts; only the JSON-serialized form is stored (no raw secrets).
+pub struct ScanDiagnosticsRepo<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> ScanDiagnosticsRepo<'a> {
+    pub fn new(conn: &'a Connection) -> Self {
+        ScanDiagnosticsRepo { conn }
+    }
+
+    /// Insert or replace the diagnostics for a scan.
+    pub fn upsert(&self, scan_id: &str, detail_json: &str) -> Result<(), PicoError> {
+        self.conn
+            .execute(
+                "INSERT INTO scan_diagnostics (scan_id, detail)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(scan_id) DO UPDATE SET detail = excluded.detail",
+                params![scan_id, detail_json],
+            )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Load the serialized diagnostics for a scan, if present.
+    pub fn get(&self, scan_id: &str) -> Result<Option<String>, PicoError> {
+        self.conn
+            .query_row(
+                "SELECT detail FROM scan_diagnostics WHERE scan_id = ?1",
+                [scan_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)
+    }
+}

@@ -146,6 +146,7 @@ struct SafeList {
     freshness: Freshness,
     freshness_warning: Option<String>,
     findings: Vec<SafeFindingSummary>,
+    diagnostics: Option<SafeScanDiagnostics>,
 }
 
 impl SafeList {
@@ -156,6 +157,98 @@ impl SafeList {
             freshness: list.freshness,
             freshness_warning: safe_optional(list.freshness_warning.as_deref()),
             findings: list.findings.iter().map(SafeFindingSummary::new).collect(),
+            diagnostics: list.diagnostics.as_ref().map(SafeScanDiagnostics::new),
+        }
+    }
+}
+
+/// Machine-readable scan diagnostics mirrored from
+/// `findings::diagnostics::ScanDiagnostics`. All provider-supplied strings pass
+/// through `terminal_safe` before serialization; the structure is an exact
+/// field-for-field projection so the MCP payload and the application DTO
+/// serialize identically for the same scan.
+#[derive(Serialize)]
+struct SafeScanDiagnostics {
+    provider_statuses: Vec<SafeProviderDiagnostic>,
+    scan_status: String,
+    partial_reason: Option<String>,
+    suppressed: Vec<SafeSuppressedReason>,
+    reduced_confidence: Vec<SafeConfidenceNote>,
+}
+
+impl SafeScanDiagnostics {
+    fn new(diagnostics: &crate::findings::diagnostics::ScanDiagnostics) -> Self {
+        SafeScanDiagnostics {
+            provider_statuses: diagnostics
+                .provider_statuses
+                .iter()
+                .map(SafeProviderDiagnostic::new)
+                .collect(),
+            scan_status: terminal_safe(&diagnostics.scan_status),
+            partial_reason: diagnostics.partial_reason.as_deref().map(terminal_safe),
+            suppressed: diagnostics
+                .suppressed
+                .iter()
+                .map(SafeSuppressedReason::new)
+                .collect(),
+            reduced_confidence: diagnostics
+                .reduced_confidence
+                .iter()
+                .map(SafeConfidenceNote::new)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SafeProviderDiagnostic {
+    name: String,
+    reachable: bool,
+    problems: Vec<String>,
+}
+
+impl SafeProviderDiagnostic {
+    fn new(provider: &crate::findings::diagnostics::ProviderDiagnostic) -> Self {
+        SafeProviderDiagnostic {
+            name: terminal_safe(&provider.name),
+            reachable: provider.reachable,
+            problems: safe_strings(&provider.problems),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SafeSuppressedReason {
+    fingerprint: String,
+    reason: String,
+}
+
+impl SafeSuppressedReason {
+    fn new(reason: &crate::findings::diagnostics::SuppressedReason) -> Self {
+        SafeSuppressedReason {
+            fingerprint: terminal_safe(&reason.fingerprint),
+            reason: terminal_safe(&reason.reason),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SafeConfidenceNote {
+    fingerprint: String,
+    edges: Vec<(String, String, f64)>,
+}
+
+impl SafeConfidenceNote {
+    fn new(note: &crate::findings::diagnostics::ConfidenceNote) -> Self {
+        SafeConfidenceNote {
+            fingerprint: terminal_safe(&note.fingerprint),
+            edges: note
+                .edges
+                .iter()
+                .map(|(edge_key, freshness, penalty)| {
+                    (terminal_safe(edge_key), terminal_safe(freshness), *penalty)
+                })
+                .collect(),
         }
     }
 }
@@ -575,8 +668,74 @@ fn safe_strings(values: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::SafeExplainedPath;
+    use super::{SafeExplainedPath, SafeScanDiagnostics};
     use crate::application::ExplainedPath;
+    use crate::findings::diagnostics::{
+        ConfidenceNote, ProviderDiagnostic, ScanDiagnostics, SuppressedReason,
+    };
+
+    /// Asserts the MCP `SafeScanDiagnostics` mirror serializes every structured
+    /// diagnostics field with the exact application-DTO field names, so the
+    /// `list_findings` payload carries `provider_statuses`, `scan_status`,
+    /// `partial_reason`, `suppressed`, and `reduced_confidence` (SPRINT-019 R7).
+    #[test]
+    fn safe_scan_diagnostics_serializes_structured_fields() {
+        let detail = ScanDiagnostics {
+            provider_statuses: vec![
+                ProviderDiagnostic {
+                    name: "opencode".to_string(),
+                    reachable: true,
+                    problems: vec![],
+                },
+                ProviderDiagnostic {
+                    name: "cloudflare".to_string(),
+                    reachable: false,
+                    problems: vec![
+                        "cloudflare token verification failed: provider returned HTTP 401"
+                            .to_string(),
+                    ],
+                },
+            ],
+            scan_status: "PARTIAL".to_string(),
+            partial_reason: Some("cloudflare".to_string()),
+            suppressed: vec![SuppressedReason {
+                fingerprint: "sha256:suppressed-candidate".to_string(),
+                reason: "edge evidence is STALE; candidate not confirmed".to_string(),
+            }],
+            reduced_confidence: vec![ConfidenceNote {
+                fingerprint: "sha256:active-finding".to_string(),
+                edges: vec![(
+                    "agent:opencode|can_execute|shell:bash".to_string(),
+                    "STALE".to_string(),
+                    0.25,
+                )],
+            }],
+        };
+        let safe = SafeScanDiagnostics::new(&detail);
+        let value = serde_json::to_value(&safe).expect("serializable");
+
+        assert_eq!(
+            value["provider_statuses"].as_array().unwrap().len(),
+            2,
+            "both provider statuses must be present"
+        );
+        assert_eq!(value["scan_status"], serde_json::json!("PARTIAL"));
+        assert_eq!(value["partial_reason"], serde_json::json!("cloudflare"));
+        assert_eq!(
+            value["suppressed"][0]["fingerprint"],
+            serde_json::json!("sha256:suppressed-candidate")
+        );
+        assert_eq!(
+            value["reduced_confidence"][0]["fingerprint"],
+            serde_json::json!("sha256:active-finding")
+        );
+        let edge = value["reduced_confidence"][0]["edges"][0].clone();
+        assert_eq!(
+            edge,
+            serde_json::json!(["agent:opencode|can_execute|shell:bash", "STALE", 0.25]),
+            "edge tuple (edge_key, freshness, penalty) must serialize as a 3-element array"
+        );
+    }
 
     /// Asserts the MCP mirror serializes the effective Bash capability and its
     /// interrupting boundary for every resolved OpenCode posture (SPRINT-016 R7).

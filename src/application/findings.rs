@@ -15,13 +15,14 @@ use serde::Serialize;
 
 use crate::analysis::{BoundaryDecision, BoundaryEvaluation};
 use crate::domain::{Evidence, Scan, ScanStatus, GRAPH_SNAPSHOT_VERSION};
+use crate::findings::diagnostics::ScanDiagnostics;
 use crate::findings::{Confidence, FindingResult, ReasonCode, Severity};
 use crate::graph::{project, ProjectionInput, SecurityGraph};
 use crate::persistence::{
     codec, require_schema_version, AttackPathEdgeRecord, AttackPathRecord, AttackPathRepo,
     Database, EvidenceRepo, FindingEvidenceRecord, FindingPathRecord, FindingReasonRecord,
     FindingRecord, FindingRemediationRecord, FindingRepo, ObservationRepo, RelationshipRepo,
-    ResourceRepo, ScanAnalysisRepo, ScanRepo,
+    ResourceRepo, ScanAnalysisRepo, ScanDiagnosticsRepo, ScanRepo,
 };
 use crate::shared::PicoError;
 
@@ -56,6 +57,11 @@ pub struct FindingList {
     pub freshness: Freshness,
     pub freshness_warning: Option<String>,
     pub findings: Vec<FindingSummary>,
+    /// Structured, machine-readable scan diagnostics (provider status, scan
+    /// status, suppressed candidates, and confidence-reduction notes). Surfaced
+    /// verbatim by the CLI and MCP so incomplete evidence is explained rather
+    /// than silently dropped.
+    pub diagnostics: Option<ScanDiagnostics>,
 }
 
 /// Minimal scan identity used by list and detail DTOs.
@@ -364,12 +370,17 @@ impl FindingQueryService {
                 Some(scan) => summarize_scan(conn, &scan.id)?,
                 None => Vec::new(),
             };
+            let diagnostics = match selected.as_ref().or(newest_attempt.as_ref()) {
+                Some(scan) => load_scan_diagnostics(conn, &scan.id)?,
+                None => None,
+            };
             Ok(FindingList {
                 selected_scan: selected.as_ref().map(scan_brief),
                 newest_scan_attempt: newest_attempt.as_ref().map(scan_brief),
                 freshness,
                 freshness_warning: warning,
                 findings,
+                diagnostics,
             })
         })?;
         enforce_dto_budget(&result)?;
@@ -414,6 +425,19 @@ fn with_read_snapshot<T>(
 
 fn attempt_is_newer(attempt: &Scan, complete: &Scan) -> bool {
     (attempt.started_at, attempt.id.as_str()) > (complete.started_at, complete.id.as_str())
+}
+
+/// Load the persisted, machine-readable scan diagnostics for a scan, if present.
+fn load_scan_diagnostics(
+    conn: &Connection,
+    scan_id: &str,
+) -> Result<Option<ScanDiagnostics>, PicoError> {
+    let Some(text) = ScanDiagnosticsRepo::new(conn).get(scan_id)? else {
+        return Ok(None);
+    };
+    let detail: ScanDiagnostics = serde_json::from_str(&text)
+        .map_err(|error| PicoError::database(format!("scan diagnostics decode failed: {error}")))?;
+    Ok(Some(detail))
 }
 
 fn attempt_status_warns(status: ScanStatus) -> bool {

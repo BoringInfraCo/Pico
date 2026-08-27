@@ -8,6 +8,7 @@ use crate::application::{
     findings_list_guidance, findings_list_state, FindingDetail, FindingList, FindingSummary,
     FindingsListState,
 };
+use crate::findings::diagnostics::ScanDiagnostics;
 use crate::shared::terminal_safe;
 
 /// Renders `pico findings` for the selected scan snapshot.
@@ -498,6 +499,70 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
     out.push_str("Potential exposure, not exploitation\n");
     out.push_str(&terminal_safe(&detail.scope_note));
     out.push('\n');
+    out
+}
+
+/// Renders the structured scan diagnostics block for the `pico scan` summary.
+///
+/// Prints an honest, human-readable explanation of incomplete evidence:
+/// per-provider reachability (with sanitized problems), the scan lifecycle
+/// status, suppressed candidate Findings, and confidence-reducing edges. When
+/// the diagnostics are clean (the golden Complete + Fresh path), this returns an
+/// empty string so the golden path is never given spurious noise.
+pub fn render_scan_diagnostics(diagnostics: &ScanDiagnostics) -> String {
+    if diagnostics.is_clean() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str("Incomplete evidence\n");
+
+    for provider in &diagnostics.provider_statuses {
+        out.push_str(&format!(
+            "Provider {}: {}\n",
+            terminal_safe(&provider.name),
+            if provider.reachable {
+                "reachable"
+            } else {
+                "FAILED"
+            }
+        ));
+        for problem in &provider.problems {
+            out.push_str(&format!("  - {}\n", terminal_safe(problem)));
+        }
+    }
+
+    match &diagnostics.partial_reason {
+        Some(reason) => out.push_str(&format!(
+            "Scan status: PARTIAL ({})\n",
+            terminal_safe(reason)
+        )),
+        None => out.push_str(&format!("Scan status: {}\n", diagnostics.scan_status)),
+    }
+
+    for suppressed in &diagnostics.suppressed {
+        out.push_str(&format!(
+            "Suppressed {}: {}\n",
+            terminal_safe(&suppressed.fingerprint),
+            terminal_safe(&suppressed.reason)
+        ));
+    }
+
+    for note in &diagnostics.reduced_confidence {
+        out.push_str(&format!(
+            "Confidence reduced {}:",
+            terminal_safe(&note.fingerprint)
+        ));
+        for (edge_key, freshness, penalty) in &note.edges {
+            out.push_str(&format!(
+                " {} ({}, -{})",
+                terminal_safe(edge_key),
+                terminal_safe(freshness),
+                penalty
+            ));
+        }
+        out.push('\n');
+    }
+
     out
 }
 

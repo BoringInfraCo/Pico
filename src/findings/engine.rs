@@ -12,6 +12,7 @@ use crate::analysis::{
 use crate::domain::evidence::Freshness;
 use crate::domain::{Evidence, EvidenceClass, ScanStatus};
 use crate::findings::confidence::freshness_confidence;
+use crate::findings::diagnostics::{ConfidenceNote, SuppressedReason};
 use crate::graph::SecurityGraph;
 
 use super::model::{
@@ -254,7 +255,7 @@ fn critical_edges_are_confirmable(
 
 /// The freshness of a critical edge is driven by its weakest (oldest-captured)
 /// supporting Evidence relative to `reference`.
-fn edge_supporting_freshness(
+pub(crate) fn edge_supporting_freshness(
     graph: &SecurityGraph,
     relationship_id: &str,
     reference: DateTime<Utc>,
@@ -275,6 +276,116 @@ fn edge_supporting_freshness(
         Some(evidence) => evidence.freshness_state(reference),
         None => Freshness::Unknown,
     }
+}
+
+/// Build honest, structured diagnostics for a completed generation pass.
+///
+/// Returns `(suppressed, reduced_confidence)`:
+/// * `suppressed` — one entry per candidate `AttackPath` that was `Active` but
+///   did NOT become a Finding, with a deterministic reason for suppression.
+/// * `reduced_confidence` — one entry per emitted Finding whose security-critical
+///   edges carried incomplete (non-FRESH) evidence, listing each such edge.
+///
+/// The caller (the scan service) is responsible for filling the provider-level
+/// fields of [`ScanDiagnostics`] that require discovery context this engine
+/// never sees. This keeps the engine provider-neutral.
+pub fn eligibility_diagnostics(
+    graph: &SecurityGraph,
+    analysis: &AnalysisResult,
+    scan_status: ScanStatus,
+    findings: &[Finding],
+) -> (Vec<SuppressedReason>, Vec<ConfidenceNote>) {
+    let reference = Utc::now();
+    let emitted: BTreeSet<&String> = findings
+        .iter()
+        .flat_map(|finding| finding.attack_path_fingerprints.iter())
+        .collect();
+
+    let mut suppressed = Vec::new();
+    for path in &analysis.attack_paths {
+        if path.disposition != CandidateDisposition::Active {
+            continue;
+        }
+        if emitted.contains(&path.fingerprint) {
+            continue;
+        }
+        suppressed.push(SuppressedReason {
+            fingerprint: path.fingerprint.clone(),
+            reason: suppression_reason(graph, path, scan_status, reference),
+        });
+    }
+
+    let mut reduced_confidence = Vec::new();
+    for finding in findings {
+        let mut edges: Vec<(String, String, f64)> = Vec::new();
+        for fingerprint in &finding.attack_path_fingerprints {
+            let Some(path) = analysis
+                .attack_paths
+                .iter()
+                .find(|candidate| &candidate.fingerprint == fingerprint)
+            else {
+                continue;
+            };
+            for edge_ref in path
+                .influence_edges
+                .iter()
+                .chain(path.authority_edges.iter())
+            {
+                let freshness =
+                    edge_supporting_freshness(graph, &edge_ref.relationship_id, reference);
+                let confidence = freshness_confidence(freshness, scan_status);
+                if confidence.penalty > 0.0 {
+                    edges.push((
+                        edge_ref.relationship_id.clone(),
+                        freshness.as_str().to_string(),
+                        confidence.penalty,
+                    ));
+                }
+            }
+        }
+        if !edges.is_empty() {
+            reduced_confidence.push(ConfidenceNote {
+                fingerprint: finding.fingerprint.clone(),
+                edges,
+            });
+        }
+    }
+
+    (suppressed, reduced_confidence)
+}
+
+/// Derive a single honest suppression reason for a candidate `AttackPath`.
+///
+/// Order matters: the most security-significant, evidence-driven cause is
+/// reported first so the explanation names the exact weak link.
+fn suppression_reason(
+    graph: &SecurityGraph,
+    path: &AttackPath,
+    scan_status: ScanStatus,
+    reference: DateTime<Utc>,
+) -> String {
+    if scan_status != ScanStatus::Complete {
+        return "PARTIAL_SCAN".to_string();
+    }
+    for edge_ref in path
+        .influence_edges
+        .iter()
+        .chain(path.authority_edges.iter())
+    {
+        let freshness = edge_supporting_freshness(graph, &edge_ref.relationship_id, reference);
+        let confidence = freshness_confidence(freshness, scan_status);
+        if !confidence.may_be_confirmed {
+            return format!(
+                "critical edge {} not confirmable: {}",
+                edge_ref.relationship_id,
+                freshness.as_str()
+            );
+        }
+    }
+    if path.authority_resolution == AuthorityResolution::Unknown {
+        return "authority UNKNOWN".to_string();
+    }
+    "eligibility gate not satisfied".to_string()
 }
 
 fn all_path_evidence<'a>(graph: &'a SecurityGraph, path: &AttackPath) -> Option<Vec<&'a Evidence>> {
@@ -739,7 +850,7 @@ mod tests {
         InfluenceStrength, PathEdgeRef, PathPhase, SinkImpact, SourceTrust, TraversalDirection,
         ANALYSIS_VERSION,
     };
-    use crate::domain::{EvidenceClass, RelationshipState, Sensitivity};
+    use crate::domain::{EvidenceClass, RelationshipState, ScanStatus, Sensitivity};
     use crate::findings::confidence::freshness_confidence;
     use crate::graph::{EdgeUsability, GraphEdge, GraphEvidenceIndex, GraphNode, SecurityRole};
     use serde_json::json;
@@ -1321,5 +1432,222 @@ mod tests {
             ra.target_relationship_ids, rb.target_relationship_ids,
             "remediation target is stable across identical runs"
         );
+    }
+
+    // --- Structured diagnostics fixtures (R2/R3/R4/R9) ---
+
+    /// Age every Evidence supporting `relationship_id` so its freshness relative
+    /// to `now` is the requested state. Drives stale/aging classification for the
+    /// diagnostics fixtures.
+    fn age_edge_evidence(graph: &mut SecurityGraph, relationship_id: &str, age: chrono::Duration) {
+        let ids = graph
+            .evidence_index
+            .by_relationship_id
+            .get(relationship_id)
+            .cloned()
+            .unwrap_or_default();
+        for id in ids {
+            if let Some(evidence) = graph.evidence_index.by_evidence_id.get_mut(&id) {
+                evidence.captured_at = Utc::now() - age;
+            }
+        }
+    }
+
+    /// Remove every Evidence supporting `relationship_id` so its freshness
+    /// resolves to `Unknown` (no supporting Evidence at all).
+    fn drop_edge_evidence(graph: &mut SecurityGraph, relationship_id: &str) {
+        if let Some(ids) = graph
+            .evidence_index
+            .by_relationship_id
+            .remove(relationship_id)
+        {
+            for id in ids {
+                graph.evidence_index.by_evidence_id.remove(&id);
+            }
+        }
+    }
+
+    /// R2: a candidate AttackPath that is Active but suppressed because a
+    /// security-critical edge is not confirmable must report an honest,
+    /// edge-naming reason.
+    #[test]
+    fn diagnostics_explain_suppressed_finding_reason() {
+        let (mut graph, _base) = fixture();
+        // Make only the `mutate` authority edge stale so the single candidate
+        // path becomes unconfirmable and therefore suppressed (not a Finding).
+        age_edge_evidence(&mut graph, "mutate", chrono::Duration::days(2));
+        let path = candidate_path(
+            &graph,
+            "p-stale",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let analysis = analysis_of(&graph.scan_id, vec![path.clone()]);
+        let generated = generate_with_scan_status(
+            &graph,
+            &analysis,
+            ScanStatus::Complete,
+            &FindingLimits::default(),
+        );
+        assert!(generated.findings.is_empty());
+        let (suppressed, _reduced) =
+            eligibility_diagnostics(&graph, &analysis, ScanStatus::Complete, &generated.findings);
+        let entry = suppressed
+            .iter()
+            .find(|s| s.fingerprint == path.fingerprint)
+            .expect("stale path is suppressed");
+        assert!(
+            entry.reason.contains("not confirmable: STALE"),
+            "reason was: {}",
+            entry.reason
+        );
+        assert!(
+            entry.reason.contains("mutate"),
+            "reason must name the unconfirmable edge: {}",
+            entry.reason
+        );
+    }
+
+    /// R3: a Stale edge and an Unknown-freshness edge are each classified
+    /// correctly in the suppression diagnostics (separate graphs so the global
+    /// edge evidence does not collide).
+    #[test]
+    fn diagnostics_classify_incomplete_edge_evidence() {
+        // Stale critical edge.
+        let (mut graph_stale, _b) = fixture();
+        age_edge_evidence(&mut graph_stale, "mutate", chrono::Duration::days(2));
+        let stale_path = candidate_path(
+            &graph_stale,
+            "p-stale",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let analysis_stale = analysis_of(&graph_stale.scan_id, vec![stale_path.clone()]);
+        let gen_stale = generate_with_scan_status(
+            &graph_stale,
+            &analysis_stale,
+            ScanStatus::Complete,
+            &FindingLimits::default(),
+        );
+        assert!(gen_stale.findings.is_empty());
+        let (supp_stale, _) = eligibility_diagnostics(
+            &graph_stale,
+            &analysis_stale,
+            ScanStatus::Complete,
+            &gen_stale.findings,
+        );
+        let stale = supp_stale
+            .iter()
+            .find(|s| s.fingerprint == stale_path.fingerprint)
+            .expect("stale path suppressed");
+        assert!(
+            stale.reason.contains("not confirmable: STALE"),
+            "reason was: {}",
+            stale.reason
+        );
+
+        // Unknown-freshness critical edge.
+        let (mut graph_unknown, _b) = fixture();
+        drop_edge_evidence(&mut graph_unknown, "access");
+        let unknown_path = candidate_path(
+            &graph_unknown,
+            "p-unknown",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let analysis_unknown = analysis_of(&graph_unknown.scan_id, vec![unknown_path.clone()]);
+        let gen_unknown = generate_with_scan_status(
+            &graph_unknown,
+            &analysis_unknown,
+            ScanStatus::Complete,
+            &FindingLimits::default(),
+        );
+        assert!(gen_unknown.findings.is_empty());
+        let (supp_unknown, _) = eligibility_diagnostics(
+            &graph_unknown,
+            &analysis_unknown,
+            ScanStatus::Complete,
+            &gen_unknown.findings,
+        );
+        let unknown = supp_unknown
+            .iter()
+            .find(|s| s.fingerprint == unknown_path.fingerprint)
+            .expect("unknown path suppressed");
+        assert!(
+            unknown.reason.contains("not confirmable: UNKNOWN"),
+            "reason was: {}",
+            unknown.reason
+        );
+    }
+
+    /// R4: an Aging security-critical edge must appear in a Finding's
+    /// confidence-reduction note with penalty 0.1.
+    #[test]
+    fn diagnostics_explain_confidence_reduction() {
+        let (mut graph, _b) = fixture();
+        // Age only the `execute` authority edge into the AGING window.
+        age_edge_evidence(&mut graph, "execute", chrono::Duration::hours(2));
+        let path = candidate_path(
+            &graph,
+            "p-aging",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let analysis = analysis_of(&graph.scan_id, vec![path.clone()]);
+        let generated = generate_with_scan_status(
+            &graph,
+            &analysis,
+            ScanStatus::Complete,
+            &FindingLimits::default(),
+        );
+        assert_eq!(generated.findings.len(), 1);
+        let (_suppressed, reduced) =
+            eligibility_diagnostics(&graph, &analysis, ScanStatus::Complete, &generated.findings);
+        let note = reduced
+            .iter()
+            .find(|n| n.fingerprint == generated.findings[0].fingerprint)
+            .expect("emitted finding carries a confidence note");
+        let edge = note
+            .edges
+            .iter()
+            .find(|(key, fresh, _)| key == "execute" && fresh == "AGING")
+            .expect("execute edge reported as AGING");
+        assert_eq!(edge.2, 0.1);
+    }
+
+    /// R9: identical scan inputs must yield byte-identical structured
+    /// diagnostics (ties the S015 stability contract).
+    #[test]
+    fn diagnostics_stable_across_identical_scans() {
+        let (mut graph, _b) = fixture();
+        age_edge_evidence(&mut graph, "mutate", chrono::Duration::days(2));
+        let path = candidate_path(
+            &graph,
+            "p-stale",
+            SourceTrust::PublicExternal,
+            &["call", "retrieve"],
+            &["execute", "access", "mutate"],
+            Vec::new(),
+        );
+        let analysis = analysis_of(&graph.scan_id, vec![path.clone()]);
+        let generated = generate_with_scan_status(
+            &graph,
+            &analysis,
+            ScanStatus::Complete,
+            &FindingLimits::default(),
+        );
+        let first =
+            eligibility_diagnostics(&graph, &analysis, ScanStatus::Complete, &generated.findings);
+        let second =
+            eligibility_diagnostics(&graph, &analysis, ScanStatus::Complete, &generated.findings);
+        assert_eq!(first, second);
     }
 }

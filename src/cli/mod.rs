@@ -144,6 +144,16 @@ fn run_scan() -> Result<(), PicoError> {
         println!("Authority Resolution: {resolution}");
     }
     println!("Credential Value Stored: NO");
+    let diagnostics = render::render_scan_diagnostics(
+        result
+            .diagnostics_detail
+            .as_ref()
+            .expect("diagnostics_detail is always populated by the scan service"),
+    );
+    if !diagnostics.is_empty() {
+        println!();
+        print!("{}", diagnostics);
+    }
     print!("{}", navigation_hint(result.findings.as_ref()));
     Ok(())
 }

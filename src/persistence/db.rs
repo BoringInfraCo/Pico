@@ -257,11 +257,25 @@ const MIGRATIONS: &[&str] = &[
         SELECT RAISE(ABORT, 'finding evidence must reference evidence from the same scan');
     END;
     "#,
+    // Migration 5: Sprint 019 structured scan diagnostics. The scan service
+    // composes a machine-readable explanation of incomplete evidence (provider
+    // failures, suppressed candidates, and confidence-reducing edges) that the
+    // CLI and MCP surfaces surface verbatim. It is a scan-scoped projection
+    // derived from already-sanitized discovery facts; the JSON carries no raw
+    // secrets.
+    r#"
+    CREATE TABLE IF NOT EXISTS scan_diagnostics (
+        scan_id TEXT PRIMARY KEY REFERENCES scans(id),
+        detail TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scan_diagnostics_scan ON scan_diagnostics(scan_id);
+    "#,
 ];
 
 /// The only schema version supported by this build. Query commands must
 /// never migrate; a mismatch is a compatibility error.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 4;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 5;
 
 /// A SQLite-backed Pico database.
 pub struct Database {
