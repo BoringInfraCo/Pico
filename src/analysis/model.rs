@@ -123,6 +123,8 @@ pub enum InfluenceStrength {
     AgentRetrievable,
     AutomaticallyInjected,
     InstructionBearing,
+    AgentInjectable,
+    AgentMutable,
     Unknown,
 }
 
@@ -134,6 +136,8 @@ impl InfluenceStrength {
             Self::AgentRetrievable => "AGENT_RETRIEVABLE",
             Self::AutomaticallyInjected => "AUTOMATICALLY_INJECTED",
             Self::InstructionBearing => "INSTRUCTION_BEARING",
+            Self::AgentInjectable => "AGENT_INJECTABLE",
+            Self::AgentMutable => "AGENT_MUTABLE",
             Self::Unknown => "UNKNOWN",
         }
     }
@@ -145,6 +149,8 @@ impl InfluenceStrength {
             "AGENT_RETRIEVABLE" => Self::AgentRetrievable,
             "AUTOMATICALLY_INJECTED" => Self::AutomaticallyInjected,
             "INSTRUCTION_BEARING" => Self::InstructionBearing,
+            "AGENT_INJECTABLE" => Self::AgentInjectable,
+            "AGENT_MUTABLE" => Self::AgentMutable,
             _ => Self::Unknown,
         }
     }
@@ -295,6 +301,7 @@ pub enum BoundaryKind {
     NetworkIsolation,
     ProcessIsolation,
     SoftPolicy,
+    Mutation,
 }
 
 impl BoundaryKind {
@@ -308,6 +315,7 @@ impl BoundaryKind {
             Self::NetworkIsolation => "NETWORK_ISOLATION",
             Self::ProcessIsolation => "PROCESS_ISOLATION",
             Self::SoftPolicy => "SOFT_POLICY",
+            Self::Mutation => "MUTATION",
         }
     }
 }

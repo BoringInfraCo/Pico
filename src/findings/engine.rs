@@ -146,6 +146,8 @@ fn eligible_candidate<'a>(
         InfluenceStrength::AgentRetrievable
             | InfluenceStrength::AutomaticallyInjected
             | InfluenceStrength::InstructionBearing
+            | InfluenceStrength::AgentInjectable
+            | InfluenceStrength::AgentMutable
     ) || !matches!(
         path.capability,
         CapabilityClass::Execute | CapabilityClass::Admin

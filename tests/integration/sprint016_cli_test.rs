@@ -320,6 +320,7 @@ fn minimal_detail_with_capability(label: &str, boundary: &str) -> FindingDetail 
         } else {
             Some(boundary.to_string())
         },
+        github_influence: vec![],
     };
     FindingDetail {
         id: "finding_x".to_string(),

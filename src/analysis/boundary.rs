@@ -72,6 +72,22 @@ pub fn evaluate(
                 "ADVISORY".into(),
                 BoundaryDecision::DoesNotInterrupt,
             )
+        } else if edge.kind == "can_mutate" {
+            // A GitHub `can_mutate` edge carries an `influence_strength` of
+            // `AGENT_MUTABLE`; mirror the Cloudflare credential|worker mutation
+            // surface — surfaced, and interrupting where it reaches a sink. The
+            // gate on `AGENT_MUTABLE` keeps the existing Cloudflare can_mutate
+            // (which is not tagged this way) untouched, preserving its
+            // MandatoryApproval/HardDeny/Sandbox boundaries.
+            if metadata_string(metadata, "influence_strength").as_deref() == Some("AGENT_MUTABLE") {
+                (
+                    BoundaryKind::Mutation,
+                    "PROVEN".into(),
+                    BoundaryDecision::Interrupts,
+                )
+            } else {
+                continue;
+            }
         } else {
             continue;
         };

@@ -325,6 +325,7 @@ struct SafeExplainedPath {
     boundaries: Vec<SafeBoundaryView>,
     effective_bash_capability: Option<String>,
     bash_boundary: Option<String>,
+    github_influence: Vec<SafeGitHubInfluenceView>,
 }
 
 impl SafeExplainedPath {
@@ -345,6 +346,30 @@ impl SafeExplainedPath {
             boundaries: path.boundaries.iter().map(SafeBoundaryView::new).collect(),
             effective_bash_capability: path.effective_bash_capability.as_deref().map(terminal_safe),
             bash_boundary: path.bash_boundary.as_deref().map(terminal_safe),
+            github_influence: path
+                .github_influence
+                .iter()
+                .map(SafeGitHubInfluenceView::new)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SafeGitHubInfluenceView {
+    tool_name: String,
+    content_class: String,
+    trust: String,
+    influence_strength: String,
+}
+
+impl SafeGitHubInfluenceView {
+    fn new(entry: &crate::application::findings::GitHubInfluenceView) -> Self {
+        SafeGitHubInfluenceView {
+            tool_name: terminal_safe(&entry.tool_name),
+            content_class: terminal_safe(&entry.content_class),
+            trust: terminal_safe(&entry.trust),
+            influence_strength: terminal_safe(&entry.influence_strength),
         }
     }
 }
@@ -549,6 +574,7 @@ mod tests {
                 boundaries: vec![],
                 effective_bash_capability: Some(label.to_string()),
                 bash_boundary: boundary.map(str::to_string),
+                github_influence: vec![],
             };
             let safe = SafeExplainedPath::new(&path);
             let value = serde_json::to_value(&safe).expect("serializable");
@@ -563,5 +589,67 @@ mod tests {
                 "MCP field must carry the interrupting boundary for {label}"
             );
         }
+    }
+
+    /// Asserts the MCP mirror serializes per-tool GitHub MCP influence entries
+    /// for both a read and a write tool (SPRINT-017 R7).
+    #[test]
+    fn safe_explained_path_serializes_github_influence() {
+        use crate::application::findings::GitHubInfluenceView;
+        let path = ExplainedPath {
+            id: "p".to_string(),
+            fingerprint: "sha256:p".to_string(),
+            disposition: "ACTIVE".to_string(),
+            source_trust: "PUBLIC_EXTERNAL".to_string(),
+            influence_strength: "AGENT_INJECTABLE".to_string(),
+            capability: "EXECUTE".to_string(),
+            authority_resolution: "EXACT".to_string(),
+            sink_impact: "PRODUCTION".to_string(),
+            source_resource_id: "s".to_string(),
+            actor_resource_id: "a".to_string(),
+            sink_resource_id: "k".to_string(),
+            steps: vec![],
+            boundaries: vec![],
+            effective_bash_capability: None,
+            bash_boundary: None,
+            github_influence: vec![
+                GitHubInfluenceView {
+                    tool_name: "issue_read".to_string(),
+                    content_class: "github:public:issue-content".to_string(),
+                    trust: "PUBLIC_EXTERNAL".to_string(),
+                    influence_strength: "AGENT_INJECTABLE".to_string(),
+                },
+                GitHubInfluenceView {
+                    tool_name: "create_issue".to_string(),
+                    content_class: "github:write:issue".to_string(),
+                    trust: "UNKNOWN".to_string(),
+                    influence_strength: "AGENT_MUTABLE".to_string(),
+                },
+            ],
+        };
+        let safe = SafeExplainedPath::new(&path);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        let array = value["github_influence"]
+            .as_array()
+            .expect("github_influence must be an array");
+        assert_eq!(array.len(), 2);
+        assert_eq!(
+            array[0],
+            serde_json::json!({
+                "tool_name": "issue_read",
+                "content_class": "github:public:issue-content",
+                "trust": "PUBLIC_EXTERNAL",
+                "influence_strength": "AGENT_INJECTABLE",
+            })
+        );
+        assert_eq!(
+            array[1],
+            serde_json::json!({
+                "tool_name": "create_issue",
+                "content_class": "github:write:issue",
+                "trust": "UNKNOWN",
+                "influence_strength": "AGENT_MUTABLE",
+            })
+        );
     }
 }

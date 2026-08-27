@@ -149,6 +149,26 @@ pub struct ExplainedPath {
     /// The interrupting boundary kind imposed on the Bash `can_execute` edge,
     /// if the effective Bash capability is not AUTO_ALLOW/UNKNOWN (SPRINT-016 R7).
     pub bash_boundary: Option<String>,
+    /// Per-tool GitHub MCP influence collected from the path's edges
+    /// (SPRINT-017 R6/R7). Each entry records the GitHub MCP tool name and the
+    /// classification facts Pico can establish from the static config:
+    /// `content_class`, `trust`, and `influence_strength`.
+    pub github_influence: Vec<GitHubInfluenceView>,
+}
+
+/// One per-tool GitHub MCP influence entry surfaced on an explained path
+/// (SPRINT-017 R6/R7).
+///
+/// Pico establishes only what static OpenCode config admits: the official
+/// server identity, the declared tool, and the deterministic tool contract
+/// classification. Repo visibility is not observable from static config, so
+/// repository content trust is `UNKNOWN` unless the contract otherwise states.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GitHubInfluenceView {
+    pub tool_name: String,
+    pub content_class: String,
+    pub trust: String,
+    pub influence_strength: String,
 }
 
 /// One traversal-applied step of an explained path.
@@ -1014,6 +1034,54 @@ fn bash_capability_view(
     (None, None)
 }
 
+/// Collects per-tool GitHub MCP influence from the path's edges (SPRINT-017
+/// R6/R7). For each edge whose canonical key contains `mcp:github` (the GitHub
+/// MCP server / tool relationship keys), the GitHub MCP tool resource among the
+/// edge's endpoints is resolved and its classification facts are gathered.
+/// Entries are de-duplicated by tool name so each GitHub MCP tool appears once
+/// regardless of how many edges (can_call / can_retrieve / can_mutate) touch it.
+fn github_influence_views(
+    graph: &SecurityGraph,
+    edges: &[AttackPathEdgeRecord],
+) -> Vec<GitHubInfluenceView> {
+    use crate::analysis::model::metadata_string;
+    let mut by_tool: BTreeMap<String, GitHubInfluenceView> = BTreeMap::new();
+    for edge in edges {
+        let Some(graph_edge) = graph.edge(&edge.relationship_id) else {
+            continue;
+        };
+        if !graph_edge.canonical_key.contains("mcp:github") {
+            continue;
+        }
+        let Some(tool) = [&graph_edge.from_resource_id, &graph_edge.to_resource_id]
+            .iter()
+            .find_map(|id| graph.node(id))
+            .filter(|node| node.canonical_key.contains(":tool:"))
+        else {
+            continue;
+        };
+        let tool_name = tool
+            .canonical_key
+            .split_once(":tool:")
+            .map(|(_, name)| name.to_string())
+            .unwrap_or_else(|| tool.name.clone());
+        let content_class =
+            metadata_string(tool.safe_metadata.as_ref(), "content_class").unwrap_or_default();
+        let trust = metadata_string(tool.safe_metadata.as_ref(), "trust").unwrap_or_default();
+        let influence_strength =
+            metadata_string(tool.safe_metadata.as_ref(), "influence_strength").unwrap_or_default();
+        by_tool
+            .entry(tool_name.clone())
+            .or_insert(GitHubInfluenceView {
+                tool_name,
+                content_class,
+                trust,
+                influence_strength,
+            });
+    }
+    by_tool.into_values().collect()
+}
+
 fn explained_paths(
     conn: &Connection,
     graph: &SecurityGraph,
@@ -1034,6 +1102,7 @@ fn explained_paths(
         }
         let steps = path_steps(graph, path, &edges, reference)?;
         let (effective_bash_capability, bash_boundary) = bash_capability_view(graph, &edges);
+        let github_influence = github_influence_views(graph, &edges);
         let path_evidence_rows = paths_repo.list_evidence(&path.id)?;
         contiguous_positions(
             &format!("attack path {} evidence", path.id),
@@ -1067,6 +1136,7 @@ fn explained_paths(
             boundaries: boundary_views(path)?,
             effective_bash_capability,
             bash_boundary,
+            github_influence,
         });
     }
     Ok(output)

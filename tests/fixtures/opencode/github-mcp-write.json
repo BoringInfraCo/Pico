@@ -1,0 +1,18 @@
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "type": "local",
+        "command": ["docker", "run", "--rm", "ghcr.io/github/github-mcp-server:0.1.0"],
+        "tools": ["issue_read", "create_issue"],
+        "environment": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "TEST_SECRET_SHOULD_NOT_PERSIST"
+        }
+      }
+    }
+  },
+  "permissions": [
+    {"resource": "github_issue_read", "effect": "allow"},
+    {"resource": "github_create_issue", "effect": "allow"}
+  ]
+}

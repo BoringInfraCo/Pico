@@ -305,6 +305,18 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
                     ));
                 }
             }
+            if !path.github_influence.is_empty() {
+                out.push_str("GitHub MCP influence:\n");
+                for entry in &path.github_influence {
+                    out.push_str(&format!(
+                        "  GitHub MCP {}: {} | trust={} | influence={}\n",
+                        terminal_safe(&entry.tool_name),
+                        terminal_safe(&entry.content_class),
+                        terminal_safe(&entry.trust),
+                        terminal_safe(&entry.influence_strength),
+                    ));
+                }
+            }
             out.push('\n');
         }
     }

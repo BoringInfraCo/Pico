@@ -364,6 +364,12 @@ impl ScanService {
                         None => Resource::new(&tool_key, "mcp_tool", "github", &tool.name)?,
                     };
                     tool_resource.last_observed_at = chrono::Utc::now();
+                    // Mutable tools are consequential sinks: the mutation
+                    // authority path must terminate at the tool so the boundary
+                    // layer can surface the `can_mutate` edge. Set here (before
+                    // the resource observation is recorded) so projection sees
+                    // the Sink role.
+                    let is_mutable = tool.influence_strength == "AGENT_MUTABLE";
                     tool_resource.metadata = Some(serde_json::json!({
                         "content_class": tool.content_class,
                         "trust": tool.trust,
@@ -371,6 +377,7 @@ impl ScanService {
                         "discovery_tier": tool.discovery_tier,
                         "permission": tool.permission.as_str(),
                         "permission_pattern": tool.permission_pattern,
+                        "consequential_sink": is_mutable,
                     }));
                     resource_repo.upsert(&tool_resource)?;
                     observe_resource(
@@ -440,6 +447,37 @@ impl ScanService {
                         ),
                         &surface.server.source_locator,
                     )?;
+
+                    // Mutable tools carry an additional `can_mutate` capability
+                    // edge (in addition to the read `can_call` influence edge).
+                    // The tool resource is already marked a consequential sink so
+                    // the mutation authority path terminates and the boundary
+                    // layer can surface the edge as a mutation boundary. Reads
+                    // remain influence-only.
+                    if tool.influence_strength == "AGENT_MUTABLE" {
+                        let can_mutate_key = format!("agent:opencode|can_mutate|{tool_key}");
+                        persist_influence_relationship(
+                            &relationship_repo,
+                            &evidence_repo,
+                            &observation_repo,
+                            &scan.id,
+                            actor,
+                            &tool_resource,
+                            &can_mutate_key,
+                            "can_mutate",
+                            RelationshipState::Derived,
+                            serde_json::json!({
+                                "influence_strength": tool.influence_strength,
+                                "content_class": tool.content_class,
+                                "trust": tool.trust,
+                            }),
+                            &format!(
+                                "OpenCode MCP permission for {} permits GitHub mutation",
+                                tool.name
+                            ),
+                            &surface.server.source_locator,
+                        )?;
+                    }
                     let content_key = format!("source:{}", tool.content_class);
                     let content_name = match tool.content_class {
                         "github:public:issue-content" => "Public GitHub issue content",
