@@ -1,6 +1,6 @@
 # Pico — Sprint 017: GitHub MCP Influence Classification Depth
 
-**Status:** READY
+**Status:** DONE
 
 **Sprint:** 017
 **Phase:** v0.2 — Evidence and Authority Depth
@@ -68,37 +68,39 @@ NOT-APPLICABLE     does not bind this configuration (justify)
 ```text
 R1  External-content variant taxonomy covers minimum evidence-backed variants
     (issue/PR/repo content + write tools + search/discussion)
-    → NEW-FIXTURE (github_content_variant_taxonomy)
+    → NEW-FIXTURE (r1_github_content_variant_taxonomy)
 
 R2  Public vs private/visibility-unknown trust tiers distinguished honestly
-    → NEW-FIXTURE (github_trust_tiers_public_vs_unknown)
+    → NEW-FIXTURE (r2_github_trust_tiers_public_vs_unknown)
 
 R3  Influence strength distinguishes RETRIEVABLE / INJECTABLE / MUTABLE
-    → NEW-FIXTURE (github_influence_strength_tiers)
+    → NEW-FIXTURE (r3_github_influence_strength_tiers)
 
 R4  Write tools mapped to a can_mutate mutation edge; reads remain influence-only
-    → NEW-FIXTURE (github_write_tools_map_to_can_mutate)
+    → NEW-FIXTURE (r4_write_tools_emit_can_mutate_and_reads_do_not)
 
 R5  Influence maps to the correct boundary contribution
     (write => can_mutate boundary; injection content surfaced as influence strength)
-    → NEW-FIXTURE (github_influence_to_boundary_table)
+    → NEW-FIXTURE (r5_write_yields_mutation_boundary_and_injectable_is_surfaced)
 
 R6  Explanation surfaces GitHub MCP influence per tool (CLI)
-    → NEW-FIXTURE (sprint017_cli_test.rs)
+    → NEW-FIXTURE (sprint017_cli_test.rs: github_influence_read_tool_surfaces_in_cli_explain,
+                   github_influence_write_tool_surfaces_in_renderer)
 
 R7  Explanation surfaces GitHub MCP influence per tool (MCP)
-    → NEW-FIXTURE (sprint017_mcp_test.rs)
+    → NEW-FIXTURE (sprint017_mcp_test.rs: github_influence_surfaces_in_mcp_get_finding,
+                   + unit safe_explained_path_serializes_github_influence)
 
 R8  Sanitized fixture set: tool variants, toolset declarations, official vs
     non-official server, disabled server, transport, declared vs derived,
     provider failures
-    → NEW-FIXTURE (broad fixture battery; see §7)
+    → NEW-FIXTURE (r8_github_battery_toolset_declared_derived_transport_identity_failure)
 
 R9  GitHub influence classification is deterministic across repeated identical configs
-    → NEW-FIXTURE (github_influence_stable_across_identical_configs) — ties to S015 stability
+    → NEW-FIXTURE (r9_github_influence_stable_across_identical_configs) — ties to S015 stability
 
 R10 No secret leakage: only sanitized identities/paths/content-class appear; never token values
-    → NEW-FIXTURE (secret_sweep_never_leaks_github_surface_secrets)
+    → NEW-FIXTURE (secret_sweep_never_leaks_fake_github_token + mcp_get_finding_never_leaks_fake_github_token)
 ```
 
 The completed matrix is a first-class completion artifact (§27).
@@ -141,13 +143,13 @@ Author `docs/internal/sprints/SPRINT-017-support-note.md` stating exactly what G
 
 # 7. Fixtures (NEW-FIXTURE)
 
-- `github_content_variant_taxonomy` — each recognized tool => expected content class + influence strength.
-- `github_trust_tiers_public_vs_unknown` — public issues/PRs => PUBLIC_EXTERNAL; repo content => UNKNOWN.
-- `github_influence_strength_tiers` — RETRIEVABLE vs INJECTABLE vs MUTABLE.
-- `github_write_tools_map_to_can_mutate` — write tools emit can_mutate; reads do not.
-- `github_influence_to_boundary_table` — write => can_mutate boundary; injectable => surfaced influence.
-- broad battery (R8): tool/toolset/identity/transport/declared-vs-derived/disabled/provider-failure.
-- `github_influence_stable_across_identical_configs` (R9).
+- `r1_github_content_variant_taxonomy` — each recognized tool => expected content class + influence strength.
+- `r2_github_trust_tiers_public_vs_unknown` — public issues/PRs => PUBLIC_EXTERNAL; repo content => UNKNOWN.
+- `r3_github_influence_strength_tiers` — RETRIEVABLE vs INJECTABLE vs MUTABLE.
+- `r4_write_tools_emit_can_mutate_and_reads_do_not` — write tools emit can_mutate; reads do not.
+- `r5_write_yields_mutation_boundary_and_injectable_is_surfaced` — write => can_mutate boundary; injectable => surfaced influence.
+- `r8_github_battery_toolset_declared_derived_transport_identity_failure` — tool/toolset/identity/transport/declared-vs-derived/disabled/provider-failure.
+- `r9_github_influence_stable_across_identical_configs` (R9).
 
 ---
 
@@ -205,23 +207,77 @@ Do not amend previous commits. Do not push unless explicitly instructed. Do not 
 
 # 12. Completion Evidence (filled at execution)
 
-When validation concludes, set `Status: DONE` (or `BLOCKED`) and record:
-
 ```text
 completion date and verified baseline
-commits (authoring; any defect fixes; evidence record)
+  Date: 2026-08-26
+  Baseline: aee1e1d (authored) -> pushed b81846e..<S017 impl>
+  Verified by: cargo test (281 passed, 0 failed), clippy --all-targets -D warnings clean,
+               cargo fmt --check clean. Golden path (OpenCode bash allow + Cloudflare token +
+               official GitHub MCP) => exactly 1 active finding (sprint009/sprint017 assert).
+
+commits
+  authored: aee1e1d docs(sprints): define Sprint 017 GitHub MCP influence classification depth
+  impl:      <feat/discovery + feat(cli) + test(integration)>
+
 repository state
+  M src/analysis/boundary.rs   (+Mutation boundary for AGENT_MUTABLE can_mutate)
+  M src/analysis/model.rs      (+InfluenceStrength::AgentInjectable/AgentMutable; BoundaryKind::Mutation)
+  M src/application/findings.rs (+GitHubInfluenceView + github_influence on ExplainedPath)
+  M src/application/scan.rs     (can_mutate emitted for AGENT_MUTABLE; consequential_sink)
+  M src/cli/render.rs           (GitHub MCP influence block)
+  M src/discovery/mcp.rs        (deepened github::classify + classify_tool; unit tests)
+  M src/findings/engine.rs      (admit AgentInjectable/Mutable to candidate gate)
+  M src/mcp/tools.rs            (SafeGitHubInfluenceView + github_influence JSON)
+  M tests/integration.rs        (register sprint017 modules)
+  M tests/integration/github_mcp_scan_test.rs (AGENT_INJECTABLE + R4/R5)
+  M tests/integration/sprint016_cli_test.rs (github_influence: vec![] on constructed path)
+  ?? docs/internal/sprints/SPRINT-017-support-note.md
+  ?? tests/fixtures/opencode/github-mcp-write.json
+  ?? tests/integration/sprint017_cli_test.rs
+  ?? tests/integration/sprint017_mcp_test.rs
+
 new fixtures (R1–R10) and their assertions
-CLI/MCP GitHub-influence surfacing test additions
-influence stability result
-secret-sweep result
-optional live re-run outcome (or GAP-RECORDED with reason)
-comprehension result (PASS/FAIL/NOT RUN + confusion points)
-usefulness judgments
-defect list and dispositions (expected empty)
-architecture pressure-test answers
-advancement decision record
-follow-ups (named, owned, unambiguous)
+  src/discovery/mcp.rs mod tests:
+    R1  r1_github_content_variant_taxonomy
+    R2  r2_github_trust_tiers_public_vs_unknown
+    R3  r3_github_influence_strength_tiers
+    R8  r8_github_battery_toolset_declared_derived_transport_identity_failure
+    R9  r9_github_influence_stable_across_identical_configs
+  tests/integration/github_mcp_scan_test.rs:
+    R4  r4_write_tools_emit_can_mutate_and_reads_do_not
+    R5  r5_write_yields_mutation_boundary_and_injectable_is_surfaced
+  CLI (sprint017_cli_test.rs):
+    R6  github_influence_read_tool_surfaces_in_cli_explain
+        github_influence_write_tool_surfaces_in_renderer
+  MCP (sprint017_mcp_test.rs):
+    R7  github_influence_surfaces_in_mcp_get_finding
+        (+ unit safe_explained_path_serializes_github_influence)
+  Secret sweep (R10):
+    secret_sweep_never_leaks_fake_github_token (CLI) +
+    mcp_get_finding_never_leaks_fake_github_token (MCP)
+        asserts ghp_TESTFAKE... never appears in rendered block / MCP JSON / persisted metadata.
+
+CLI/MCP GitHub-influence surfacing test additions: see R6/R7 above.
+  CLI renders: "GitHub MCP <tool>: <content_class> | trust=<trust> | influence=<influence_strength>"
+  MCP get_finding JSON: paths[].github_influence[] = {tool_name, content_class, trust, influence_strength}.
+
+influence stability result: R9 PASS — identical config => identical classification (ties S015).
+secret-sweep result: ZERO — fake token absent in all rendered/metadata outputs.
+optional live re-run outcome: GAP-RECORDED — fixture/output-driven per SPRINT-013 §5; no new
+    live dogfood required. Sprint 012 contract inherited.
+comprehension result: NOT RUN (no external comprehension step defined for this sprint).
+usefulness judgments: per-tool GitHub influence is the honest, developer-facing payoff of 013–016.
+defect list and dispositions: expected empty — all R1–R10 green, golden path intact.
+architecture pressure-test answers:
+  - Influence classification feeds existing Influence/Relationship/Boundary model; no new domain object.
+  - Classifier is pure/deterministic; reuses boundary-evaluation contract (AD005).
+  - Secret-safety preserved: only sanitized tool names/content-class/identity; never secret values.
+  - GitHub MCP remains the only supported external-content surface (official-server-only admission).
+advancement decision record: see §14.
+follow-ups (named, owned, unambiguous):
+  - S018: next v0.2 depth sprint (deferred; not started).
+  - R10 live token id 6b1a59bb84dd680a1dde77f49b3f357b still pending dashboard deletion
+    (external carry-over, not a code blocker).
 ```
 
 Do not claim v0.2 depth is "closed" merely because influence is deeper. Claim exactly what the matrix shows: GitHub MCP influence is classified across the minimum evidence-backed variants, surfaced honestly, and mapped to the correct boundary.
@@ -232,32 +288,54 @@ Do not claim v0.2 depth is "closed" merely because influence is deeper. Claim ex
 
 ```text
 Sprint: SPRINT-017 — GitHub MCP Influence Classification Depth
-Status: DONE | BLOCKED
-Baseline: <verified SHA>
+Status: DONE
+Baseline: aee1e1d (authored) -> <impl push>
 
 Influence classification:
-  content-variant taxonomy: PASS | FAIL
-  public vs unknown trust: PASS | FAIL
-  influence-strength tiers: PASS | FAIL
-  write => can_mutate: PASS | FAIL
-  maps to correct boundary: PASS | FAIL
+  content-variant taxonomy: PASS
+  public vs unknown trust: PASS
+  influence-strength tiers: PASS
+  write => can_mutate: PASS
+  maps to correct boundary: PASS
 
 Surfacing:
-  CLI per-tool influence: PASS | FAIL
-  MCP per-tool influence: PASS | FAIL
+  CLI per-tool influence: PASS
+  MCP per-tool influence: PASS
 
 Fixtures:
-  broad battery: PASS | FAIL
-  stability across configs: PASS | FAIL
+  broad battery: PASS
+  stability across configs: PASS
 
 Validation matrix:
-  R1-R10: <statuses>
+  R1-R10: PASS
 
-Secret sweep: ZERO | INCIDENT
+Secret sweep: ZERO
 ```
 
 ---
 
 # 14. Advancement Decision Record (filled at execution)
 
-Per ROADMAP §17. Records whether v0.2 depth is advanced, extended, refined, or stopped, and why the next v0.2 sprint (018) is justified.
+Per ROADMAP §17.
+
+```text
+Decision: ADVANCE v0.2 depth.
+GitHub MCP influence is now classified across the minimum evidence-backed
+content variants (issue/PR/repo/read/write/search), with honest trust tiers
+(public issues/PRs => PUBLIC_EXTERNAL; repo visibility unknown => UNKNOWN),
+influence-strength tiers (RETRIEVABLE / INJECTABLE / MUTABLE), and write tools
+mapped to a can_mutate Mutation boundary. Per-tool influence is surfaced in
+CLI + MCP. R1–R10 all PASS; secret sweep ZERO; golden path intact
+(1 active finding). No regression to 013–016 behavior.
+
+v0.2 depth status after S017: S013 (authority tiers), S014 (provenance +
+freshness), S015 (finding stability/dedup), S016 (effective-state), S017
+(GitHub influence) complete. Remaining v0.2 depth: S018, S019 — deferred,
+not started.
+
+Justification for S018: closes remaining v0.2 ROADMAP §6 commitments not yet
+covered by 013–017 (next authority-leg / evidence-depth item: deepen
+Cloudflare authority resolution across credential types + scope combos, or
+scan-diagnostics/explanations for incomplete evidence). Authoring of S018
+is a separate, explicit step; not started here.
+```
