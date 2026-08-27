@@ -10,7 +10,7 @@ use tempfile::tempdir;
 fn init_and_scan_work_offline_in_temp_workspace() {
     let dir = tempdir().unwrap();
     let init = InitService::run(dir.path()).unwrap();
-    assert_eq!(init.schema_version, 4);
+    assert_eq!(init.schema_version, 5);
     let scan = ScanService::run_with_home(dir.path(), None).unwrap();
     assert_eq!(scan.status, ScanStatus::Complete);
     assert_eq!(scan.resource_count, 0);

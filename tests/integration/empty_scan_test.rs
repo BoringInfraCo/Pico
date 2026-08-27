@@ -8,10 +8,10 @@ use pico::shared::PicoError;
 use tempfile::tempdir;
 
 #[test]
-fn init_creates_workspace_at_schema_version_4() {
+fn init_creates_workspace_at_schema_version_5() {
     let dir = tempdir().unwrap();
     let result = InitService::run(dir.path()).unwrap();
-    assert_eq!(result.schema_version, 4);
+    assert_eq!(result.schema_version, 5);
     assert_eq!(result.workspace, dir.path());
     assert_eq!(result.db_path, dir.path().join(".pico").join("pico.db"));
     assert!(result.db_path.exists());
@@ -22,7 +22,7 @@ fn init_is_idempotent_and_does_not_reset() {
     let dir = tempdir().unwrap();
     let first = InitService::run(dir.path()).unwrap();
     let second = InitService::run(dir.path()).unwrap();
-    assert_eq!(second.schema_version, 4);
+    assert_eq!(second.schema_version, 5);
     assert_eq!(second.schema_version, first.schema_version);
     assert_eq!(second.db_path, first.db_path);
     assert!(second.db_path.exists());

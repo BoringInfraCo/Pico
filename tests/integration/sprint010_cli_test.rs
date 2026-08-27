@@ -326,6 +326,7 @@ fn empty_and_uninitialized_states_render_distinct_guidance() {
              DELETE FROM attack_path_edges; DELETE FROM attack_path_evidence;
              DELETE FROM attack_paths;
              DELETE FROM scan_analyses;
+             DELETE FROM scan_diagnostics;
              DELETE FROM observations;
              DELETE FROM relationship_evidence; DELETE FROM evidence;
              DELETE FROM relationships; DELETE FROM resources;

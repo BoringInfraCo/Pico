@@ -348,6 +348,7 @@ fn scans_without_a_complete_scan_report_the_newest_attempt() {
              DELETE FROM attack_path_edges; DELETE FROM attack_path_evidence;
              DELETE FROM attack_paths;
              DELETE FROM scan_analyses;
+             DELETE FROM scan_diagnostics;
              DELETE FROM observations;
              DELETE FROM relationship_evidence; DELETE FROM evidence;
              DELETE FROM scans;",
