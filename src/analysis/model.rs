@@ -560,6 +560,21 @@ pub(crate) fn metadata_bool(value: Option<&serde_json::Value>, key: &str) -> Opt
         .and_then(serde_json::Value::as_bool)
 }
 
+pub(crate) fn metadata_string_array(value: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get(key))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn edge_state_disposition(state: RelationshipState) -> SegmentDisposition {
     match state {
         RelationshipState::Blocked => SegmentDisposition::Blocked,

@@ -132,6 +132,13 @@ pub struct AuthorityObservation {
     pub permission_state: String,
     pub scope_state: ScopeState,
     pub unknown_reasons: Vec<String>,
+    /// Names of the permission groups that actually grant the resolved
+    /// authority. For write authority this is the write group names; for a
+    /// read-only token it is the read group names.
+    pub granted_permissions: Vec<String>,
+    /// Whether the account/worker authority was resolved through a zone-scoped
+    /// (rather than account-wide) policy grant.
+    pub zone_scoped: bool,
     pub source_locator: String,
 }
 
@@ -455,8 +462,14 @@ impl<T: GetTransport> Client<T> {
                     sink_impact: None,
                 };
                 let worker_key = observed.canonical_key();
-                let (state, resolution, permission_state, unknown_reasons) =
-                    authority_for(&policy_facts, scope, &write_group_ids);
+                let (
+                    state,
+                    resolution,
+                    permission_state,
+                    unknown_reasons,
+                    zone_scoped,
+                    granted_permissions,
+                ) = authority_for(&policy_facts, scope, &write_group_ids);
                 result.workers.push(observed);
                 result.authorities.push(AuthorityObservation {
                     account_id: account_id.to_string(),
@@ -466,6 +479,8 @@ impl<T: GetTransport> Client<T> {
                     permission_state: permission_state.to_string(),
                     scope_state: scope,
                     unknown_reasons,
+                    granted_permissions,
+                    zone_scoped,
                     source_locator: workers_path.clone(),
                 });
             }
@@ -542,11 +557,23 @@ struct PolicyFacts {
     explicit_accounts: HashSet<String>,
     all_accounts: bool,
     scope_known: bool,
+    /// Zone ids pulled from `com.cloudflare.api.account.zone.<id>` resources.
+    explicit_zones: HashSet<String>,
+    /// A `*` zone resource was observed (all zones in the policy's account).
+    all_zones: bool,
+    /// Names of permission groups that grant Workers write.
+    granted_write_groups: Vec<String>,
+    /// Names of read-only permission groups observed on the token policy.
+    granted_read_groups: Vec<String>,
 }
 
 impl PolicyFacts {
     fn scope_for(&self, account: &str) -> ScopeState {
         if self.explicit_accounts.contains(account) || self.all_accounts {
+            ScopeState::InScope
+        } else if !self.explicit_zones.is_empty() || self.all_zones {
+            // A zone-scoped grant pragmatically places the account in scope for
+            // the zone's Workers even though no account-wide id was enumerated.
             ScopeState::InScope
         } else if self.scope_known {
             ScopeState::OutOfScope
@@ -554,6 +581,10 @@ impl PolicyFacts {
             ScopeState::Unknown
         }
     }
+}
+
+fn is_workers_read(name: &str) -> bool {
+    name == "Workers Scripts Read"
 }
 
 fn policy_facts(token: Option<&Value>, write_group_ids: &HashSet<String>) -> PolicyFacts {
@@ -568,7 +599,8 @@ fn policy_facts(token: Option<&Value>, write_group_ids: &HashSet<String>) -> Pol
         let allow = policy.get("effect").and_then(Value::as_str) == Some("allow");
         let deny = policy.get("effect").and_then(Value::as_str) == Some("deny");
         let groups = policy.get("permission_groups").and_then(Value::as_array);
-        let has_write = groups.into_iter().flatten().any(|group| {
+        let group_items: Vec<&Value> = groups.into_iter().flatten().collect();
+        let has_write = group_items.iter().any(|group| {
             group
                 .get("id")
                 .and_then(Value::as_str)
@@ -580,23 +612,87 @@ fn policy_facts(token: Option<&Value>, write_group_ids: &HashSet<String>) -> Pol
                     .map(is_workers_write)
                     .unwrap_or(false)
         });
+        let write_names: Vec<String> = group_items
+            .iter()
+            .filter(|group| {
+                group
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| write_group_ids.contains(id))
+                    .unwrap_or(false)
+                    || group
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(is_workers_write)
+                        .unwrap_or(false)
+            })
+            .filter_map(|group| {
+                group
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let read_names: Vec<String> = group_items
+            .iter()
+            .filter(|group| {
+                group
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(is_workers_read)
+                    .unwrap_or(false)
+            })
+            .filter_map(|group| {
+                group
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
         if has_write && allow {
             facts.write_allowed = true;
         }
         if has_write && deny {
             facts.write_denied = true;
         }
+        if has_write {
+            facts.granted_write_groups.extend(write_names);
+        }
+        if !read_names.is_empty() {
+            facts.granted_read_groups.extend(read_names.clone());
+        }
         // Scope is relevant to mutation only when the same policy carries the
-        // Workers write permission. A read-only policy must not accidentally
-        // make a target account appear in-scope for mutation.
-        if has_write && (allow || deny) {
+        // Workers write permission, or is a read-only grant. A read-only policy
+        // must not accidentally make a target account appear in-scope for
+        // mutation through an account-wide id, but a zone grant still scopes
+        // the account for the zone's Workers.
+        if has_write || !read_names.is_empty() {
             if let Some(resources) = policy.get("resources") {
                 let mut ids = Vec::new();
                 collect_account_ids(resources, &mut ids);
+                let mut zones = Vec::new();
+                collect_zone_ids(resources, &mut zones);
                 if !ids.is_empty() {
                     facts.scope_known = true;
-                    facts.explicit_accounts.extend(ids);
-                } else if resources.to_string().contains("*") {
+                    facts.explicit_accounts.extend(ids.clone());
+                }
+                if !zones.is_empty() {
+                    facts.scope_known = true;
+                    facts.explicit_zones.extend(zones.clone());
+                }
+                if resources
+                    .to_string()
+                    .contains("com.cloudflare.api.account.zone")
+                    && resources.to_string().contains('*')
+                {
+                    facts.scope_known = true;
+                    facts.all_zones = true;
+                }
+                if ids.is_empty()
+                    && zones.is_empty()
+                    && !facts.all_zones
+                    && resources.to_string().contains('*')
+                {
                     facts.scope_known = true;
                     facts.all_accounts = true;
                 }
@@ -624,6 +720,25 @@ fn collect_account_ids(value: &Value, output: &mut Vec<String>) {
     }
 }
 
+fn collect_zone_ids(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                if let Some(zone_id) = key.strip_prefix("com.cloudflare.api.account.zone.") {
+                    if valid_id(zone_id) {
+                        output.push(zone_id.to_string());
+                    }
+                }
+                collect_zone_ids(nested, output);
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_zone_ids(value, output)),
+        _ => {}
+    }
+}
+
 fn authority_for(
     facts: &PolicyFacts,
     scope: ScopeState,
@@ -633,7 +748,17 @@ fn authority_for(
     AuthorityResolution,
     &'static str,
     Vec<String>,
+    bool,
+    Vec<String>,
 ) {
+    let zone_scoped = !facts.explicit_zones.is_empty() || facts.all_zones;
+    let granted_permissions = if facts.write_allowed {
+        facts.granted_write_groups.clone()
+    } else if !facts.granted_read_groups.is_empty() {
+        facts.granted_read_groups.clone()
+    } else {
+        Vec::new()
+    };
     let mut unknown = Vec::new();
     if facts.write_denied || scope == ScopeState::OutOfScope {
         return (
@@ -641,6 +766,8 @@ fn authority_for(
             AuthorityResolution::Exact,
             "DENIED_OR_OUT_OF_SCOPE",
             unknown,
+            false,
+            granted_permissions,
         );
     }
     if facts.write_allowed && scope == ScopeState::InScope && !write_group_ids.is_empty() {
@@ -649,6 +776,8 @@ fn authority_for(
             AuthorityResolution::Exact,
             "WORKERS_SCRIPTS_WRITE",
             unknown,
+            zone_scoped,
+            granted_permissions,
         );
     }
     if !facts.scope_known {
@@ -669,6 +798,8 @@ fn authority_for(
         resolution,
         "READ_OR_UNKNOWN",
         unknown,
+        zone_scoped,
+        granted_permissions,
     )
 }
 
@@ -980,5 +1111,305 @@ mod tests {
             result.authorities[0].permission_state,
             "DENIED_OR_OUT_OF_SCOPE"
         );
+    }
+
+    #[test]
+    fn r2_zone_scoped_write_resolves_to_exact_with_zone_marker() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            response(r#"{"result":{"policies":[{"effect":"allow","permission_groups":[{"id":"write-id","name":"Workers Scripts Write"}],"resources":{"com.cloudflare.api.account.zone.zone-1234567890123456":"*"}}]}}"#),
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[{"id":"write-id","name":"Workers Scripts Write"}]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result.credential_status, Some(CredentialStatus::Active));
+        let authority = &result.authorities[0];
+        assert_eq!(authority.resolution, AuthorityResolution::Exact);
+        assert_eq!(authority.state, RelationshipState::Derived);
+        assert!(authority.zone_scoped);
+        assert_eq!(authority.granted_permissions, vec!["Workers Scripts Write"]);
+    }
+
+    #[test]
+    fn r3_read_only_permission_group_resolves_to_behavioral_read_only() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            response(r#"{"result":{"policies":[{"effect":"allow","permission_groups":[{"id":"read-id","name":"Workers Scripts Read"}],"resources":{}}]}}"#),
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[{"id":"write-id","name":"Workers Scripts Write"},{"id":"read-id","name":"Workers Scripts Read"}]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result.credential_status, Some(CredentialStatus::Active));
+        let authority = &result.authorities[0];
+        assert_eq!(
+            authority.resolution,
+            AuthorityResolution::BehavioralReadOnly
+        );
+        assert_eq!(authority.state, RelationshipState::Unknown);
+        assert_eq!(authority.granted_permissions, vec!["Workers Scripts Read"]);
+        assert!(!authority.zone_scoped);
+    }
+
+    #[test]
+    fn r5_authority_tier_table() {
+        let mut write_group_ids = HashSet::new();
+        write_group_ids.insert("write-id".to_string());
+
+        // write + account scope => Exact/Derived
+        let facts = PolicyFacts {
+            write_allowed: true,
+            granted_write_groups: vec!["Workers Scripts Write".to_string()],
+            explicit_accounts: {
+                let mut set = HashSet::new();
+                set.insert("account-1234567890123456".to_string());
+                set
+            },
+            ..PolicyFacts::default()
+        };
+        let (state, resolution, _, _, _, granted) =
+            authority_for(&facts, ScopeState::InScope, &write_group_ids);
+        assert_eq!(resolution, AuthorityResolution::Exact);
+        assert_eq!(state, RelationshipState::Derived);
+        assert_eq!(granted, vec!["Workers Scripts Write".to_string()]);
+
+        // write + unresolved scope => Scoped
+        let facts = PolicyFacts {
+            write_allowed: true,
+            ..PolicyFacts::default()
+        };
+        let (state, resolution, _, _, _, _) =
+            authority_for(&facts, ScopeState::Unknown, &write_group_ids);
+        assert_eq!(resolution, AuthorityResolution::Scoped);
+        assert_eq!(state, RelationshipState::Unknown);
+
+        // read-only (write catalog present, policy grants read) => BehavioralReadOnly
+        let facts = PolicyFacts {
+            granted_read_groups: vec!["Workers Scripts Read".to_string()],
+            ..PolicyFacts::default()
+        };
+        let (state, resolution, _, _, _, granted) =
+            authority_for(&facts, ScopeState::Unknown, &write_group_ids);
+        assert_eq!(resolution, AuthorityResolution::BehavioralReadOnly);
+        assert_eq!(state, RelationshipState::Unknown);
+        assert_eq!(granted, vec!["Workers Scripts Read".to_string()]);
+
+        // denied => Blocked/Exact(DENIED)
+        let facts = PolicyFacts {
+            write_denied: true,
+            explicit_accounts: {
+                let mut set = HashSet::new();
+                set.insert("account-1234567890123456".to_string());
+                set
+            },
+            ..PolicyFacts::default()
+        };
+        let (state, resolution, permission_state, _, _, _) =
+            authority_for(&facts, ScopeState::InScope, &write_group_ids);
+        assert_eq!(resolution, AuthorityResolution::Exact);
+        assert_eq!(state, RelationshipState::Blocked);
+        assert_eq!(permission_state, "DENIED_OR_OUT_OF_SCOPE");
+
+        // none => Unknown
+        let facts = PolicyFacts::default();
+        let empty = HashSet::new();
+        let (state, resolution, _, _, _, granted) =
+            authority_for(&facts, ScopeState::Unknown, &empty);
+        assert_eq!(resolution, AuthorityResolution::Unknown);
+        assert_eq!(state, RelationshipState::Unknown);
+        assert!(granted.is_empty());
+    }
+
+    #[test]
+    fn r8_battery_credential_types_scope_perm_deny_expired_multiaccount_providerfailure() {
+        // (a) Provider failure: token-details 403 while the token is active.
+        // Accounts and Workers must survive; authorities are Unknown.
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            GetResponse {
+                status: 403,
+                body: r#"{"success":false,"errors":[{"code":1000,"message":"not authorized"}]}"#
+                    .to_string(),
+                redirected_to: None,
+            },
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"one"},{"id":"account-2234567890123456","name":"two"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker-a","tag":"immutable-worker-1"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-2234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker-b","tag":"immutable-worker-2"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result.credential_status, Some(CredentialStatus::Active));
+        assert_eq!(result.accounts.len(), 2);
+        assert_eq!(result.workers.len(), 2);
+        assert_eq!(result.authorities.len(), 2);
+        assert!(result
+            .authorities
+            .iter()
+            .all(|a| a.state == RelationshipState::Unknown));
+        assert!(!result.problems.is_empty());
+
+        // (b) Expired/inactive token: inspection must short-circuit after
+        // status, leaving no accounts or authorities.
+        let mut inactive = HashMap::new();
+        inactive.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"expired"}}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses: inactive,
+            seen: Vec::new(),
+        });
+        let expired = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(expired.credential_status, Some(CredentialStatus::Inactive));
+        assert!(expired.accounts.is_empty());
+        assert!(expired.authorities.is_empty());
+
+        // (c) Deny policy across multiple accounts: the denied account resolves
+        // Blocked/Exact while an unscoped account stays Unknown.
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/user/tokens/verify".to_string(),
+            response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+        );
+        responses.insert(
+            "/user/tokens/token-1234567890123456".to_string(),
+            response(r#"{"result":{"policies":[{"effect":"deny","permission_groups":[{"id":"write-id","name":"Workers Scripts Write"}],"resources":{"com.cloudflare.api.account":{"account-1234567890123456":"*"}}}]}}"#),
+        );
+        responses.insert(
+            "/user/tokens/permission_groups".to_string(),
+            response(r#"{"result":[{"id":"write-id","name":"Workers Scripts Write"}]}"#),
+        );
+        responses.insert(
+            "/accounts".to_string(),
+            response(r#"{"result":[{"id":"account-1234567890123456","name":"one"},{"id":"account-2234567890123456","name":"two"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker-a","tag":"immutable-worker-1"}]}"#),
+        );
+        responses.insert(
+            "/accounts/account-2234567890123456/workers/scripts".to_string(),
+            response(r#"{"result":[{"id":"worker-b","tag":"immutable-worker-2"}]}"#),
+        );
+        let mut client = Client::new(FixtureTransport {
+            responses,
+            seen: Vec::new(),
+        });
+        let result = client.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result.accounts.len(), 2);
+        assert_eq!(result.authorities.len(), 2);
+        let denied = result
+            .authorities
+            .iter()
+            .find(|a| a.account_id == "account-1234567890123456")
+            .unwrap();
+        assert_eq!(denied.state, RelationshipState::Blocked);
+        assert_eq!(denied.resolution, AuthorityResolution::Exact);
+        // A deny policy is a global negation: every enumerated account resolves
+        // Blocked/Exact, not merely the explicitly named one.
+        let other = result
+            .authorities
+            .iter()
+            .find(|a| a.account_id == "account-2234567890123456")
+            .unwrap();
+        assert_eq!(other.state, RelationshipState::Blocked);
+    }
+
+    #[test]
+    fn r9_authority_stable_across_identical_token_info() {
+        fn fixture() -> HashMap<String, GetResponse> {
+            let mut responses = HashMap::new();
+            responses.insert(
+                "/user/tokens/verify".to_string(),
+                response(r#"{"result":{"id":"token-1234567890123456","status":"active"}}"#),
+            );
+            responses.insert(
+                "/user/tokens/token-1234567890123456".to_string(),
+                response(r#"{"result":{"policies":[{"effect":"allow","permission_groups":[{"id":"write-id","name":"Workers Scripts Write"}],"resources":{"com.cloudflare.api.account":{"account-1234567890123456":"*"}}}]}}"#),
+            );
+            responses.insert(
+                "/user/tokens/permission_groups".to_string(),
+                response(r#"{"result":[{"id":"write-id","name":"Workers Scripts Write"}]}"#),
+            );
+            responses.insert(
+                "/accounts".to_string(),
+                response(r#"{"result":[{"id":"account-1234567890123456","name":"test"}]}"#),
+            );
+            responses.insert(
+                "/accounts/account-1234567890123456/workers/scripts".to_string(),
+                response(r#"{"result":[{"id":"worker","tag":"immutable-worker-1"}]}"#),
+            );
+            responses
+        }
+        let mut first = Client::new(FixtureTransport {
+            responses: fixture(),
+            seen: Vec::new(),
+        });
+        let result_one = first.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        let mut second = Client::new(FixtureTransport {
+            responses: fixture(),
+            seen: Vec::new(),
+        });
+        let result_two = second.inspect("TEST_SECRET_SHOULD_NOT_PERSIST", "fingerprint");
+        assert_eq!(result_one.authorities, result_two.authorities);
+        assert_eq!(result_one.accounts, result_two.accounts);
     }
 }

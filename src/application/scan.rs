@@ -1062,6 +1062,16 @@ fn persist_cloudflare_provider_result(
     let status = result
         .credential_status
         .map(|value| value.as_str().to_string());
+    // The safe credential_type projection was stored on the credential Resource
+    // by the ScanService; carry it onto the Worker mutation relationship so the
+    // persisted authority records what kind of credential produced it.
+    let credential_type = credential
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("credential_type"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("api_token")
+        .to_string();
     // Refresh only safe provider status on the already-normalized credential
     // Resource. The token identifier and raw provider response remain
     // transient and are deliberately not persisted here.
@@ -1206,6 +1216,9 @@ fn persist_cloudflare_provider_result(
                 "account_scope_state": authority.scope_state.as_str(),
                 "target_observation_state": "OBSERVED",
                 "sink_impact": sink_impact,
+                "credential_type": credential_type,
+                "granted_permissions": authority.granted_permissions,
+                "zone_scoped": authority.zone_scoped,
                 "unknown_reasons": authority.unknown_reasons,
             });
             persist_cloudflare_relationship(
@@ -1239,6 +1252,9 @@ fn persist_cloudflare_provider_result(
                 "capability": "WORKERS_SCRIPTS_WRITE",
                 "authority_resolution": AuthorityResolution::Unknown.as_str(),
                 "credential_status": credential_status,
+                "credential_type": credential_type,
+                "granted_permissions": serde_json::Value::Array(Vec::new()),
+                "zone_scoped": false,
                 "unknown_reasons": ["AUTHORITY_RESULT_UNAVAILABLE"],
             });
             persist_cloudflare_relationship(

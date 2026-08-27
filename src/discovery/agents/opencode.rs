@@ -12,11 +12,16 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::discovery::cloudflare::{
+    AuthorityObservation, AuthorityResolution, CredentialStatus, ObservedWorker, ProviderResult,
+    ScopeState,
+};
 use crate::discovery::{
     CapabilityScope, DiscoveryResult, EffectiveBashPermission, EnvironmentReachability,
     McpTransport, ObservedActor, ObservedBashCapability, ObservedCredential, ObservedMcpServer,
     PermissionAction,
 };
+use crate::domain::RelationshipState;
 use crate::shared::PicoError;
 
 const CONFIG_NAMES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
@@ -145,7 +150,7 @@ pub fn discover_with_environment(
             {
                 result.credentials.push(ObservedCredential {
                     provider: "cloudflare",
-                    credential_type: "api_token",
+                    credential_type: classify_credential_type(&value.0),
                     source_type: "environment",
                     source_locator: CLOUDFLARE_TOKEN_ENV.to_string(),
                     fingerprint: value.fingerprint(),
@@ -162,7 +167,7 @@ pub fn discover_with_environment(
             {
                 result.credentials.push(ObservedCredential {
                     provider: "cloudflare",
-                    credential_type: "api_token",
+                    credential_type: classify_credential_type(&value.0),
                     source_type: "project_dotenv",
                     source_locator: ".env:CLOUDFLARE_API_TOKEN".to_string(),
                     fingerprint: value_fingerprint.clone(),
@@ -178,10 +183,44 @@ pub fn discover_with_environment(
                         && capability.scope == CapabilityScope::Unrestricted
                 });
             if provider_reachable {
-                result.cloudflare = Some(crate::discovery::cloudflare::inspect_live(
-                    &value.0,
-                    &value_fingerprint,
-                ));
+                if classify_credential_type(&value.0) == "api_key" {
+                    // A global API key cannot be resolved through the scoped
+                    // token endpoints, so synthesize the bounded, unverified
+                    // resolution directly. The raw key never leaves this scope.
+                    let global_worker = ObservedWorker {
+                        account_id: "global".to_string(),
+                        script_name: "*".to_string(),
+                        worker_tag: None,
+                        source_locator: "credential:cloudflare:global_api_key".to_string(),
+                        sink_impact: Some("UNKNOWN".to_string()),
+                    };
+                    let global_key = global_worker.canonical_key();
+                    result.cloudflare = Some(ProviderResult {
+                        credential_fingerprint: value_fingerprint.clone(),
+                        credential_status: Some(CredentialStatus::Active),
+                        verified_token_id: None,
+                        accounts: Vec::new(),
+                        workers: vec![global_worker],
+                        authorities: vec![AuthorityObservation {
+                            account_id: "global".to_string(),
+                            worker_key: global_key,
+                            state: RelationshipState::Derived,
+                            resolution: AuthorityResolution::Exact,
+                            permission_state: "GLOBAL_API_KEY".to_string(),
+                            scope_state: ScopeState::InScope,
+                            unknown_reasons: vec!["GLOBAL_KEY_UNVERIFIED".to_string()],
+                            granted_permissions: Vec::new(),
+                            zone_scoped: false,
+                            source_locator: "credential:cloudflare:global_api_key".to_string(),
+                        }],
+                        problems: Vec::new(),
+                    });
+                } else {
+                    result.cloudflare = Some(crate::discovery::cloudflare::inspect_live(
+                        &value.0,
+                        &value_fingerprint,
+                    ));
+                }
             }
         }
     }
@@ -218,6 +257,40 @@ fn project_dotenv_token(workspace: &Path) -> Option<TransientCredential> {
             .trim();
         (!value.is_empty()).then(|| TransientCredential::new(value.to_string()))
     })
+}
+
+/// Classify a Cloudflare credential by its lexical shape. This is a best-effort
+/// heuristic used only to choose the correct safe persistence projection; it is
+/// never a substitute for live verification.
+///
+/// * `cfut_` prefixes identify API tokens.
+/// * `cwo_` / `fou_` prefixes, or a long (>=40) non-global-key token, identify
+///   OAuth tokens.
+/// * A long alphanumeric/hex string (>=32, not a token/oauth prefix) identifies
+///   a global API key.
+/// * Anything unrecognized falls back to `api_token` (the safe default: it is
+///   scoped and never assumed to carry global authority).
+fn classify_credential_type(value: &str) -> &'static str {
+    let candidate = value.trim();
+    if candidate.starts_with("cfut_") {
+        return "api_token";
+    }
+    if candidate.starts_with("cwo_") || candidate.starts_with("fou_") {
+        return "oauth";
+    }
+    let alnum = candidate
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .count();
+    let global_key_shape = (32..=64).contains(&candidate.len())
+        && candidate.chars().all(|c| c.is_ascii_alphanumeric());
+    if alnum >= 40 && !global_key_shape {
+        return "oauth";
+    }
+    if global_key_shape {
+        return "api_key";
+    }
+    "api_token"
 }
 
 fn fingerprint(value: &str) -> String {
@@ -1443,5 +1516,35 @@ mod tests {
         let second = resolve_effective_bash(&config).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.2, EffectiveBashPermission::AutoAllow);
+    }
+
+    #[test]
+    fn r1_classifies_credential_type_by_format() {
+        // API token prefixes.
+        assert_eq!(
+            classify_credential_type("cfut_TESTFAKE0000000000000000000000000000"),
+            "api_token"
+        );
+        // Global API key shape: long hexadecimal, no token/oauth prefix.
+        assert_eq!(
+            classify_credential_type("0123456789abcdef0123456789abcdef0123456789abcdef"),
+            "api_key"
+        );
+        // Explicit OAuth prefixes.
+        assert_eq!(
+            classify_credential_type("cwo_TESTFAKE0000000000000000000000000000"),
+            "oauth"
+        );
+        assert_eq!(
+            classify_credential_type("fou_TESTFAKE0000000000000000000000000000"),
+            "oauth"
+        );
+        // Long non-global-key token with structure (not pure alphanumeric): oauth.
+        assert_eq!(
+            classify_credential_type("ya29.oauth_token_with_dots_and_underscores_0123456789"),
+            "oauth"
+        );
+        // Unrecognized short value falls back to the safe api_token default.
+        assert_eq!(classify_credential_type("short"), "api_token");
     }
 }

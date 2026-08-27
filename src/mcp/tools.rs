@@ -326,6 +326,7 @@ struct SafeExplainedPath {
     effective_bash_capability: Option<String>,
     bash_boundary: Option<String>,
     github_influence: Vec<SafeGitHubInfluenceView>,
+    cloudflare_authority: Vec<SafeCloudflareAuthorityView>,
 }
 
 impl SafeExplainedPath {
@@ -351,6 +352,36 @@ impl SafeExplainedPath {
                 .iter()
                 .map(SafeGitHubInfluenceView::new)
                 .collect(),
+            cloudflare_authority: path
+                .cloudflare_authority
+                .iter()
+                .map(SafeCloudflareAuthorityView::new)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SafeCloudflareAuthorityView {
+    worker_key: String,
+    credential_type: String,
+    granted_permissions: Vec<String>,
+    authority_resolution: String,
+    permission_state: String,
+    account_scope_state: String,
+    zone_scoped: bool,
+}
+
+impl SafeCloudflareAuthorityView {
+    fn new(entry: &crate::application::findings::CloudflareAuthorityView) -> Self {
+        SafeCloudflareAuthorityView {
+            worker_key: terminal_safe(&entry.worker_key),
+            credential_type: terminal_safe(&entry.credential_type),
+            granted_permissions: safe_strings(&entry.granted_permissions),
+            authority_resolution: terminal_safe(&entry.authority_resolution),
+            permission_state: terminal_safe(&entry.permission_state),
+            account_scope_state: terminal_safe(&entry.account_scope_state),
+            zone_scoped: entry.zone_scoped,
         }
     }
 }
@@ -575,6 +606,7 @@ mod tests {
                 effective_bash_capability: Some(label.to_string()),
                 bash_boundary: boundary.map(str::to_string),
                 github_influence: vec![],
+                cloudflare_authority: vec![],
             };
             let safe = SafeExplainedPath::new(&path);
             let value = serde_json::to_value(&safe).expect("serializable");
@@ -626,6 +658,7 @@ mod tests {
                     influence_strength: "AGENT_MUTABLE".to_string(),
                 },
             ],
+            cloudflare_authority: vec![],
         };
         let safe = SafeExplainedPath::new(&path);
         let value = serde_json::to_value(&safe).expect("serializable");
@@ -650,6 +683,75 @@ mod tests {
                 "trust": "UNKNOWN",
                 "influence_strength": "AGENT_MUTABLE",
             })
+        );
+    }
+
+    /// Asserts the MCP mirror serializes per-Cloudflare-edge authority entries
+    /// with the credential type, granted permission groups, resolution tier,
+    /// permission state, scope state, and zone-scoped flag (SPRINT-018 R7).
+    #[test]
+    fn safe_explained_path_serializes_cloudflare_authority() {
+        use crate::application::findings::CloudflareAuthorityView;
+        let path = ExplainedPath {
+            id: "p".to_string(),
+            fingerprint: "sha256:p".to_string(),
+            disposition: "ACTIVE".to_string(),
+            source_trust: "PUBLIC_EXTERNAL".to_string(),
+            influence_strength: "AGENT_INJECTABLE".to_string(),
+            capability: "EXECUTE".to_string(),
+            authority_resolution: "EXACT".to_string(),
+            sink_impact: "PRODUCTION".to_string(),
+            source_resource_id: "s".to_string(),
+            actor_resource_id: "a".to_string(),
+            sink_resource_id: "k".to_string(),
+            steps: vec![],
+            boundaries: vec![],
+            effective_bash_capability: None,
+            bash_boundary: None,
+            github_influence: vec![],
+            cloudflare_authority: vec![
+                CloudflareAuthorityView {
+                    worker_key: "cloudflare:worker:account-1234567890123456:tag".to_string(),
+                    credential_type: "api_token".to_string(),
+                    granted_permissions: vec!["Workers Scripts Write".to_string()],
+                    authority_resolution: "EXACT".to_string(),
+                    permission_state: "WORKERS_SCRIPTS_WRITE".to_string(),
+                    account_scope_state: "IN_SCOPE".to_string(),
+                    zone_scoped: false,
+                },
+                CloudflareAuthorityView {
+                    worker_key: "cloudflare:worker:global:*".to_string(),
+                    credential_type: "api_key".to_string(),
+                    granted_permissions: vec![],
+                    authority_resolution: "EXACT".to_string(),
+                    permission_state: "GLOBAL_API_KEY".to_string(),
+                    account_scope_state: "IN_SCOPE".to_string(),
+                    zone_scoped: false,
+                },
+            ],
+        };
+        let safe = SafeExplainedPath::new(&path);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        let array = value["cloudflare_authority"]
+            .as_array()
+            .expect("cloudflare_authority must be an array");
+        assert_eq!(array.len(), 2);
+        assert_eq!(
+            array[0],
+            serde_json::json!({
+                "worker_key": "cloudflare:worker:account-1234567890123456:tag",
+                "credential_type": "api_token",
+                "granted_permissions": ["Workers Scripts Write"],
+                "authority_resolution": "EXACT",
+                "permission_state": "WORKERS_SCRIPTS_WRITE",
+                "account_scope_state": "IN_SCOPE",
+                "zone_scoped": false,
+            })
+        );
+        assert_eq!(array[1]["credential_type"], serde_json::json!("api_key"));
+        assert_eq!(
+            array[1]["permission_state"],
+            serde_json::json!("GLOBAL_API_KEY")
         );
     }
 }

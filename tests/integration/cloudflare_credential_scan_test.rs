@@ -241,6 +241,85 @@ fn credential_rotation_preserves_distinct_safe_identity_history() {
 }
 
 #[test]
+fn r4_global_api_key_resolves_to_exact_unverified() {
+    // A synthetic, clearly-fake global API key shape (never a real secret).
+    const GLOBAL_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+    let workspace = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    write_opencode(workspace.path(), allow_fixture());
+    fs::write(
+        workspace.path().join(".env"),
+        format!("CLOUDFLARE_API_TOKEN={GLOBAL_KEY}\n"),
+    )
+    .unwrap();
+    InitService::run(workspace.path()).unwrap();
+    let empty: [(&str, &str); 0] = [];
+    let result = ScanService::run_with_home_and_environment(
+        workspace.path(),
+        Some(home.path()),
+        Some(&empty),
+        EnvironmentReachability::Proven,
+    )
+    .unwrap();
+    assert_eq!(result.status, ScanStatus::Complete);
+    assert!(result.cloudflare_credential_observed);
+    assert_eq!(result.credential_reachability.as_deref(), Some("REACHABLE"));
+
+    let db = Database::open(&workspace.path().join(".pico/pico.db")).unwrap();
+    let conn = db.connection();
+    let credential_type: String = conn
+        .query_row(
+            "SELECT CAST(metadata AS TEXT) FROM resources WHERE kind = 'credential'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        credential_type.contains("\"credential_type\":\"api_key\""),
+        "expected api_key classification, got: {credential_type}"
+    );
+
+    let metadata: String = conn
+        .query_row(
+            "SELECT metadata FROM relationships WHERE kind = 'can_mutate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        metadata.contains("\"authority_resolution\":\"EXACT\""),
+        "expected EXACT resolution, got: {metadata}"
+    );
+    assert!(
+        metadata.contains("\"permission_state\":\"GLOBAL_API_KEY\""),
+        "expected GLOBAL_API_KEY permission_state, got: {metadata}"
+    );
+    assert!(
+        metadata.contains("GLOBAL_KEY_UNVERIFIED"),
+        "expected GLOBAL_KEY_UNVERIFIED reason, got: {metadata}"
+    );
+    assert!(
+        metadata.contains("\"credential_type\":\"api_key\""),
+        "expected credential_type in can_mutate metadata, got: {metadata}"
+    );
+    assert!(
+        metadata.contains("\"granted_permissions\":[]"),
+        "expected empty granted_permissions, got: {metadata}"
+    );
+
+    let leaks: i64 = conn
+        .query_row(
+            "SELECT
+              (SELECT COUNT(*) FROM resources WHERE CAST(metadata AS TEXT) LIKE '%' || ?1 || '%') +
+              (SELECT COUNT(*) FROM relationships WHERE CAST(metadata AS TEXT) LIKE '%' || ?1 || '%')",
+            [GLOBAL_KEY],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(leaks, 0, "global key value must never be persisted");
+}
+
+#[test]
 fn exact_project_dotenv_is_supported_without_recursive_file_crawling() {
     let workspace = tempdir().unwrap();
     let home = tempdir().unwrap();

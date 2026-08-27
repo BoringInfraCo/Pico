@@ -74,6 +74,8 @@ fn run_golden_scan(workspace: &std::path::Path) {
                 permission_state: "WORKERS_SCRIPTS_WRITE".to_string(),
                 scope_state: ScopeState::InScope,
                 unknown_reasons: Vec::new(),
+                granted_permissions: Vec::new(),
+                zone_scoped: false,
                 source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
             }],
             ..ProviderResult::default()

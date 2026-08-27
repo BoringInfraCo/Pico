@@ -154,6 +154,34 @@ pub struct ExplainedPath {
     /// classification facts Pico can establish from the static config:
     /// `content_class`, `trust`, and `influence_strength`.
     pub github_influence: Vec<GitHubInfluenceView>,
+    /// Per-Cloudflare-edge authority collected from the path's `can_mutate`
+    /// edges (SPRINT-018 R6/R7). Each entry records the credential-type-aware
+    /// authority facts Pico can establish from the persisted provider
+    /// projection: the credential type, the granted permission groups, the
+    /// authority resolution tier, the permission state, the account scope
+    /// state, and whether the grant is zone-scoped.
+    pub cloudflare_authority: Vec<CloudflareAuthorityView>,
+}
+
+/// One per-Cloudflare-edge authority entry surfaced on an explained path
+/// (SPRINT-018 R6/R7).
+///
+/// Pico establishes only what the safe Cloudflare provider projection carries:
+/// the credential type (api_token / api_key / oauth), the granted permission
+/// groups, the authority resolution tier (EXACT / SCOPED / BEHAVIORAL_READ_ONLY
+/// / UNKNOWN), the permission state (e.g. WORKERS_SCRIPTS_WRITE, GLOBAL_API_KEY,
+/// READ_OR_UNKNOWN), the account scope state, and whether the grant is
+/// zone-scoped. A global API key is labeled unverified; read-only vs write
+/// groups are distinguished by `granted_permissions`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CloudflareAuthorityView {
+    pub worker_key: String,
+    pub credential_type: String,
+    pub granted_permissions: Vec<String>,
+    pub authority_resolution: String,
+    pub permission_state: String,
+    pub account_scope_state: String,
+    pub zone_scoped: bool,
 }
 
 /// One per-tool GitHub MCP influence entry surfaced on an explained path
@@ -1082,6 +1110,80 @@ fn github_influence_views(
     by_tool.into_values().collect()
 }
 
+/// Collects per-Cloudflare-edge authority from the path's edges (SPRINT-018
+/// R6/R7). For each edge whose canonical key contains `can_mutate` and whose
+/// source is a Cloudflare credential resource (or whose metadata already carries
+/// an `authority_resolution`), the safe persisted authority metadata is gathered
+/// into one `CloudflareAuthorityView` per Worker edge. Entries are de-duplicated
+/// by the resolved Worker canonical key so each Cloudflare target appears once.
+fn cloudflare_authority_views(
+    graph: &SecurityGraph,
+    edges: &[AttackPathEdgeRecord],
+) -> Vec<CloudflareAuthorityView> {
+    use crate::analysis::model::{metadata_bool, metadata_string, metadata_string_array};
+    let mut by_worker: BTreeMap<String, CloudflareAuthorityView> = BTreeMap::new();
+    for edge in edges {
+        let Some(graph_edge) = graph.edge(&edge.relationship_id) else {
+            continue;
+        };
+        if !graph_edge.canonical_key.contains("can_mutate") {
+            continue;
+        }
+        let source_is_cloudflare_credential = graph
+            .node(&graph_edge.from_resource_id)
+            .is_some_and(|node| node.kind == "credential" && node.provider == "cloudflare");
+        let has_authority_metadata = graph_edge
+            .safe_metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .map(|object| object.contains_key("authority_resolution"))
+            .unwrap_or(false);
+        if !source_is_cloudflare_credential && !has_authority_metadata {
+            continue;
+        }
+        let worker_node = graph.node(&graph_edge.to_resource_id);
+        let worker_key = worker_node
+            .map(|node| node.canonical_key.clone())
+            .unwrap_or_else(|| graph_edge.to_resource_id.clone());
+        let worker_label = worker_node
+            .map(|node| {
+                if node.name.is_empty() {
+                    node.canonical_key.clone()
+                } else {
+                    node.name.clone()
+                }
+            })
+            .unwrap_or_else(|| worker_key.clone());
+        let credential_type = metadata_string(graph_edge.safe_metadata.as_ref(), "credential_type")
+            .unwrap_or_else(|| "api_token".to_string());
+        let granted_permissions =
+            metadata_string_array(graph_edge.safe_metadata.as_ref(), "granted_permissions");
+        let authority_resolution =
+            metadata_string(graph_edge.safe_metadata.as_ref(), "authority_resolution")
+                .unwrap_or_default();
+        let permission_state =
+            metadata_string(graph_edge.safe_metadata.as_ref(), "permission_state")
+                .unwrap_or_default();
+        let account_scope_state =
+            metadata_string(graph_edge.safe_metadata.as_ref(), "account_scope_state")
+                .unwrap_or_default();
+        let zone_scoped =
+            metadata_bool(graph_edge.safe_metadata.as_ref(), "zone_scoped").unwrap_or(false);
+        by_worker
+            .entry(worker_label.clone())
+            .or_insert(CloudflareAuthorityView {
+                worker_key: worker_label,
+                credential_type,
+                granted_permissions,
+                authority_resolution,
+                permission_state,
+                account_scope_state,
+                zone_scoped,
+            });
+    }
+    by_worker.into_values().collect()
+}
+
 fn explained_paths(
     conn: &Connection,
     graph: &SecurityGraph,
@@ -1103,6 +1205,7 @@ fn explained_paths(
         let steps = path_steps(graph, path, &edges, reference)?;
         let (effective_bash_capability, bash_boundary) = bash_capability_view(graph, &edges);
         let github_influence = github_influence_views(graph, &edges);
+        let cloudflare_authority = cloudflare_authority_views(graph, &edges);
         let path_evidence_rows = paths_repo.list_evidence(&path.id)?;
         contiguous_positions(
             &format!("attack path {} evidence", path.id),
@@ -1137,6 +1240,7 @@ fn explained_paths(
             effective_bash_capability,
             bash_boundary,
             github_influence,
+            cloudflare_authority,
         });
     }
     Ok(output)

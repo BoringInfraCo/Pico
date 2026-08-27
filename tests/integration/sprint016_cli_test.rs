@@ -81,6 +81,8 @@ fn provider(
             permission_state: "WORKERS_SCRIPTS_WRITE".to_string(),
             scope_state: ScopeState::InScope,
             unknown_reasons: Vec::new(),
+            granted_permissions: Vec::new(),
+            zone_scoped: false,
             source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
         }],
         ..ProviderResult::default()
@@ -321,6 +323,7 @@ fn minimal_detail_with_capability(label: &str, boundary: &str) -> FindingDetail 
             Some(boundary.to_string())
         },
         github_influence: vec![],
+        cloudflare_authority: vec![],
     };
     FindingDetail {
         id: "finding_x".to_string(),

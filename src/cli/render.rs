@@ -317,6 +317,31 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
                     ));
                 }
             }
+            if !path.cloudflare_authority.is_empty() {
+                out.push_str("Cloudflare authority:\n");
+                for authority in &path.cloudflare_authority {
+                    let mut line = format!(
+                        "  Cloudflare {} authority: resolution={} granted=[{}] scope={}",
+                        terminal_safe(&authority.credential_type),
+                        terminal_safe(&authority.authority_resolution),
+                        authority
+                            .granted_permissions
+                            .iter()
+                            .map(|permission| terminal_safe(permission))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        terminal_safe(&authority.account_scope_state),
+                    );
+                    if authority.zone_scoped {
+                        line.push_str(" zone-scoped");
+                    }
+                    if authority.permission_state == "GLOBAL_API_KEY" {
+                        line.push_str(" global-key-unverified");
+                    }
+                    line.push('\n');
+                    out.push_str(&line);
+                }
+            }
             out.push('\n');
         }
     }
