@@ -5,6 +5,18 @@
 **Provider:** Cloudflare only. This matrix does **not** generalize to OpenCode, GitHub, or Bash.
 **Source of truth:** `src/discovery/cloudflare.rs` — `AuthorityResolution` (lines 35–52), `policy_facts` (lines 558–606), `authority_for` (lines 626–672). The tier is a pure function of `PolicyFacts` + `ScopeState` + `write_group_ids`; no other module derives it.
 
+> **Appendix (Sprint 020):** Claude Code is now a **supported agent** for the
+> same authority tiers. Sprint 020 added the Claude Code adapter
+> (`src/discovery/agents/claude.rs`) as a second agent surface on the *same*
+> normalized Bash-`can_execute` model and the *same* authority-resolution tiers
+> documented below. Claude Code is **config-only**: it contributes an actor, a
+> Bash effective state, and MCP-server facts, but no credential facts — the
+> Cloudflare token/authority projection stays exclusively OpenCode-sourced.
+> See `docs/internal/sprints/SPRINT-020-support-note.md` for the full Claude
+> conformance statement. The tiers below therefore apply unchanged to whichever
+> agent surfaces a path; per-agent Bash posture is additionally surfaced per the
+> Sprint 020 R6/R7 contract.
+
 **Live anchor:** the real `UNKNOWN` tier from the Sprint 012 dogfood — scan `scan_18cf730d87996f48_0`, account `3e2742bacdabcada586f921ad89bac77`, where the token lacked `User Details: Read` and every authority edge collapsed to `UNKNOWN` with `unknown_reasons [ACCOUNT_SCOPE_UNRESOLVED, WORKERS_SCRIPTS_WRITE_UNRESOLVED]` (`docs/internal/dogfood/evidence.md` §3).
 
 ---
