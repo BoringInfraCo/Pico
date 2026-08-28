@@ -26,6 +26,13 @@ use crate::persistence::{
 use crate::shared::{PicoError, PICO_VERSION};
 use chrono::Utc;
 
+/// One discovered agent's effective Bash posture for scan-summary surfacing (S023 / F-U1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentBashPosture {
+    pub provider: String,
+    pub effective_state: String,
+}
+
 /// Structured result of a scan, rendered by the CLI.
 #[derive(Debug, Clone)]
 pub struct ScanResult {
@@ -43,6 +50,11 @@ pub struct ScanResult {
     pub finding_severity: Option<String>,
     pub finding_confidence: Option<String>,
     pub bash_permission: Option<String>,
+    /// Per-agent effective Bash postures (S020 vocabulary: AUTO_ALLOW /
+    /// APPROVAL_GATED / DENIED / SANDBOXED / UNKNOWN). Empty when no Bash
+    /// capability was observed. Populated from every discovered capability
+    /// that has a matching actor — not just the first.
+    pub agent_bash_postures: Vec<AgentBashPosture>,
     pub github_mcp_observed: bool,
     pub influence_strength: Option<String>,
     pub cloudflare_credential_observed: bool,
@@ -243,9 +255,10 @@ impl ScanService {
 
         let relationship_repo = RelationshipRepo::new(db.connection());
         let mut bash_permission = None;
+        let mut agent_bash_postures = Vec::new();
         let mut bash_resource = None;
         let mut bash_observed = false;
-        for (position, capability) in discovered.bash_capabilities.iter().enumerate() {
+        for capability in discovered.bash_capabilities.iter() {
             let Some(actor) = actor_resources.get(capability.provider) else {
                 continue;
             };
@@ -344,9 +357,13 @@ impl ScanService {
             )?;
             relationship_observation.metadata = Some(relationship_snapshot_metadata(&relationship));
             observation_repo.insert(&relationship_observation)?;
-            if position == 0 {
+            if bash_permission.is_none() {
                 bash_permission = Some(capability.permission.as_str().to_string());
             }
+            agent_bash_postures.push(AgentBashPosture {
+                provider: capability.provider.to_string(),
+                effective_state: capability.effective_state.as_str().to_string(),
+            });
         }
 
         let mut github_mcp_observed = false;
@@ -1031,6 +1048,7 @@ impl ScanService {
                 .map(|finding| finding.confidence.as_str().to_string()),
             findings: Some(findings),
             bash_permission,
+            agent_bash_postures,
             github_mcp_observed,
             influence_strength,
             cloudflare_credential_observed,

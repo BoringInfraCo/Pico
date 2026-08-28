@@ -6,7 +6,7 @@
 
 use crate::application::{
     findings_list_guidance, findings_list_state, FindingDetail, FindingList, FindingSummary,
-    FindingsListState,
+    FindingsListState, ScanResult,
 };
 use crate::findings::diagnostics::ScanDiagnostics;
 use crate::shared::terminal_safe;
@@ -574,6 +574,31 @@ pub fn render_scan_diagnostics(diagnostics: &ScanDiagnostics) -> String {
     }
 
     out
+}
+
+/// Renders the scan-summary Effective Bash block (S023 / F-U1).
+///
+/// When more than one agent is detected, list every observed agent's
+/// `effective_state` so a mixed workspace never collapses to the primary
+/// permission line. When exactly one agent is detected, keep the legacy
+/// single-agent `Effective Bash: ALLOW` contract byte-for-byte (permission
+/// string, not effective_state).
+pub fn render_scan_effective_bash(result: &ScanResult) -> String {
+    if result.agent_count > 1 && !result.agent_bash_postures.is_empty() {
+        let mut out = String::from("Effective Bash:\n");
+        for posture in &result.agent_bash_postures {
+            out.push_str(&format!(
+                "  {}: {}\n",
+                terminal_safe(&posture.provider),
+                terminal_safe(&posture.effective_state),
+            ));
+        }
+        out
+    } else if let Some(permission) = &result.bash_permission {
+        format!("Effective Bash: {permission}\n")
+    } else {
+        String::new()
+    }
 }
 
 /// Renders the per-GitHub-credential authority block for the `pico scan`

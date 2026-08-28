@@ -15,4 +15,4 @@ pub use findings::{
     ResourceView, ScanBrief,
 };
 pub use init::{InitResult, InitService};
-pub use scan::{ScanResult, ScanService};
+pub use scan::{AgentBashPosture, ScanResult, ScanService};
