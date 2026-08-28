@@ -24,7 +24,7 @@ product**: two COMPLETE snapshots, compared by fingerprint, without treating
 collection failure as remediation.
 
 Sprint 024 is the first v0.4 slice. It proves **finding-set memory**, not the
-whole phase.
+whole phase. Operator/reviewer scope: `SPRINT-024-support-note.md`.
 
 > **`pico diff` compares Findings from the last two COMPLETE scans by
 > fingerprint: unchanged, appeared, disappeared. A newer PARTIAL/FAILED

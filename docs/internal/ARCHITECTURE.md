@@ -5990,10 +5990,16 @@ pico findings
 
 pico finding <id>
 
+pico diff
+
 pico agents
 
 pico status
 ```
+
+`pico diff` (Sprint 024) is finding-set memory only: last two COMPLETE scans,
+joined on finding fingerprints. It is not the full v0.4 history/diff product.
+See `docs/internal/sprints/SPRINT-024-support-note.md`.
 
 Potential future commands:
 
@@ -6005,8 +6011,6 @@ pico resources
 pico explain
 
 pico history
-
-pico diff
 
 pico providers
 
@@ -7354,6 +7358,19 @@ still exactly one active finding under the golden fixture, with
 `agent:opencode` keys unchanged. All surfaces share one engine (ARCHITECTURE
 §2), read-only allowlisted probes, secret transience, and provider-aware
 adapters.
+
+## 28.5 Started v0.4 — finding-set memory (S024)
+
+v0.4 (ROADMAP §8) is **in progress**. The first slice is finding-set memory,
+not the whole phase.
+
+- `pico diff` compares Findings from the last two COMPLETE scans by S015
+  fingerprint (`unchanged` / `appeared` / `disappeared`).
+- Incomplete attempts are S019 freshness, never disappearance.
+- No new schema, no MCP diff tool, no resource first-seen, no causal
+  explanation, no retention.
+- Authoritative slice scope:
+  `docs/internal/sprints/SPRINT-024-support-note.md`.
 
 ---
 

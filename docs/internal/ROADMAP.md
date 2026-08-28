@@ -511,6 +511,11 @@ The central claim is:
 
 Runtime and continuous defenses require a trustworthy baseline and change model. Pico must first know what stable state means, how identity persists, and how to distinguish exposure from collection noise. Security memory is therefore the bridge from point-in-time scanning to continuous observation.
 
+**Implementation start (Sprint 024):** finding-set memory only — `pico diff`
+over the last two COMPLETE scans, joined on S015 fingerprints. Collection
+failure is never disappearance. This is not v0.4 complete. Authoritative
+slice scope: `docs/internal/sprints/SPRINT-024-support-note.md`.
+
 ---
 
 # 9. v0.5 — Continuous and Runtime Observation
