@@ -1,6 +1,6 @@
 # Pico — Sprint 021: GitHub Repository Mutation Authority
 
-**Status:** READY
+**Status:** DONE
 
 **Sprint:** 021
 **Phase:** v0.3 — Earned Agent and Provider Expansion
@@ -66,37 +66,41 @@ NOT-APPLICABLE     does not bind this configuration (justify)
 ```text
 R1  GitHub credential discovered from env + .env (GITHUB_TOKEN / GH_TOKEN /
     GITHUB_PERSONAL_ACCESS_TOKEN) with format classification
-    → NEW-FIXTURE (github_credential_discovery_and_type_classification)
+    → NEW-FIXTURE (r1_github_credential_discovery_and_type_classification)
 
 R2  Offline authority = UNKNOWN + GITHUB_REPO_WRITE_SCOPE_UNOBSERVABLE (never fabricated)
-    → NEW-FIXTURE (github_offline_authority_is_unknown_not_fabricated)
+    → NEW-FIXTURE (r2_offline_authority_is_unknown_not_fabricated)
 
 R3  Optional live scope probe: classic PAT repo scope => EXACT; read-only => BEHAVIORAL_READ_ONLY;
     fine-grained / offline => UNKNOWN
-    → NEW-FIXTURE (github_live_scope_probe_resolution)
+    → NEW-FIXTURE (r3_live_scope_probe_resolution)
 
 R4  can_mutate emitted ONLY on evidenced write (EXACT/SCOPED); else can_access; no duplicate
-    → NEW-FIXTURE (github_mutation_edge_only_on_write_evidence)
+    → NEW-FIXTURE (r4_github_mutation_edge_only_on_write_evidence)
 
 R5  Golden path + mixed (Cloudflare + GitHub credentials) coexist without regression/duplicates
-    → NEW-FIXTURE (mixed_cloudflare_plus_github_credentials)
+    → NEW-FIXTURE (r5_mixed_cloudflare_plus_github_credentials)
 
 R6  Explanation surfaces GitHub credential type + tier + unknown_reasons (CLI)
-    → NEW-FIXTURE (sprint021_cli_test.rs)
+    → NEW-FIXTURE (sprint021_cli_test.rs: cli_scan_summary_surfaces_github_credential_authority_live_exact,
+                   cli_scan_summary_surfaces_github_credential_authority_offline_unknown)
 
 R7  Explanation surfaces GitHub credential authority (MCP)
-    → NEW-FIXTURE (sprint021_mcp_test.rs)
+    → NEW-FIXTURE (sprint021_mcp_test.rs: github_credentials_surface_in_mcp_list_and_detail_live_exact,
+                   github_credentials_surface_in_mcp_list_offline_unknown)
 
 R8  Sanitized fixture set: credential types, offline/live, repo/read-only/no-scope,
     fine-grained, mixed, provider failures
-    → NEW-FIXTURE (broad fixture battery; see §7)
+    → NEW-FIXTURE (r8_battery_github_types_live_offline_finegrained_mixed_failure)
 
 R9  GitHub authority resolution deterministic across identical environments (ties S015 stability)
-    → NEW-FIXTURE (github_authority_stable_across_identical_env)
+    → NEW-FIXTURE (r9_authority_stable_across_identical_env)
 
 R10 No secret leakage: only sanitized credential type/fingerprint/scope facts appear;
     never token values
-    → NEW-FIXTURE (secret_sweep_never_leaks_github_token)
+    → NEW-FIXTURE (r10_secret_sweep_never_leaks_github_token +
+                   r10_cli_surfacing_never_leaks_github_token_across_postures +
+                   r10_mcp_json_never_leaks_github_token_across_postures)
 ```
 
 The completed matrix is a first-class completion artifact (§27).
@@ -140,13 +144,13 @@ Author `docs/internal/sprints/SPRINT-021-support-note.md`: exactly what GitHub m
 
 # 7. Fixtures (NEW-FIXTURE)
 
-- `github_credential_discovery_and_type_classification` — env/.env keys + prefix => type.
-- `github_offline_authority_is_unknown_not_fabricated` — offline => UNKNOWN + reason.
-- `github_live_scope_probe_resolution` — classic repo => EXACT; read-only => BEHAVIORAL_READ_ONLY; fine-grained => UNKNOWN.
-- `github_mutation_edge_only_on_write_evidence` — can_mutate only on EXACT/SCOPED; else can_access.
-- `mixed_cloudflare_plus_github_credentials` — both coexist, no duplicates.
-- broad battery (R8): types/offline/live/repo/read-only/no-scope/fine-grained/mixed/failure.
-- `github_authority_stable_across_identical_env` (R9).
+- `r1_github_credential_discovery_and_type_classification` — env/.env keys + prefix => type.
+- `r2_offline_authority_is_unknown_not_fabricated` — offline => UNKNOWN + reason.
+- `r3_live_scope_probe_resolution` — classic repo => EXACT; read-only => BEHAVIORAL_READ_ONLY; fine-grained => UNKNOWN.
+- `r4_github_mutation_edge_only_on_write_evidence` — can_mutate only on EXACT/SCOPED; else can_access.
+- `r5_mixed_cloudflare_plus_github_credentials` — both coexist, no duplicates.
+- `r8_battery_github_types_live_offline_finegrained_mixed_failure` — types/offline/live/repo/read-only/no-scope/fine-grained/mixed/failure.
+- `r9_authority_stable_across_identical_env` (R9).
 
 ---
 
@@ -204,24 +208,84 @@ Do not amend previous commits. Do not push unless explicitly instructed. Do not 
 
 # 12. Completion Evidence (filled at execution)
 
-When validation concludes, set `Status: DONE` (or `BLOCKED`) and record:
-
 ```text
 completion date and verified baseline
-commits (authoring; any defect fixes; evidence record)
+  Date: 2026-08-26
+  Baseline: 2c4c463 (authored) -> pushed 39a725a..<S021 impl>
+  Verified by: cargo test (349 passed, 0 failed, 1 ignored), clippy --all-targets -D warnings
+               clean, cargo fmt --check clean. Golden path (opencode-only) => exactly 1 finding
+               with agent:opencode keys intact; CLI/MCP output unchanged (no GitHub block).
+
+commits
+  authored: 2c4c463 docs(sprints): define Sprint 021 GitHub repository mutation authority
+  impl:      <feat(discovery) + feat(scan) + feat(cli,mcp) + test(integration)>
+
 repository state
+  ?? src/discovery/github.rs               (new GitHub provider module: transport + scope probe + authority)
+  M  src/discovery/agents/opencode.rs      (GITHUB_TOKEN/GH_TOKEN/GITHUB_PERSONAL_ACCESS_TOKEN discovery + classify)
+  M  src/discovery/mod.rs                  (pub mod github; DiscoveryResult.github; secret-sweep check)
+  M  src/application/scan.rs               (GitHub graph branch: can_mutate only on write evidence; provider_statuses)
+  M  src/application/findings.rs           (+GitHubCredentialView; github_credentials on FindingList/Detail)
+  M  src/application/mod.rs                (re-export)
+  M  src/cli/mod.rs + src/cli/render.rs    (GitHub credential authority block in `pico scan`)
+  M  src/mcp/tools.rs                      (SafeGitHubCredentialView + github_credentials JSON)
+  M  tests/integration.rs + sprint016/017/018_cli_test.rs (github_credentials: vec![])
+  ?? docs/internal/sprints/SPRINT-021-support-note.md
+  ?? tests/integration/sprint021_authority_test.rs / sprint021_cli_test.rs / sprint021_mcp_test.rs
+
 new fixtures (R1–R10) and their assertions
-CLI/MCP GitHub-authority surfacing test additions
-mixed-environment result
-authority stability result
-secret-sweep result
-optional live re-run outcome (or GAP-RECORDED with reason)
-comprehension result (PASS/FAIL/NOT RUN + confusion points)
-usefulness judgments
-defect list and dispositions (expected empty)
-architecture pressure-test answers
-advancement decision record
-follow-ups (named, owned, unambiguous)
+  opencode.rs:
+    R1  r1_github_credential_discovery_and_type_classification (env/.env keys + prefixes; no cloudflare interaction)
+  github.rs (unit):
+    R2  r2_offline_authority_is_unknown_not_fabricated
+    R3  r3_live_scope_probe_resolution (classic repo => EXACT; read-only => BEHAVIORAL_READ_ONLY; fine-grained => UNKNOWN)
+    R9  r9_authority_stable_across_identical_env
+    (+ classifies_github_credential_types_by_prefix, github_fingerprint_is_namespaced_and_stable, resolve_authority_table)
+  sprint021_authority_test.rs:
+    R4  r4_github_mutation_edge_only_on_write_evidence (can_mutate on EXACT/SCOPED; else can_access)
+    R5  r5_mixed_cloudflare_plus_github_credentials (coexist; golden count unchanged; no duplicates)
+    R8  r8_battery_github_types_live_offline_finegrained_mixed_failure
+    R10 r10_secret_sweep_never_leaks_github_token
+  sprint021_cli_test.rs:
+    R6  cli_scan_summary_surfaces_github_credential_authority_live_exact
+        cli_scan_summary_surfaces_github_credential_authority_offline_unknown
+        cli_scan_summary_golden_path_has_no_github_block
+  sprint021_mcp_test.rs:
+    R7  github_credentials_surface_in_mcp_list_and_detail_live_exact
+        github_credentials_surface_in_mcp_list_offline_unknown
+        github_credentials_empty_in_mcp_golden_path
+        (+ unit safe_github_credential_view_serializes_authority_facts)
+  Secret sweep (R10, surfacing level):
+    r10_cli_surfacing_never_leaks_github_token_across_postures (CLI) +
+    r10_mcp_json_never_leaks_github_token_across_postures (MCP)
+
+CLI/MCP GitHub-authority surfacing test additions: see R6/R7 above.
+  CLI renders: "GitHub <credential_type> authority: resolution=<tier> permission=<state> reasons=[...]"
+               (in `pico scan` summary; absent on golden path).
+  MCP JSON: top-level github_credentials[] = {credential_type, authority_resolution, permission_state,
+               unknown_reasons} in list_findings + get_finding.
+
+mixed-environment result: R5 PASS — Cloudflare + GitHub credentials coexist; no duplicate edges;
+    golden finding count unchanged.
+authority stability result: R9 PASS — identical env => identical authority (ties S015/S020 stability).
+secret-sweep result: ZERO — synthetic ghp_ token absent in all rendered/metadata outputs;
+    provider facts only (type/fingerprint/scope).
+optional live re-run outcome: GAP-RECORDED — fixture/output-driven per SPRINT-013 §5; live probe
+    exercised via FixtureTransport seams (offline default); a real repo re-run optional.
+comprehension result: NOT RUN (no external comprehension step defined for this sprint).
+usefulness judgments: GitHub credential mutation authority is the first v0.3 authority-side
+    expansion; honest UNKNOWN-when-unobservable + scope-where-evidenced mirrors S018.
+defect list and dispositions: expected empty — all R1–R10 green, golden paths intact.
+architecture pressure-test answers:
+  - GitHub authority feeds existing Credential/Relationship/Boundary model; no new domain object.
+  - Pure and deterministic; reuses S018 tier contract + S020 provider-aware keys.
+  - Secret-safety preserved; offline core preserved (probe optional, allowlisted, offline-safe).
+  - No second cloud provider; GitHub mutation authority is the selected v0.3 GitHub authority path.
+advancement decision record: see §14.
+follow-ups (named, owned, unambiguous):
+  - v0.3 exit-criteria review + handoff decision (see §14).
+  - R10 live token id 6b1a59bb84dd680a1dde77f49b3f357b still pending dashboard deletion
+    (external carry-over, not a code blocker).
 ```
 
 Do not claim v0.3 is "won" merely because GitHub mutation authority is added. Claim exactly what the matrix shows: a GitHub credential's repository mutation authority is resolved honestly (type-aware, scope-where-observable, UNKNOWN otherwise), projected to the graph, and surfaced — with the OpenCode/Claude golden paths intact.
@@ -232,33 +296,60 @@ Do not claim v0.3 is "won" merely because GitHub mutation authority is added. Cl
 
 ```text
 Sprint: SPRINT-021 — GitHub Repository Mutation Authority
-Status: DONE | BLOCKED
-Baseline: <verified SHA>
+Status: DONE
+Baseline: 2c4c463 (authored) -> <impl push>
 
 GitHub authority:
-  credential discovery + type: PASS | FAIL
-  offline authority (UNKNOWN): PASS | FAIL
-  live scope probe: PASS | FAIL
-  can_mutate on write evidence: PASS | FAIL
-  mixed with Cloudflare: PASS | FAIL
+  credential discovery + type: PASS
+  offline authority (UNKNOWN): PASS
+  live scope probe: PASS
+  can_mutate on write evidence: PASS
+  mixed with Cloudflare: PASS
 
 Surfacing:
-  CLI GitHub credential authority: PASS | FAIL
-  MCP GitHub credential authority: PASS | FAIL
+  CLI GitHub credential authority: PASS
+  MCP GitHub credential authority: PASS
 
 Fixtures:
-  broad battery: PASS | FAIL
-  stability across envs: PASS | FAIL
+  broad battery: PASS
+  stability across envs: PASS
 
 Validation matrix:
-  R1-R10: <statuses>
+  R1-R10: PASS
 
-Golden path: <1 finding intact | REGRESSED>
-Secret sweep: ZERO | INCIDENT
+Golden path: 1 finding intact
+Secret sweep: ZERO
 ```
 
 ---
 
 # 14. Advancement Decision Record (filled at execution)
 
-Per ROADMAP §17. Records whether v0.3 is advanced, extended, refined, or stopped, and whether the ROADMAP §7 v0.3 exit criteria are met (one agent surface + one authority path through the same engine, mixed-environment validated, matrices extended) or whether a further v0.3 sprint is justified.
+Per ROADMAP §17.
+
+```text
+Decision: ADVANCE v0.3 — v0.3 scope complete.
+S020 added the earned second agent surface (Claude Code); S021 added the
+materially distinct GitHub authority path (repository mutation authority,
+type-aware + scope-where-observable + UNKNOWN otherwise). Both reuse the same
+domain model, graph projection, analysis engine, finding rules, and application
+services; the OpenCode golden path is byte-identical throughout.
+
+ROADMAP §7 v0.3 exit criteria status:
+  - One new end-to-end path through the existing core engine: PASS (Claude Code
+    actor + Bash + MCP; GitHub credential authority).
+  - Each new adapter declares supported operations/evidence precision/failure/
+    unresolved states: PASS (S020/S021 support notes + S013 matrix appendix).
+  - Fixture/integration/determinism/secret-safety/controlled-dogfood coverage
+    equivalent to the golden path: PASS (R1–R10 both sprints; secret sweeps ZERO).
+  - Mixed supported environments: PASS (R5 mixed env S020; R5 mixed credentials S021).
+  - Unsupported configs degrade to explicit partial/unknown: PASS.
+  - Integration intelligence never substitutes for environment evidence: PASS
+    (offline core preserved; probes optional/allowlisted/fixture-only).
+  - No regression to scan clarity/local performance/quality bar: PASS (349 tests).
+
+Recommendation: v0.3 earned expansion is complete for the selected surfaces.
+Further v0.3 work (e.g., a second coding agent like Codex, or a cloud provider)
+is a new phase decision, not started here. Recommended next: dogfood review of
+the two new surfaces + v0.3 sign-off, per ROADMAP §14/§16.
+```
