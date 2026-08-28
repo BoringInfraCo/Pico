@@ -4,10 +4,12 @@
 //! coordinate domain and persistence. See SPRINT-001.md §6 (Interface
 //! separation).
 
+pub mod diff;
 pub mod findings;
 pub mod init;
 pub mod scan;
 
+pub use diff::{DiffFinding, DiffService, FindingDiff, FindingDiffResult};
 pub use findings::{
     finding_navigation_ids, findings_list_guidance, findings_list_state, BoundaryView, Currentness,
     EvidenceView, ExplainedPath, FindingDetail, FindingList, FindingQueryService, FindingSummary,

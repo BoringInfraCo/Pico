@@ -116,6 +116,25 @@ impl<'a> ScanRepo<'a> {
         Ok(n as u64)
     }
 
+    /// COMPLETE scans newest-first (`completed_at DESC, started_at DESC, id DESC`).
+    pub fn list_complete(&self) -> Result<Vec<Scan>, PicoError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, started_at, completed_at, status, trigger, scope,
+                        pico_version, environment_fingerprint, metadata
+                 FROM scans WHERE status = 'COMPLETE'
+                 ORDER BY completed_at DESC, started_at DESC, id DESC",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], row_to_scan)
+            .map_err(db_err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err)?;
+        Ok(rows)
+    }
+
     /// Newest scan whose lifecycle status is exactly COMPLETE, ordered by
     /// `completed_at DESC, started_at DESC, id DESC`.
     pub fn newest_complete(&self) -> Result<Option<Scan>, PicoError> {

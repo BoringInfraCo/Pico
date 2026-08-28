@@ -5,8 +5,8 @@
 //! passed through `terminal_safe` so untrusted text cannot spoof the layout.
 
 use crate::application::{
-    findings_list_guidance, findings_list_state, FindingDetail, FindingList, FindingSummary,
-    FindingsListState, ScanResult,
+    findings_list_guidance, findings_list_state, DiffFinding, FindingDetail, FindingDiff,
+    FindingDiffResult, FindingList, FindingSummary, FindingsListState, Freshness, ScanResult,
 };
 use crate::findings::diagnostics::ScanDiagnostics;
 use crate::shared::terminal_safe;
@@ -574,6 +574,91 @@ pub fn render_scan_diagnostics(diagnostics: &ScanDiagnostics) -> String {
     }
 
     out
+}
+
+/// Renders `pico diff` for the last two COMPLETE scans (SPRINT-024).
+pub fn render_finding_diff(result: &FindingDiffResult) -> String {
+    match result {
+        FindingDiffResult::NoCompleteScan => {
+            "Pico diff\n\nNo COMPLETE scan exists in this workspace.\nRun `pico scan` and let it complete to produce results.\nThis is not an all-clear.\n".to_string()
+        }
+        FindingDiffResult::NeedPrevious { newest_complete, .. } => {
+            format!(
+                "Pico diff\n\nA previous COMPLETE scan is required to compare.\nNewest COMPLETE scan: {} ({})\nRun `pico scan` again after a completed scan to produce a diff.\nThis is not an all-clear.\n",
+                terminal_safe(&newest_complete.id),
+                terminal_safe(&newest_complete.status)
+            )
+        }
+        FindingDiffResult::Ready(diff) => render_ready_diff(diff),
+    }
+}
+
+fn render_ready_diff(diff: &FindingDiff) -> String {
+    let mut out = String::from("Pico diff\n\n");
+    out.push_str(&format!(
+        "From: {} ({})\n",
+        terminal_safe(&diff.from.id),
+        terminal_safe(&diff.from.status)
+    ));
+    out.push_str(&format!(
+        "To:   {} ({})\n",
+        terminal_safe(&diff.to.id),
+        terminal_safe(&diff.to.status)
+    ));
+    out.push_str("Compared: LAST TWO COMPLETE SCANS\n");
+    out.push_str(match diff.freshness {
+        Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
+        Freshness::NewerIncomplete => "Freshness: NEWER INCOMPLETE ATTEMPT\n",
+    });
+    if let Some(warning) = &diff.freshness_warning {
+        out.push('\n');
+        for line in warning.split('\n') {
+            out.push_str(&terminal_safe(line));
+            out.push('\n');
+        }
+    }
+    out.push_str("\nFindings\n");
+    out.push_str(&format!("  Unchanged: {}\n", diff.unchanged.len()));
+    out.push_str(&format!("  Appeared:  {}\n", diff.appeared.len()));
+    out.push_str(&format!("  Disappeared: {}\n", diff.disappeared.len()));
+
+    if !diff.appeared.is_empty() {
+        out.push_str("\nAppeared\n");
+        for finding in &diff.appeared {
+            push_diff_finding(&mut out, finding);
+        }
+    }
+    if !diff.disappeared.is_empty() {
+        out.push_str("\nDisappeared\n");
+        for finding in &diff.disappeared {
+            push_diff_finding(&mut out, finding);
+        }
+    }
+
+    if diff.appeared.is_empty() && diff.disappeared.is_empty() {
+        out.push('\n');
+        out.push_str("No security-significant finding change.\n");
+        if diff.unchanged.is_empty() {
+            out.push_str("This is not an all-clear.\n");
+        }
+    }
+    out
+}
+
+fn push_diff_finding(out: &mut String, finding: &DiffFinding) {
+    out.push_str(&format!(
+        "  {} · {} confidence\n",
+        terminal_safe(&finding.severity),
+        terminal_safe(&finding.confidence)
+    ));
+    out.push_str("  ");
+    out.push_str(&terminal_safe(&finding.title));
+    out.push('\n');
+    out.push_str(&format!(
+        "  Fingerprint: {}\n",
+        terminal_safe(&finding.fingerprint)
+    ));
+    out.push_str(&format!("  ID: {}\n", terminal_safe(&finding.id)));
 }
 
 /// Renders the scan-summary Effective Bash block (S023 / F-U1).

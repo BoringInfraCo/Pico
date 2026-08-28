@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::application::{finding_navigation_ids, FindingQueryService, InitService, ScanService};
+use crate::application::{
+    finding_navigation_ids, DiffService, FindingQueryService, InitService, ScanService,
+};
 use crate::shared::{PicoError, PICO_VERSION};
 
 /// Pico discovers the dangerous paths your AI agents create.
@@ -36,6 +38,8 @@ enum Command {
     Findings,
     /// Show one Finding by its exact ID.
     Finding { id: String },
+    /// Compare Findings across the last two COMPLETE scans.
+    Diff,
     /// Serve Pico findings to coding agents over MCP (stdio).
     Mcp,
 }
@@ -47,6 +51,7 @@ pub fn run() -> Result<(), PicoError> {
         Command::Scan => run_scan(),
         Command::Findings => run_findings(),
         Command::Finding { id } => run_finding(&id),
+        Command::Diff => run_diff(),
         Command::Mcp => crate::mcp::run(),
     }
 }
@@ -175,6 +180,13 @@ fn run_finding(id: &str) -> Result<(), PicoError> {
     }
     let detail = FindingQueryService::get(&workspace()?, id)?;
     print!("{}", render::render_finding_detail(&detail));
+    Ok(())
+}
+
+/// Renders `pico diff`.
+fn run_diff() -> Result<(), PicoError> {
+    let result = DiffService::latest(&workspace()?)?;
+    print!("{}", render::render_finding_diff(&result));
     Ok(())
 }
 
