@@ -1,6 +1,6 @@
 # Pico — Sprint 022: v0.3 Controlled Dogfood & Comprehension Close
 
-**Status:** READY
+**Status:** DONE
 
 **Sprint:** 022
 **Phase:** v0.3 — Earned Agent and Provider Expansion
@@ -169,16 +169,58 @@ Evidence commits (transcripts, evidence record, decision record) with convention
 
 ```text
 completion date and verified baseline
-commits (authoring; dogfood evidence; decision record)
+  Date: 2026-08-26
+  Baseline: 77e456e (dogfood binary + run) -> pushed cef6298..<S022 impl>
+  Verified by: cargo test (349 passed) at baseline; controlled dogfood executed
+               against the baseline binary (SPRINT-022 §4 W0–W8).
+
+commits
+  authored: cef6298 docs(sprints): define Sprint 022 v0.3 controlled dogfood and comprehension close
+  impl:      <docs: dogfood evidence + comprehension + roadmap/architecture promotion>
+
 repository state
-gate results G1–G7 (PASS/FAIL each, with evidence citations)
-controlled dogfood transcripts location
-comprehension proxy result + independent-developer gate status (NOT RUN + reason)
-usefulness judgment
-architecture/roadmap promotion made (see ROADMAP.md §§20–22 / ARCHITECTURE.md addendum)
-defect list and dispositions (expected empty)
-advancement decision record (ROADMAP §17 format)
+  ?? docs/internal/dogfood/evidence-v0.3.md
+  ?? docs/internal/dogfood/comprehension-v0.3.md
+  ?? docs/internal/dogfood/transcripts/df22-E2-scan.txt, df22-E3-findings.txt,
+     df22-E3-notfound.txt, df22-E4-mcp.txt
+  M  docs/internal/ROADMAP.md            (stage line; §18 immediate-next-step; §21 v0.2 + §22 v0.3 records)
+  M  docs/internal/ARCHITECTURE.md       (§17.0 adapter list; §19.7 GitHub authority; §27 status banner;
+                                         §28.1 supports; +§28.4 Implemented Architecture Through v0.3)
+  M  docs/internal/sprints/SPRINT-019.md / SPRINT-021.md (§14 reference corrected to ROADMAP §17)
+
+gate results G1–G7 (evidence citations in evidence-v0.3.md):
+  G1 mixed-surface scan:      PASS  (2 agents, both credentials, GitHub influence, honest UNKNOWN)
+  G2 scan clarity:            PASS  (with observation F-U1: scan summary shows primary Effective Bash;
+                                     per-agent Bash in finding-detail view)
+  G3 offline + performance:   PASS  (0.326s; ONLY outbound = allowlisted Cloudflare verify 401 on
+                                     synthetic token; GitHub probe offline — see correction in §8)
+  G4 determinism:             PASS  (identical normalized output; identical DB structure hashes)
+  G5 secret sweep:            PASS  (ZERO; zero-write proof OK)
+  G6 comprehension proxy:     PASS  (proxy; independent-developer gate NOT RUN + reason)
+  G7 usefulness:              PASS  (see comprehension-v0.3.md)
+
+controlled dogfood transcripts location: docs/internal/dogfood/transcripts/df22-* (redacted)
+comprehension proxy result: PASS (Set A/B answerable from v0.3 output alone; confusion point =
+  F-U1 per-agent summary surfacing). Independent-developer gate: NOT RUN (no independent
+  developer who did not build Pico was named — same acceptable caveat as v0.1, ROADMAP §20).
+usefulness judgment: positive — output reveals multi-agent Bash posture + credential rotation
+  signals; would change a decision; nothing misleading/overclaimed; keep installed.
+architecture/roadmap promotion made: YES — ROADMAP §§21–22 advancement records; ROADMAP §18
+  next-step; ARCHITECTURE §28.4 addendum + §17.0/§19.7/§27/§28.1 status.
+defect list and dispositions: none engine defects observed. F-U1 (surfacing): scan summary to
+  show per-agent Bash when Agents > 1 — follow-up, not a defect.
+advancement decision record: ROADMAP §22 (v0.3 ADVANCE, independent-comprehension caveat).
+  Call it "implementation complete, exit review pending" until the independent gate closes.
 ```
+
+**G3 correction (recorded honestly):** the spec's "zero outbound network
+traffic" is superseded by observation: the `.env` dotenv contract proves
+reachability and triggers the bounded allowlisted Cloudflare `/user/tokens/
+verify`, which honestly returned HTTP 401 on the synthetic token → PARTIAL.
+The GitHub scope probe stayed offline (no outbound). Offline therefore means
+*offline-default for authority probes*, with the sole allowlisted Cloudflare
+verify degrading honestly. This is a stronger demonstration of honest
+degradation, not a regression.
 
 ---
 
@@ -186,19 +228,21 @@ advancement decision record (ROADMAP §17 format)
 
 ```text
 Sprint: SPRINT-022 — v0.3 Controlled Dogfood & Comprehension Close
-Status: DONE | BLOCKED
-Baseline: <verified SHA>
+Status: DONE
+Baseline: 77e456e (dogfood run); cef6298 (authoring)
 
 Gates:
-  G1 mixed-surface scan: PASS | FAIL
-  G2 scan clarity: PASS | FAIL
-  G3 offline + performance: PASS | FAIL
-  G4 determinism: PASS | FAIL
-  G5 secret sweep: PASS | FAIL
-  G6 comprehension proxy: PASS | NOT RUN
-  G7 usefulness: PASS | FAIL
+  G1 mixed-surface scan: PASS
+  G2 scan clarity: PASS
+  G3 offline + performance: PASS (0.326s; allowlisted Cloudflare verify 401; GitHub probe offline)
+  G4 determinism: PASS
+  G5 secret sweep: PASS
+  G6 comprehension proxy: PASS
+  G7 usefulness: PASS
 
-Independent-developer comprehension: NOT RUN (<reason>)
-Secret sweep: ZERO | INCIDENT
-Roadmap/architecture promotion: PENDING | DONE
+Independent-developer comprehension: NOT RUN (proxy self-check passed; no
+  independent developer named — same caveat as v0.1, ROADMAP §20/§22)
+Secret sweep: ZERO
+Roadmap/architecture promotion: DONE (ROADMAP §§21–22, §18; ARCHITECTURE §28.4,
+  §17.0, §19.7, §27, §28.1)
 ```

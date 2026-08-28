@@ -345,7 +345,7 @@ Golden path remains intact (1 active finding) across all of 013–019; secret
 sweeps ZERO throughout; 309 tests green.
 
 Recommendation: v0.2 is ready for sign-off subject to ROADMAP §6 exit criteria
-review (dogfood usefulness + a real independent human check, per ROADMAP §14/§16
+review (dogfood usefulness + a real independent human check, per ROADMAP §17
 comprehension). Hand off to v0.3 (earned agent/provider expansion) — a separate
 phase, not started here.
 ```

@@ -351,5 +351,5 @@ ROADMAP §7 v0.3 exit criteria status:
 Recommendation: v0.3 earned expansion is complete for the selected surfaces.
 Further v0.3 work (e.g., a second coding agent like Codex, or a cloud provider)
 is a new phase decision, not started here. Recommended next: dogfood review of
-the two new surfaces + v0.3 sign-off, per ROADMAP §14/§16.
+the two new surfaces + v0.3 sign-off, per ROADMAP §17.
 ```
