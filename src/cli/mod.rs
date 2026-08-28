@@ -144,6 +144,11 @@ fn run_scan() -> Result<(), PicoError> {
         println!("Authority Resolution: {resolution}");
     }
     println!("Credential Value Stored: NO");
+    let github_authority = render::render_github_credential_authority(&result.github_credentials);
+    if !github_authority.is_empty() {
+        println!();
+        print!("{}", github_authority);
+    }
     let diagnostics = render::render_scan_diagnostics(
         result
             .diagnostics_detail

@@ -576,6 +576,47 @@ pub fn render_scan_diagnostics(diagnostics: &ScanDiagnostics) -> String {
     out
 }
 
+/// Renders the per-GitHub-credential authority block for the `pico scan`
+/// summary (SPRINT-021 R6).
+///
+/// Each observed GitHub credential produces one line carrying only safe
+/// classification facts — the credential type, the authority resolution tier,
+/// the permission state, and the reasons a write claim could not be
+/// established. When no GitHub credential was observed this returns an empty
+/// string so the golden path is given no noise.
+pub fn render_github_credential_authority(
+    credentials: &[crate::application::GitHubCredentialView],
+) -> String {
+    if credentials.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str("GitHub credential authority:\n");
+    for credential in credentials {
+        let mut line = format!(
+            "  GitHub {} authority: resolution={} permission={}",
+            terminal_safe(&credential.credential_type),
+            terminal_safe(&credential.authority_resolution),
+            terminal_safe(&credential.permission_state),
+        );
+        if !credential.unknown_reasons.is_empty() {
+            line.push_str(" reasons=[");
+            line.push_str(
+                &credential
+                    .unknown_reasons
+                    .iter()
+                    .map(|reason| terminal_safe(reason))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            line.push(']');
+        }
+        line.push('\n');
+        out.push_str(&line);
+    }
+    out
+}
+
 /// Renders a connected source-to-Sink chain from traversal-applied steps.
 fn path_chain(path: &crate::application::ExplainedPath) -> String {
     if path.steps.is_empty() {

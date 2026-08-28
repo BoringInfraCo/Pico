@@ -147,6 +147,7 @@ struct SafeList {
     freshness_warning: Option<String>,
     findings: Vec<SafeFindingSummary>,
     diagnostics: Option<SafeScanDiagnostics>,
+    github_credentials: Vec<SafeGitHubCredentialView>,
 }
 
 impl SafeList {
@@ -158,6 +159,34 @@ impl SafeList {
             freshness_warning: safe_optional(list.freshness_warning.as_deref()),
             findings: list.findings.iter().map(SafeFindingSummary::new).collect(),
             diagnostics: list.diagnostics.as_ref().map(SafeScanDiagnostics::new),
+            github_credentials: list
+                .github_credentials
+                .iter()
+                .map(SafeGitHubCredentialView::new)
+                .collect(),
+        }
+    }
+}
+
+/// Machine-readable per-GitHub-credential authority entry mirrored from the
+/// application `GitHubCredentialView` (SPRINT-021 R7). All strings pass through
+/// `terminal_safe` before serialization; raw token values never enter this
+/// shape.
+#[derive(Serialize)]
+struct SafeGitHubCredentialView {
+    credential_type: String,
+    authority_resolution: String,
+    permission_state: String,
+    unknown_reasons: Vec<String>,
+}
+
+impl SafeGitHubCredentialView {
+    fn new(credential: &crate::application::GitHubCredentialView) -> Self {
+        SafeGitHubCredentialView {
+            credential_type: terminal_safe(&credential.credential_type),
+            authority_resolution: terminal_safe(&credential.authority_resolution),
+            permission_state: terminal_safe(&credential.permission_state),
+            unknown_reasons: safe_strings(&credential.unknown_reasons),
         }
     }
 }
@@ -346,6 +375,9 @@ struct SafeDetail {
     remediations: Vec<SafeRemediationView>,
     remediation_note: String,
     created_at: String,
+    /// Per-GitHub-credential authority facts for the finding's originating scan
+    /// (SPRINT-021 R7), one entry per observed GitHub credential.
+    github_credentials: Vec<SafeGitHubCredentialView>,
 }
 
 impl SafeDetail {
@@ -380,6 +412,11 @@ impl SafeDetail {
                 .collect(),
             remediation_note: terminal_safe(&detail.remediation_note),
             created_at: terminal_safe(&detail.created_at),
+            github_credentials: detail
+                .github_credentials
+                .iter()
+                .map(SafeGitHubCredentialView::new)
+                .collect(),
         }
     }
 }
@@ -691,7 +728,7 @@ fn safe_strings(values: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SafeExplainedPath, SafeScanDiagnostics};
+    use super::{SafeExplainedPath, SafeGitHubCredentialView, SafeScanDiagnostics};
     use crate::application::ExplainedPath;
     use crate::findings::diagnostics::{
         ConfidenceNote, ProviderDiagnostic, ScanDiagnostics, SuppressedReason,
@@ -758,6 +795,52 @@ mod tests {
             serde_json::json!(["agent:opencode|can_execute|shell:bash", "STALE", 0.25]),
             "edge tuple (edge_key, freshness, penalty) must serialize as a 3-element array"
         );
+    }
+
+    /// Asserts the MCP `SafeGitHubCredentialView` mirror serializes the
+    /// credential type, authority resolution tier, permission state, and
+    /// unknown-reason codes with the exact application-DTO field names, so the
+    /// `list_findings` / `get_finding` payloads carry `github_credentials`
+    /// (SPRINT-021 R7).
+    #[test]
+    fn safe_github_credential_view_serializes_authority_facts() {
+        use crate::application::GitHubCredentialView;
+        for (credential, expected) in [
+            (
+                GitHubCredentialView {
+                    credential_type: "classic_pat".to_string(),
+                    authority_resolution: "EXACT".to_string(),
+                    permission_state: "REPO_WRITE".to_string(),
+                    unknown_reasons: vec![],
+                },
+                serde_json::json!({
+                    "credential_type": "classic_pat",
+                    "authority_resolution": "EXACT",
+                    "permission_state": "REPO_WRITE",
+                    "unknown_reasons": [],
+                }),
+            ),
+            (
+                GitHubCredentialView {
+                    credential_type: "fine_grained_pat".to_string(),
+                    authority_resolution: "UNKNOWN".to_string(),
+                    permission_state: "READ_OR_UNKNOWN".to_string(),
+                    unknown_reasons: vec![
+                        "GITHUB_FINE_GRAINED_PERMISSIONS_UNOBSERVABLE".to_string()
+                    ],
+                },
+                serde_json::json!({
+                    "credential_type": "fine_grained_pat",
+                    "authority_resolution": "UNKNOWN",
+                    "permission_state": "READ_OR_UNKNOWN",
+                    "unknown_reasons": ["GITHUB_FINE_GRAINED_PERMISSIONS_UNOBSERVABLE"],
+                }),
+            ),
+        ] {
+            let safe = SafeGitHubCredentialView::new(&credential);
+            let value = serde_json::to_value(&safe).expect("serializable");
+            assert_eq!(value, expected);
+        }
     }
 
     /// Asserts the MCP mirror serializes the effective Bash capability and its

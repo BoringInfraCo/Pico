@@ -62,6 +62,11 @@ pub struct FindingList {
     /// verbatim by the CLI and MCP so incomplete evidence is explained rather
     /// than silently dropped.
     pub diagnostics: Option<ScanDiagnostics>,
+    /// Per-GitHub-credential authority facts observed in the selected scan
+    /// (SPRINT-021 R7). One entry per `credential:github:*|can_*|github:repository`
+    /// relationship observed in the scan. Empty when no GitHub credential was
+    /// observed (the golden path surfaces nothing).
+    pub github_credentials: Vec<GitHubCredentialView>,
 }
 
 /// Minimal scan identity used by list and detail DTOs.
@@ -131,6 +136,12 @@ pub struct FindingDetail {
     pub remediations: Vec<RemediationView>,
     pub remediation_note: String,
     pub created_at: String,
+    /// Per-GitHub-credential authority facts for the Finding's originating scan
+    /// (SPRINT-021 R7). One entry per GitHub credential observed in the scan, so
+    /// the explained view carries the GitHub authority even though the
+    /// repository target is not a production sink on the path. Empty when no
+    /// GitHub credential was observed.
+    pub github_credentials: Vec<GitHubCredentialView>,
 }
 
 /// One persisted AttackPath rendered with traversal-aware steps.
@@ -194,6 +205,25 @@ pub struct CloudflareAuthorityView {
     pub permission_state: String,
     pub account_scope_state: String,
     pub zone_scoped: bool,
+}
+
+/// One per-GitHub-credential authority entry surfaced on the scan result and
+/// explained finding (SPRINT-021 R6/R7).
+///
+/// Pico establishes only what the safe GitHub authority projection carries: the
+/// credential type (classic_pat / fine_grained_pat / oauth / other / unknown),
+/// the authority resolution tier (EXACT / SCOPED / BEHAVIORAL_READ_ONLY /
+/// UNKNOWN), the permission state (e.g. REPO_WRITE, READ_ONLY,
+/// READ_OR_UNKNOWN), and the reasons a write claim could not be established
+/// (e.g. GITHUB_REPO_WRITE_SCOPE_UNOBSERVABLE,
+/// GITHUB_FINE_GRAINED_PERMISSIONS_UNOBSERVABLE). Raw token values never enter
+/// this type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GitHubCredentialView {
+    pub credential_type: String,
+    pub authority_resolution: String,
+    pub permission_state: String,
+    pub unknown_reasons: Vec<String>,
 }
 
 /// One per-tool GitHub MCP influence entry surfaced on an explained path
@@ -396,6 +426,10 @@ impl FindingQueryService {
                 Some(scan) => load_scan_diagnostics(conn, &scan.id)?,
                 None => None,
             };
+            let github_credentials = match &selected {
+                Some(scan) => github_credentials_for_scan(conn, &scan.id)?,
+                None => Vec::new(),
+            };
             Ok(FindingList {
                 selected_scan: selected.as_ref().map(scan_brief),
                 newest_scan_attempt: newest_attempt.as_ref().map(scan_brief),
@@ -403,6 +437,7 @@ impl FindingQueryService {
                 freshness_warning: warning,
                 findings,
                 diagnostics,
+                github_credentials,
             })
         })?;
         enforce_dto_budget(&result)?;
@@ -1273,6 +1308,72 @@ fn cloudflare_authority_views(
     by_worker.into_values().collect()
 }
 
+/// Collects per-GitHub-credential authority facts observed in one scan
+/// (SPRINT-021 R7). The GitHub repository target is not a production sink, so
+/// the GitHub `can_access` / `can_mutate` edge never terminates an attack path;
+/// this scan-scoped reconstruction reads the persisted observations for the
+/// scan and returns one `GitHubCredentialView` per
+/// `credential:github:*|can_*|github:repository` relationship. Entries are
+/// de-duplicated by the credential identity so each GitHub credential appears
+/// once regardless of the edge kind that carried its authority metadata.
+fn github_credentials_for_scan(
+    conn: &Connection,
+    scan_id: &str,
+) -> Result<Vec<GitHubCredentialView>, PicoError> {
+    use crate::analysis::model::metadata_string_array;
+    let mut by_credential: BTreeMap<String, GitHubCredentialView> = BTreeMap::new();
+    let mut statement = conn
+        .prepare(
+            "SELECT r.canonical_key, r.metadata
+             FROM observations o
+             JOIN relationships r ON r.id = o.subject_id
+             WHERE o.scan_id = ?1 AND o.subject_type = 'relationship'
+               AND r.canonical_key LIKE 'credential:github:%|github:repository'
+             ORDER BY r.canonical_key",
+        )
+        .map_err(|error| {
+            PicoError::database(format!("github credentials query failed: {error}"))
+        })?;
+    let rows = statement
+        .query_map([scan_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|error| {
+            PicoError::database(format!("github credentials query failed: {error}"))
+        })?;
+    for row in rows {
+        let (key, metadata_text) = row.map_err(|error| {
+            PicoError::database(format!("github credentials row failed: {error}"))
+        })?;
+        let credential_part = key
+            .split_once('|')
+            .map(|(head, _)| head.to_string())
+            .unwrap_or_else(|| key.clone());
+        let metadata: Option<serde_json::Value> = metadata_text
+            .as_deref()
+            .and_then(|text| serde_json::from_str(text).ok());
+        let credential_type =
+            crate::analysis::model::metadata_string(metadata.as_ref(), "credential_type")
+                .unwrap_or_default();
+        let authority_resolution =
+            crate::analysis::model::metadata_string(metadata.as_ref(), "authority_resolution")
+                .unwrap_or_default();
+        let permission_state =
+            crate::analysis::model::metadata_string(metadata.as_ref(), "permission_state")
+                .unwrap_or_default();
+        let unknown_reasons = metadata_string_array(metadata.as_ref(), "unknown_reasons");
+        by_credential
+            .entry(credential_part)
+            .or_insert(GitHubCredentialView {
+                credential_type,
+                authority_resolution,
+                permission_state,
+                unknown_reasons,
+            });
+    }
+    Ok(by_credential.into_values().collect())
+}
+
 fn explained_paths(
     conn: &Connection,
     graph: &SecurityGraph,
@@ -1654,6 +1755,7 @@ fn compose_detail(conn: &Connection, finding_id: &str) -> Result<FindingDetail, 
 
     let reasons = reason_views(conn, &graph, &record, &linked_path_ids, &evidence.ids)?;
     let remediations = remediation_views(conn, &graph, &record, &path_edges_by_phase)?;
+    let github_credentials = github_credentials_for_scan(conn, &record.scan_id)?;
 
     let scans = ScanRepo::new(conn);
     let newest_complete = scans.newest_complete()?;
@@ -1702,6 +1804,7 @@ fn compose_detail(conn: &Connection, finding_id: &str) -> Result<FindingDetail, 
         remediations,
         remediation_note: REMEDIATION_NOTE.to_string(),
         created_at: codec::ts_to_text(record.created_at),
+        github_credentials,
     };
     Ok(detail)
 }
