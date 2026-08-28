@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": { "bash": "allow" },
+  "mcp": { "servers": {
+    "github": {
+      "type": "local",
+      "command": ["docker", "run", "ghcr.io/github/github-mcp-server:0.1.0"],
+      "environment": { "GITHUB_PERSONAL_ACCESS_TOKEN": "TEST_SECRET_SHOULD_NOT_PERSIST" }
+    }
+  }}
+}

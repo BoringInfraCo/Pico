@@ -1,0 +1,6 @@
+{
+  "sandbox": true,
+  "permissions": {
+    "allow": ["Bash"]
+  }
+}

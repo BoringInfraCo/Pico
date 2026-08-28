@@ -225,6 +225,7 @@ fn cloudflare_global_key_marks_unverified_in_cli() {
             boundaries: vec![],
             effective_bash_capability: None,
             bash_boundary: None,
+            agents: vec![],
             github_influence: vec![],
             cloudflare_authority: vec![CloudflareAuthorityView {
                 worker_key: "cloudflare:worker:global:*".to_string(),
@@ -410,6 +411,7 @@ fn secret_sweep_never_leaks_cloudflare_token_across_postures() {
             boundaries: vec![],
             effective_bash_capability: None,
             bash_boundary: None,
+            agents: vec![],
             github_influence: vec![],
             cloudflare_authority: vec![CloudflareAuthorityView {
                 worker_key: "cloudflare:worker:global:*".to_string(),

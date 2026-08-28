@@ -265,6 +265,7 @@ fn minimal_detail_with_github_influence() -> FindingDetail {
         boundaries: vec![],
         effective_bash_capability: None,
         bash_boundary: None,
+        agents: vec![],
         github_influence: vec![
             GitHubInfluenceView {
                 tool_name: "issue_read".to_string(),

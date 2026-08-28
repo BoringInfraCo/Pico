@@ -322,6 +322,7 @@ fn minimal_detail_with_capability(label: &str, boundary: &str) -> FindingDetail 
         } else {
             Some(boundary.to_string())
         },
+        agents: vec![],
         github_influence: vec![],
         cloudflare_authority: vec![],
     };

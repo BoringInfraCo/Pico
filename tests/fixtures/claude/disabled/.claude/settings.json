@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": ["Bash"]
+  },
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "github-mcp-server"],
+      "enabled": false
+    }
+  }
+}
