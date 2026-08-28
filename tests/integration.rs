@@ -53,3 +53,9 @@ mod sprint020_adapter_test;
 mod sprint020_cli_test;
 #[path = "integration/sprint020_mcp_test.rs"]
 mod sprint020_mcp_test;
+#[path = "integration/sprint021_authority_test.rs"]
+mod sprint021_authority_test;
+#[path = "integration/sprint021_cli_test.rs"]
+mod sprint021_cli_test;
+#[path = "integration/sprint021_mcp_test.rs"]
+mod sprint021_mcp_test;
