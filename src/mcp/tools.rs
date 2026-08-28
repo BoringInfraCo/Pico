@@ -418,8 +418,30 @@ struct SafeExplainedPath {
     boundaries: Vec<SafeBoundaryView>,
     effective_bash_capability: Option<String>,
     bash_boundary: Option<String>,
+    /// Per-agent effective Bash posture, one entry per
+    /// `agent:<provider>|can_execute|shell:bash` edge in the scan graph
+    /// (SPRINT-020 R7). Present alongside the legacy single-agent fields so mixed
+    /// OpenCode + Claude Code workspaces surface every actor.
+    agents: Vec<SafeAgentBashView>,
     github_influence: Vec<SafeGitHubInfluenceView>,
     cloudflare_authority: Vec<SafeCloudflareAuthorityView>,
+}
+
+#[derive(Serialize)]
+struct SafeAgentBashView {
+    provider: String,
+    effective_bash_capability: String,
+    bash_boundary: Option<String>,
+}
+
+impl SafeAgentBashView {
+    fn new(agent: &crate::application::findings::AgentBashView) -> Self {
+        SafeAgentBashView {
+            provider: terminal_safe(&agent.provider),
+            effective_bash_capability: terminal_safe(&agent.effective_bash_capability),
+            bash_boundary: agent.bash_boundary.as_deref().map(terminal_safe),
+        }
+    }
 }
 
 impl SafeExplainedPath {
@@ -440,6 +462,7 @@ impl SafeExplainedPath {
             boundaries: path.boundaries.iter().map(SafeBoundaryView::new).collect(),
             effective_bash_capability: path.effective_bash_capability.as_deref().map(terminal_safe),
             bash_boundary: path.bash_boundary.as_deref().map(terminal_safe),
+            agents: path.agents.iter().map(SafeAgentBashView::new).collect(),
             github_influence: path
                 .github_influence
                 .iter()
@@ -764,6 +787,7 @@ mod tests {
                 boundaries: vec![],
                 effective_bash_capability: Some(label.to_string()),
                 bash_boundary: boundary.map(str::to_string),
+                agents: vec![],
                 github_influence: vec![],
                 cloudflare_authority: vec![],
             };
@@ -780,6 +804,71 @@ mod tests {
                 "MCP field must carry the interrupting boundary for {label}"
             );
         }
+    }
+
+    /// Asserts the MCP mirror serializes the per-agent effective Bash posture
+    /// array for a mixed OpenCode + Claude Code explained path, while keeping the
+    /// legacy single-agent fields intact (SPRINT-020 R7).
+    #[test]
+    fn safe_explained_path_serializes_per_agent_bash() {
+        use crate::application::findings::AgentBashView;
+        let path = ExplainedPath {
+            id: "p".to_string(),
+            fingerprint: "sha256:p".to_string(),
+            disposition: "ACTIVE".to_string(),
+            source_trust: "PUBLIC_EXTERNAL".to_string(),
+            influence_strength: "AGENT_INJECTABLE".to_string(),
+            capability: "EXECUTE".to_string(),
+            authority_resolution: "EXACT".to_string(),
+            sink_impact: "PRODUCTION".to_string(),
+            source_resource_id: "s".to_string(),
+            actor_resource_id: "a".to_string(),
+            sink_resource_id: "k".to_string(),
+            steps: vec![],
+            boundaries: vec![],
+            effective_bash_capability: Some("AUTO_ALLOW".to_string()),
+            bash_boundary: None,
+            agents: vec![
+                AgentBashView {
+                    provider: "opencode".to_string(),
+                    effective_bash_capability: "AUTO_ALLOW".to_string(),
+                    bash_boundary: None,
+                },
+                AgentBashView {
+                    provider: "claude".to_string(),
+                    effective_bash_capability: "APPROVAL_GATED".to_string(),
+                    bash_boundary: Some("MANDATORY_APPROVAL".to_string()),
+                },
+            ],
+            github_influence: vec![],
+            cloudflare_authority: vec![],
+        };
+        let safe = SafeExplainedPath::new(&path);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        let array = value["agents"].as_array().expect("agents must be an array");
+        assert_eq!(array.len(), 2);
+        assert_eq!(
+            array[0],
+            serde_json::json!({
+                "provider": "opencode",
+                "effective_bash_capability": "AUTO_ALLOW",
+                "bash_boundary": null,
+            })
+        );
+        assert_eq!(
+            array[1],
+            serde_json::json!({
+                "provider": "claude",
+                "effective_bash_capability": "APPROVAL_GATED",
+                "bash_boundary": "MANDATORY_APPROVAL",
+            })
+        );
+        assert_eq!(
+            value["effective_bash_capability"],
+            serde_json::json!("AUTO_ALLOW"),
+            "legacy single-agent field must stay intact"
+        );
+        assert_eq!(value["bash_boundary"], serde_json::Value::Null);
     }
 
     /// Asserts the MCP mirror serializes per-tool GitHub MCP influence entries
@@ -803,6 +892,7 @@ mod tests {
             boundaries: vec![],
             effective_bash_capability: None,
             bash_boundary: None,
+            agents: vec![],
             github_influence: vec![
                 GitHubInfluenceView {
                     tool_name: "issue_read".to_string(),
@@ -867,6 +957,7 @@ mod tests {
             boundaries: vec![],
             effective_bash_capability: None,
             bash_boundary: None,
+            agents: vec![],
             github_influence: vec![],
             cloudflare_authority: vec![
                 CloudflareAuthorityView {

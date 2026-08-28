@@ -239,7 +239,17 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
                 "Sink: {}\n",
                 terminal_safe(&path.sink_resource_id)
             ));
-            if let Some(capability) = &path.effective_bash_capability {
+            if path.agents.len() > 1 {
+                for agent in &path.agents {
+                    let boundary = agent.bash_boundary.as_deref().unwrap_or("none");
+                    out.push_str(&format!(
+                        "Agent {} effective Bash: {}; boundary: {}\n",
+                        terminal_safe(&agent.provider),
+                        terminal_safe(&agent.effective_bash_capability),
+                        terminal_safe(boundary),
+                    ));
+                }
+            } else if let Some(capability) = &path.effective_bash_capability {
                 out.push_str(&format!(
                     "Effective Bash capability: {}\n",
                     terminal_safe(capability)

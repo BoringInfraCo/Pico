@@ -155,6 +155,12 @@ pub struct ExplainedPath {
     /// The interrupting boundary kind imposed on the Bash `can_execute` edge,
     /// if the effective Bash capability is not AUTO_ALLOW/UNKNOWN (SPRINT-016 R7).
     pub bash_boundary: Option<String>,
+    /// Per-agent effective Bash capability and interrupting boundary, one entry
+    /// per `agent:<provider>|can_execute|shell:bash` edge in the scan graph
+    /// (SPRINT-020 R6/R7). Each entry names the agent provider and the effective
+    /// state Pico resolved for that agent, so mixed OpenCode + Claude Code
+    /// workspaces surface every actor's Bash posture.
+    pub agents: Vec<AgentBashView>,
     /// Per-tool GitHub MCP influence collected from the path's edges
     /// (SPRINT-017 R6/R7). Each entry records the GitHub MCP tool name and the
     /// classification facts Pico can establish from the static config:
@@ -203,6 +209,22 @@ pub struct GitHubInfluenceView {
     pub content_class: String,
     pub trust: String,
     pub influence_strength: String,
+}
+
+/// One per-agent effective Bash capability entry surfaced on an explained path
+/// (SPRINT-020 R6/R7).
+///
+/// Pico derives the entry from the `agent:<provider>|can_execute|shell:bash`
+/// edge's persisted `effective_state` metadata: the agent provider parsed from
+/// the edge's canonical key, the effective Bash capability, and the interrupting
+/// boundary kind (`MANDATORY_APPROVAL` / `HARD_DENY` / `SANDBOX`) when the
+/// effective state is not AUTO_ALLOW/UNKNOWN. Only states Pico can establish are
+/// emitted; unresolved postures are never invented.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AgentBashView {
+    pub provider: String,
+    pub effective_bash_capability: String,
+    pub bash_boundary: Option<String>,
 }
 
 /// One traversal-applied step of an explained path.
@@ -1064,8 +1086,12 @@ fn boundary_views(path: &AttackPathRecord) -> Result<Vec<BoundaryView>, PicoErro
 fn bash_capability_view(
     graph: &SecurityGraph,
     edges: &[AttackPathEdgeRecord],
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Option<String>, Vec<AgentBashView>) {
     use crate::analysis::model::metadata_string;
+    // Legacy primary (SPRINT-016): the path's first can_execute edge carrying an
+    // effective state. Preserved byte-for-byte so the OpenCode golden path keeps
+    // its single-agent CLI/MCP output.
+    let mut primary = (None, None);
     for edge in edges {
         let Some(graph_edge) = graph.edge(&edge.relationship_id) else {
             continue;
@@ -1074,16 +1100,55 @@ fn bash_capability_view(
         else {
             continue;
         };
-        let boundary = match state.as_str() {
-            "AUTO_ALLOW" | "UNKNOWN" => None,
-            "APPROVAL_GATED" => Some("MANDATORY_APPROVAL"),
-            "DENIED" => Some("HARD_DENY"),
-            "SANDBOXED" => Some("SANDBOX"),
-            _ => None,
-        };
-        return (Some(state), boundary.map(|value| value.to_string()));
+        let boundary = bash_boundary_for_state(&state);
+        primary = (Some(state), boundary.map(|value| value.to_string()));
+        break;
     }
-    (None, None)
+
+    // Per-agent (SPRINT-020 R6/R7): every `agent:<provider>|can_execute|shell:bash`
+    // edge in the scan graph surfaces its own effective Bash posture, so a mixed
+    // OpenCode + Claude Code workspace shows both actors regardless of which
+    // actor's authority path produced this finding.
+    let mut agents: Vec<AgentBashView> = Vec::new();
+    for graph_edge in &graph.edges {
+        let Some(provider) = agent_provider_from_key(&graph_edge.canonical_key) else {
+            continue;
+        };
+        let Some(state) = metadata_string(graph_edge.safe_metadata.as_ref(), "effective_state")
+        else {
+            continue;
+        };
+        agents.push(AgentBashView {
+            provider: provider.to_string(),
+            effective_bash_capability: state.clone(),
+            bash_boundary: bash_boundary_for_state(&state).map(|value| value.to_string()),
+        });
+    }
+    agents.sort_by(|a, b| a.provider.cmp(&b.provider));
+    agents.dedup_by(|a, b| a.provider == b.provider);
+    (primary.0, primary.1, agents)
+}
+
+/// Parses the agent provider from an `agent:<provider>|can_execute|shell:bash`
+/// canonical relationship key.
+fn agent_provider_from_key(canonical_key: &str) -> Option<&str> {
+    let (agent_part, suffix) = canonical_key.split_once('|')?;
+    if suffix != "can_execute|shell:bash" {
+        return None;
+    }
+    agent_part.strip_prefix("agent:")
+}
+
+/// Maps an effective Bash state to its interrupting boundary kind
+/// (SPRINT-016 R7). AUTO_ALLOW and UNKNOWN impose no boundary.
+fn bash_boundary_for_state(state: &str) -> Option<&'static str> {
+    match state {
+        "AUTO_ALLOW" | "UNKNOWN" => None,
+        "APPROVAL_GATED" => Some("MANDATORY_APPROVAL"),
+        "DENIED" => Some("HARD_DENY"),
+        "SANDBOXED" => Some("SANDBOX"),
+        _ => None,
+    }
 }
 
 /// Collects per-tool GitHub MCP influence from the path's edges (SPRINT-017
@@ -1227,7 +1292,8 @@ fn explained_paths(
             )));
         }
         let steps = path_steps(graph, path, &edges, reference)?;
-        let (effective_bash_capability, bash_boundary) = bash_capability_view(graph, &edges);
+        let (effective_bash_capability, bash_boundary, agents) =
+            bash_capability_view(graph, &edges);
         let github_influence = github_influence_views(graph, &edges);
         let cloudflare_authority = cloudflare_authority_views(graph, &edges);
         let path_evidence_rows = paths_repo.list_evidence(&path.id)?;
@@ -1263,6 +1329,7 @@ fn explained_paths(
             boundaries: boundary_views(path)?,
             effective_bash_capability,
             bash_boundary,
+            agents,
             github_influence,
             cloudflare_authority,
         });
