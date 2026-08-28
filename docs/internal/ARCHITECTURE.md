@@ -3962,16 +3962,21 @@ An Agent Adapter answers:
 
 > **What can this agent actually reach and do under the observed configuration?**
 
-The first implementation target is:
+The first implementation target was:
 
 ```text
 OpenCode
 ```
 
-Future adapters may include:
+and the second supported agent adapter (implemented in Sprint 020) is:
 
 ```text
 Claude Code
+```
+
+Future adapters may include:
+
+```text
 Codex
 Cursor
 other coding agents
@@ -4641,7 +4646,7 @@ GitHub capability
 Agent
 ```
 
-Later Pico may also analyze:
+Implemented in Sprint 021, Pico also analyzes:
 
 ```text
 Agent
@@ -4651,7 +4656,16 @@ GitHub Credential
 Repository Write
 ```
 
-The architecture supports both without requiring both in V0.
+GitHub repository-mutation authority is resolved type-aware (classic PAT /
+fine-grained PAT / OAuth) and scope-aware where observable: an optional,
+**offline-default** classic-PAT `GET /user` scope probe reads the
+`X-OAuth-Scopes` header (`repo`/`public_repo` ⇒ `can_mutate`; read-only ⇒
+`BEHAVIORAL_READ_ONLY`). Offline and fine-grained tokens resolve to `UNKNOWN`
+(`GITHUB_REPO_WRITE_SCOPE_UNOBSERVABLE` /
+`GITHUB_FINE_GRAINED_PERMISSIONS_UNOBSERVABLE`). `can_mutate` is emitted only
+on evidenced write authority — never fabricated. The architecture supports
+both GitHub content influence and repository-write authority without
+requiring both in V0.
 
 ---
 
@@ -6866,6 +6880,12 @@ Application services coordinate domain, discovery, persistence, and analysis.
 
 # 27. Golden Path Implementation
 
+> **Status: IMPLEMENTED.** The golden path and its vertical slices (27.1) were
+> realized as Sprint 001 through Sprint 022 (see `docs/internal/sprints/` and
+> ROADMAP §§20–22). The v0.1–v0.3 surfaces are implemented; §28.4 records the
+> implemented architecture through v0.3. This section is retained as the
+> original implementation plan.
+
 The architecture should now be reduced to one narrow implementation path.
 
 Pico V0's first proof should establish:
@@ -7150,13 +7170,23 @@ local CLI
 
 OpenCode
 
+Claude Code            (implemented Sprint 020)
+
 GitHub MCP influence
 
+GitHub repository mutation authority   (implemented Sprint 021)
+
 Bash capability
+
+per-agent effective Bash state          (implemented Sprint 016/020)
 
 Cloudflare credential discovery
 
 Cloudflare Worker authority
+
+incomplete-evidence diagnostics         (implemented Sprint 019)
+
+provider-aware multi-agent keys         (implemented Sprint 020)
 
 SQLite
 
@@ -7256,6 +7286,71 @@ query the result from their coding agent
 ```
 
 That is enough.
+
+---
+
+## 28.4 Implemented Architecture Through v0.3
+
+This addendum records what the architecture now canonically supports after
+Sprints 001–022. It does not rewrite the sections above; it marks their
+implementation status and captures the v0.3 additions the pre-implementation
+text could not describe.
+
+### 28.4.1 Multi-agent support (S020)
+
+- Two agent adapters are implemented: **OpenCode** and **Claude Code**.
+- Both emit the same normalized facts (`ObservedActor`,
+  `ObservedBashCapability`, `ObservedMcpServer`), and `discover()` merges them
+  into one `DiscoveryResult`.
+- **Provider-aware identity**: every agent-scoped relationship key is
+  `agent:<provider>|…` (e.g. `agent:opencode|can_execute|shell:bash`,
+  `agent:claude|can_execute|shell:bash`). The scan no longer assumes a single
+  OpenCode actor; mixed workspaces produce per-agent edges without identity
+  collision, duplicated findings, or cross-agent evidence leakage.
+- **Claude Code configuration precedence** is resolved deterministically:
+  project `.claude/settings.json`, then project `.claude/settings.local.json`,
+  then user `~/.claude/settings.json`; Bash posture comes from
+  `permissions.allow/ask/deny`, `permissions.disableBash`,
+  `permissions.defaultMode`, and sandbox configuration, mapped to the same
+  `EffectiveBashPermission` model as OpenCode (S016). Unknown/mixed patterns
+  degrade to `UNKNOWN`, never invented.
+- Per-agent effective Bash state is surfaced in the finding-detail view (CLI
+  `Agent <provider> effective Bash: …; boundary: …`, MCP `paths[].agents[]`).
+
+### 28.4.2 GitHub repository mutation authority (S021)
+
+- GitHub credentials (`GITHUB_TOKEN`, `GH_TOKEN`,
+  `GITHUB_PERSONAL_ACCESS_TOKEN`) are discovered from environment and `.env`
+  and classified by format: `ghp_` classic PAT, `github_pat_` fine-grained
+  PAT, `gho_` OAuth, `ghs_`/`ghr_` other.
+- **Offline-default bounded probe**: a classic PAT may be probed with a single
+  allowlisted, read-only `GET https://api.github.com/user`; the
+  `X-OAuth-Scopes` header resolves write (`repo`/`public_repo` ⇒
+  `EXACT`/`can_mutate`) vs read-only (`BEHAVIORAL_READ_ONLY`). Offline is the
+  default (no outbound); fine-grained PATs are always `UNKNOWN`
+  (`GITHUB_FINE_GRAINED_PERMISSIONS_UNOBSERVABLE`); offline classic PATs are
+  `UNKNOWN` (`GITHUB_REPO_WRITE_SCOPE_UNOBSERVABLE`).
+- **Evidence-only mutation**: `can_mutate` is emitted only when write
+  authority is evidenced (EXACT/SCOPED); otherwise only `can_access` (read).
+  The token VALUE is never stored; only type, fingerprint, and scope facts.
+
+### 28.4.3 Diagnostics and confidence (S014/S019)
+
+- Structured `ScanDiagnostics`: per-provider status, `scan_status`
+  (COMPLETE/PARTIAL) with `partial_reason`, suppressed-finding reasons, and
+  reduced-confidence notes (edge freshness + penalty). Persisted in the
+  `scan_diagnostics` table (schema v5).
+- Incomplete evidence is explained, never implied safe: `Partial` scans name
+  the failed provider and suppress positive findings; stale/unknown edges are
+  unconfirmable; absence of evidence is surfaced as UNKNOWN/Partial.
+
+### 28.4.4 Golden path status
+
+The OpenCode golden path (27) is byte-identical across v0.2–v0.3 additions:
+still exactly one active finding under the golden fixture, with
+`agent:opencode` keys unchanged. All surfaces share one engine (ARCHITECTURE
+§2), read-only allowlisted probes, secret transience, and provider-aware
+adapters.
 
 ---
 
