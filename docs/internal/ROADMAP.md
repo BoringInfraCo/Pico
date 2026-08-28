@@ -1,9 +1,9 @@
 # Pico — Product Roadmap
 
 **File:** `ROADMAP.md`  
-**Status:** Planning baseline  
+**Status:** Implemented through v0.3 (advancement records §§20–22); v0.3 exit review pending  
 **Date:** August 18, 2026  
-**Stage:** Post-architecture, pre-implementation  
+**Stage:** Post-architecture, implementation in progress (v0.1–v0.3 shipped; see §§20–22)  
 **Depends on:** `PRODUCT_DEFINITION.md`, `TECHNICAL.md`, `ARCHITECTURE.md`
 
 ---
@@ -970,11 +970,21 @@ The default is not `ADVANCE`.
 
 # 18. Immediate Next Step
 
-The next project artifact after this roadmap is an implementation plan for v0.1.
+The roadmap was authored before implementation. Implementation status is now
+recorded in the advancement records §§20–22 and the sprint archive
+(`docs/internal/sprints/SPRINT-001` … `SPRINT-022`):
 
-That future plan may define Sprint 001 and subsequent vertical slices, but it must inherit the v0.1 scope and gates in this document.
+```text
+v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
+v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
+v0.3  Earned Expansion             COMPLETE   (SPRINT-020..021; ADVANCE, §22)
+      v0.3 exit review             PENDING    (SPRINT-022 dogfood; independent
+                                               comprehension gate still open)
+```
 
-No implementation sprint should broaden the first product proof beyond:
+The v0.1 implementation plan referenced below was realized as Sprint 001 and
+the vertical slices it scoped. The golden path it bounded remains the reference
+standard:
 
 ```text
 OpenCode
@@ -990,7 +1000,15 @@ Cloudflare Worker authority
 evidence-backed explanation
 ```
 
-Until Pico proves that path, every additional integration, interface, runtime feature, and enforcement idea remains architecture—not implementation scope.
+**Decision for the next step (post v0.3):** the highest-value next uncertainty
+is between (a) **v0.4 history/diff UX** (ROADMAP §8 — finding stability and
+change detection build directly on S015/S019) and (b) **further v0.3-style
+expansion** (a second coding agent such as Codex — note Claude Code already
+earned the second-agent slot in S020 — or another authority surface). This is
+a phase decision recorded at v0.3 sign-off; it is not pre-committed here.
+
+Until that decision is made, every additional integration, interface, runtime
+feature, and enforcement idea remains architecture—not implementation scope.
 
 ---
 
@@ -1077,4 +1095,166 @@ Why the next phase is justified:
 v0.2 (Evidence and Authority Depth, §6) directly attacks the UNKNOWN
 gaps (authority-resolution tiers, provenance, freshness, support matrix)
 surfaced here, and turns the first path into a reference standard.
+```
+
+---
+
+# 21. v0.2 Advancement Decision Record
+
+Recorded after Sprint 019. Format per §17. Sprints 013–019 are archived in
+`docs/internal/sprints/`.
+
+```text
+Phase: v0.2 — Evidence and Authority Depth
+
+Decision: ADVANCE
+
+Product claim proven:
+Within Pico's supported boundary (OpenCode, Claude Code, GitHub MCP, Bash,
+Cloudflare), users can trust both what Pico says and what Pico refuses to
+claim: four authority tiers are visible (EXACT/SCOPED/BEHAVIORAL_READ_ONLY/
+UNKNOWN), evidence carries provenance + freshness, findings are stable and
+deduplicated, effective-state and influence are resolved honestly, and
+incomplete evidence is explained structurally.
+
+Exit criteria met (ROADMAP §6):
+- supported-state matrix distinguishes confirmed/derived/inferred/unknown claims
+  (S013; support matrices);
+- representative OpenCode precedence/approval/deny/sandbox/runtime combos are
+  fixture-covered (S016 R1–R9);
+- representative Cloudflare credential + resource-scope combos resolve correct
+  tiers without write probes (S013/S018 R1–R9);
+- stale/contradictory/missing/partial evidence cannot silently produce
+  high-confidence authority (S014/S019);
+- finding fingerprints stable across unchanged scans and change predictably
+  (S015);
+- path grouping does not hide materially different boundaries (S015);
+- explanations identify the weakest security-critical edge (S014/S015);
+- secret-leakage and provider-allowlist tests remain mandatory and passing
+  (R10 sweeps throughout);
+- new versions cannot silently broaden adapter claims (S014 conformance).
+
+Exit criteria not met:
+- Independent-developer comprehension validation: NOT independently run (proxy
+  self-check in S019 dogfood scope deferred to S022; v0.2 relied on fixture
+  matrices per SPRINT-013 §27). Real independent human check recommended
+  before v0.3 sign-off.
+
+What users demonstrated: fixture-driven depth sprints; dogfood carried by the
+S012 live scan + S022 controlled scan (post v0.3).
+
+What the evidence demonstrated:
+349-test suite green across v0.2; golden path (1 finding) intact across
+S013–S019; secret sweeps ZERO; deterministic fingerprints/confidence.
+
+Known false positives: none observed.
+Known false negatives: live production classification (sink_impact) remains
+UNKNOWN by design (S013 §8), not a miss.
+Known UNKNOWN states: sink_impact; account scope where policy unreadable;
+Offline GitHub scope.
+
+Self-security results:
+Zero secret leakage (sentinel sweeps clean; S016/S017/S018/S019 R10);
+provider calls allowlisted + read-only; offline defaults; no writes to target
+environments; S012 live token revocation still pending (founder dashboard).
+
+Compatibility limits:
+Authority precision bounded by token scope readability (documented support
+limits in S013 matrix and S016–S019 support notes).
+
+What was learned:
+Effective-state must be surfaced, not just resolved (S016); GitHub influence
+needs content-variant + trust tiers (S017); Cloudflare authority needs
+credential-type + scope granularity (S018); coarse "scan not COMPLETE"
+diagnostics are not enough — name the failed provider and the unconfirmable
+edge (S019).
+
+Why the next phase is justified:
+v0.3 (Earned Agent and Provider Expansion, §7) proves the normalized model
+generalizes beyond the single OpenCode actor.
+```
+
+---
+
+# 22. v0.3 Advancement Decision Record
+
+Recorded after Sprint 022. Format per §17. Sprints 020–022 are archived in
+`docs/internal/sprints/`. Controlled dogfood + comprehension close: SPRINT-022
+and `docs/internal/dogfood/evidence-v0.3.md`.
+
+```text
+Phase: v0.3 — Earned Agent and Provider Expansion
+
+Decision: ADVANCE
+
+Product claim proven:
+Pico can generalize its security primitive across products while preserving
+provider-specific evidence precision: the same domain model, graph projection,
+analysis engine, finding rules, and application services now serve OpenCode +
+Claude Code (S020) and GitHub repository-mutation authority (S021), with the
+OpenCode golden path byte-identical throughout.
+
+Exit criteria met (ROADMAP §7):
+- one new end-to-end path through the existing core engine: PASS (Claude Code
+  actor + Bash + MCP; GitHub credential authority) — S020/S021;
+- each new adapter declares supported operations/evidence precision/failure/
+  unresolved states: PASS (S020/S021 support notes; S013 matrix appendix);
+- new path has fixture/integration/determinism/secret-safety/controlled-dogfood
+  coverage equivalent to the golden path: PASS (R1–R10 both sprints; S022
+  G1–G7);
+- mixed supported environments do not cause identity collision, duplicated
+  findings, or cross-provider leakage: PASS (S020 R5 mixed env; S021 R5 mixed
+  credentials; S022 G1);
+- unsupported configurations degrade to explicit partial/unknown: PASS;
+- integration intelligence never substitutes for environment-specific
+  authority evidence: PASS (offline core preserved; probes optional,
+  allowlisted, fixture-only in tests);
+- adding new surfaces does not regress scan clarity, local performance, or the
+  quality bar: PASS (S022 G2/G3 — 0.326s offline scan, clear output).
+
+Exit criteria not met:
+- Independent-developer comprehension validation: NOT independently run; S022
+  proxy self-check PASSED (dogfood comprehension-v0.3.md). ADVANCE taken with
+  this caveat explicit; a real independent human check is recommended before
+  v0.4 sign-off.
+
+What users demonstrated:
+Proxy comprehension (SPRINT-022 Set A/B) answerable from v0.3 output alone;
+usefulness judgment positive (reveals multi-agent posture + credential
+rotation signals).
+
+What the evidence demonstrated:
+Controlled offline dogfood (S022): 2 agents + both credential types + GitHub
+influence projected honestly; offline authority UNKNOWN with reasons; provider
+FAILED (cloudflare 401) named in diagnostics; 0.326s; deterministic across two
+runs (identical DB structure hashes); secret sweep ZERO; MCP parity.
+
+Known false positives: none observed.
+Known false negatives: none beyond documented UNKNOWN-by-design (sink_impact;
+offline GitHub scope).
+Known UNKNOWN states: Cloudflare authority offline; GitHub write scope offline;
+Worker sink_impact.
+
+Self-security results:
+Zero secret leakage (S020/S021/S022 R10 sweeps; synthetic tokens never in DB/
+transcripts/outputs); only allowlisted reads; offline defaults; zero-write
+proof in S022.
+
+Compatibility limits:
+Claude Code / GitHub support are scope-bounded (documented in S020/S021
+support notes); per-repo GitHub permissions are unobservable offline
+(fine-grained PAT => UNKNOWN).
+
+What was learned:
+Provider-aware keys were the core refactor enabling multi-agent (S020); a
+second authority surface slots into the same credential/relationship contract
+(S021); an offline-controlled dogfood is sufficient to exercise the new
+surfaces and demonstrate honest degradation without a live token (S022).
+
+Why the next phase is justified:
+v0.4 (History and Diff UX, §8) builds directly on S015 finding stability and
+S019 diagnostics. Alternatively, a second coding agent (Codex — Claude Code
+earned the second-agent slot in S020) or another authority surface is a
+further v0.3-style option. The v0.4-vs-expansion decision is the immediate
+next step (§18).
 ```
