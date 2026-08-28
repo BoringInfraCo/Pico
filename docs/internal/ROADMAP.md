@@ -1,9 +1,9 @@
 # Pico — Product Roadmap
 
 **File:** `ROADMAP.md`  
-**Status:** Implemented through v0.3 (advancement records §§20–22); v0.3 exit review pending  
+**Status:** Implemented through v0.3 (advancement records §§20–22); v0.4 started (SPRINT-024); v0.3 exit review pending  
 **Date:** August 18, 2026  
-**Stage:** Post-architecture, implementation in progress (v0.1–v0.3 shipped; see §§20–22)  
+**Stage:** Post-architecture, implementation in progress (v0.1–v0.3 shipped; v0.4 in progress; see §§20–22)  
 **Depends on:** `PRODUCT_DEFINITION.md`, `TECHNICAL.md`, `ARCHITECTURE.md`
 
 ---
@@ -972,15 +972,14 @@ The default is not `ADVANCE`.
 
 The roadmap was authored before implementation. Implementation status is now
 recorded in the advancement records §§20–22 and the sprint archive
-(`docs/internal/sprints/SPRINT-001` … `SPRINT-022`):
+(`docs/internal/sprints/SPRINT-001` … `SPRINT-024`):
 
 ```text
 v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
-v0.3  Earned Expansion             COMPLETE   (SPRINT-020..021; ADVANCE, §22)
-      v0.3 exit review             PENDING    (SPRINT-022 dogfood; independent
-                                               comprehension gate still open;
-                                               F-U1 closed in S023)
+v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
+      v0.3 exit review             PENDING    (independent comprehension gate)
+v0.4  Security memory              IN PROGRESS (SPRINT-024 finding-set diff)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
@@ -1001,15 +1000,15 @@ Cloudflare Worker authority
 evidence-backed explanation
 ```
 
-**Decision for the next step (post v0.3):** the highest-value next uncertainty
-is between (a) **v0.4 history/diff UX** (ROADMAP §8 — finding stability and
-change detection build directly on S015/S019) and (b) **further v0.3-style
-expansion** (a second coding agent such as Codex — note Claude Code already
-earned the second-agent slot in S020 — or another authority surface). This is
-a phase decision recorded at v0.3 sign-off; it is not pre-committed here.
+**Decision for the next step (post v0.3):** v0.4 security memory / change
+detection (ROADMAP §8). A third agent remains architecture unless concrete
+user demand outweighs this sequencing. Sprint 024 starts the phase with
+finding-set `pico diff` over COMPLETE scans. The v0.3 independent-developer
+comprehension gate stays open and is not closed by this work.
 
-Until that decision is made, every additional integration, interface, runtime
-feature, and enforcement idea remains architecture—not implementation scope.
+Every additional integration, interface, runtime feature, and enforcement
+idea outside the active v0.4 slice remains architecture—not implementation
+scope.
 
 ---
 
