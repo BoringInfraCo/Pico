@@ -1,0 +1,7 @@
+negotiated: 2025-03-26
+tools: ['list_findings', 'get_finding']
+list_findings is_error: False | result keys: ['content']
+get_finding is_error: True
+malformed is_error: True
+ping is_error: False
+exit: 0 | stderr:

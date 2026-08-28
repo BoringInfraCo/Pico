@@ -1,0 +1,7 @@
+Pico Findings
+
+No COMPLETE scan exists in this workspace.
+Newest scan attempt: scan_18cfd6a8faa363f0_0 (PARTIAL)
+Run `pico scan` and let it complete to produce results.
+This is not an all-clear; no authoritative scan exists.
+exit=0
