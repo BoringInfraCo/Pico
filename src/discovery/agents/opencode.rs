@@ -26,6 +26,21 @@ use crate::shared::PicoError;
 
 const CONFIG_NAMES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
 const CLOUDFLARE_TOKEN_ENV: &str = "CLOUDFLARE_API_TOKEN";
+const GITHUB_TOKEN_ENVS: [&str; 3] = ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"];
+
+/// Read an environment credential from the explicit fixture pairs first, then
+/// the process environment. The explicit pairs are consumed transiently and
+/// never returned to callers.
+fn env_value(explicit_environment: Option<&[(&str, &str)]>, key: &str) -> Option<String> {
+    explicit_environment
+        .and_then(|pairs| {
+            pairs
+                .iter()
+                .find(|(candidate, _)| *candidate == key)
+                .map(|(_, value)| (*value).to_string())
+        })
+        .or_else(|| std::env::var(key).ok())
+}
 
 /// Raw credential material is kept behind this non-serializable, redacted
 /// handle and zeroized when the adapter releases it.
@@ -133,15 +148,8 @@ pub fn discover_with_environment(
                 tool.permission_pattern = pattern;
             }
         }
-        let environment_value = explicit_environment
-            .and_then(|pairs| {
-                pairs
-                    .iter()
-                    .find(|(key, _)| *key == CLOUDFLARE_TOKEN_ENV)
-                    .map(|(_, value)| (*value).to_string())
-            })
-            .or_else(|| std::env::var(CLOUDFLARE_TOKEN_ENV).ok())
-            .map(TransientCredential::new);
+        let environment_value =
+            env_value(explicit_environment, CLOUDFLARE_TOKEN_ENV).map(TransientCredential::new);
         if let Some(value) = environment_value {
             if !value.is_empty()
                 && !result
@@ -159,30 +167,78 @@ pub fn discover_with_environment(
                 });
             }
         }
-        if let Some(value) = project_dotenv_token(workspace) {
-            let value_fingerprint = value.fingerprint();
-            if !result
-                .credentials
-                .iter()
-                .any(|credential| credential.fingerprint == value_fingerprint)
+        // GitHub credentials are environment-level too (SPRINT-021). Discovery
+        // is purely additive and never triggers a live Cloudflare inspection.
+        for env_key in GITHUB_TOKEN_ENVS {
+            if let Some(value) =
+                env_value(explicit_environment, env_key).map(TransientCredential::new)
             {
+                if !value.is_empty()
+                    && !result.credentials.iter().any(|credential| {
+                        credential.fingerprint == crate::discovery::github::fingerprint(&value.0)
+                    })
+                {
+                    result.credentials.push(ObservedCredential {
+                        provider: "github",
+                        credential_type: crate::discovery::github::classify_credential_type(
+                            &value.0,
+                        ),
+                        source_type: "environment",
+                        source_locator: env_key.to_string(),
+                        fingerprint: crate::discovery::github::fingerprint(&value.0),
+                        environment: environment_reachability,
+                    });
+                }
+            }
+        }
+        // The exact project-root dotenv source is the bounded local contract
+        // that proves Bash reachability. Provider access remains transient and
+        // emits only safe normalized facts.
+        let provider_reachable = environment_reachability == EnvironmentReachability::Proven
+            && result.bash_capabilities.first().is_some_and(|capability| {
+                capability.permission == PermissionAction::Allow
+                    && capability.scope == CapabilityScope::Unrestricted
+            });
+
+        let dotenv_credentials = project_dotenv_credentials(workspace);
+        for (env_key, value) in &dotenv_credentials {
+            let already_observed = result.credentials.iter().any(|credential| {
+                if env_key == CLOUDFLARE_TOKEN_ENV {
+                    credential.fingerprint == value.fingerprint()
+                } else {
+                    credential.fingerprint == crate::discovery::github::fingerprint(&value.0)
+                }
+            });
+            if already_observed {
+                continue;
+            }
+            if env_key == CLOUDFLARE_TOKEN_ENV {
                 result.credentials.push(ObservedCredential {
                     provider: "cloudflare",
                     credential_type: classify_credential_type(&value.0),
                     source_type: "project_dotenv",
                     source_locator: ".env:CLOUDFLARE_API_TOKEN".to_string(),
-                    fingerprint: value_fingerprint.clone(),
+                    fingerprint: value.fingerprint(),
+                    environment: EnvironmentReachability::Proven,
+                });
+            } else {
+                result.credentials.push(ObservedCredential {
+                    provider: "github",
+                    credential_type: crate::discovery::github::classify_credential_type(&value.0),
+                    source_type: "project_dotenv",
+                    source_locator: format!(".env:{env_key}"),
+                    fingerprint: crate::discovery::github::fingerprint(&value.0),
                     environment: EnvironmentReachability::Proven,
                 });
             }
-            // The exact project-root dotenv source is the bounded local
-            // contract that proves Bash reachability. Provider access remains
-            // transient and emits only safe normalized facts.
-            let provider_reachable = environment_reachability == EnvironmentReachability::Proven
-                && result.bash_capabilities.first().is_some_and(|capability| {
-                    capability.permission == PermissionAction::Allow
-                        && capability.scope == CapabilityScope::Unrestricted
-                });
+        }
+
+        let cloudflare_dotenv = dotenv_credentials
+            .iter()
+            .find(|(env_key, _)| *env_key == CLOUDFLARE_TOKEN_ENV)
+            .map(|(_, value)| value);
+        if let Some(value) = cloudflare_dotenv {
+            let value_fingerprint = value.fingerprint();
             if provider_reachable {
                 if classify_credential_type(&value.0) == "api_key" {
                     // A global API key cannot be resolved through the scoped
@@ -224,40 +280,66 @@ pub fn discover_with_environment(
                 }
             }
         }
+
+        // GitHub authority resolution (SPRINT-021). Purely additive and
+        // offline-safe: the discovery default never contacts GitHub. A GitHub
+        // credential observed in a proven environment carries the offline
+        // UNKNOWN authority unless the application seam injects a probe result.
+        if provider_reachable {
+            for credential in &result.credentials {
+                if credential.provider == "github"
+                    && credential.environment == EnvironmentReachability::Proven
+                {
+                    result.github = Some(crate::discovery::github::GitHubAuthorityResult::offline(
+                        &credential.fingerprint,
+                        Some(credential.credential_type),
+                    ));
+                    break;
+                }
+            }
+        }
     }
     Ok(result)
 }
 
 /// Read only the exact project-root dotenv file. This is deliberately not a
-/// recursive dotenv search or a shell-profile evaluator.
-fn project_dotenv_token(workspace: &Path) -> Option<TransientCredential> {
+/// recursive dotenv search or a shell-profile evaluator. Returns `(env_key,
+/// value)` pairs for every recognized credential key.
+fn project_dotenv_credentials(workspace: &Path) -> Vec<(String, TransientCredential)> {
     let root = workspace
         .ancestors()
         .find(|candidate| candidate.join(".git").exists())
         .unwrap_or(workspace);
-    let contents = fs::read_to_string(root.join(".env")).ok()?;
-    contents.lines().find_map(|line| {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            return None;
-        }
-        let (key, value) = line.split_once('=')?;
-        if key.trim() != CLOUDFLARE_TOKEN_ENV {
-            return None;
-        }
-        let value = value.trim();
-        let value = value
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-            .or_else(|| {
-                value
-                    .strip_prefix('\'')
-                    .and_then(|value| value.strip_suffix('\''))
-            })
-            .unwrap_or(value)
-            .trim();
-        (!value.is_empty()).then(|| TransientCredential::new(value.to_string()))
-    })
+    let Ok(contents) = fs::read_to_string(root.join(".env")) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            if key != CLOUDFLARE_TOKEN_ENV && !GITHUB_TOKEN_ENVS.contains(&key) {
+                return None;
+            }
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    value
+                        .strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })
+                .unwrap_or(value)
+                .trim();
+            (!value.is_empty())
+                .then(|| (key.to_string(), TransientCredential::new(value.to_string())))
+        })
+        .collect()
 }
 
 /// Classify a Cloudflare credential by its lexical shape. This is a best-effort
@@ -1548,5 +1630,132 @@ mod tests {
         );
         // Unrecognized short value falls back to the safe api_token default.
         assert_eq!(classify_credential_type("short"), "api_token");
+    }
+
+    #[test]
+    fn r1_github_credential_discovery_and_type_classification() {
+        // Env keys => github credentials with prefix-based types; the cloudflare
+        // credential coexists untouched.
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"permission":{"bash":"allow"}}"#,
+        )
+        .unwrap();
+        let environment = [
+            ("GITHUB_TOKEN", "ghp_TESTFAKE0000000000000000000000000000"),
+            ("GH_TOKEN", "github_pat_TESTFAKE00000000000000000000"),
+            (
+                "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "gho_TESTFAKE0000000000000000000000000000",
+            ),
+            (
+                "CLOUDFLARE_API_TOKEN",
+                "cfut_TESTFAKE0000000000000000000000000000",
+            ),
+        ];
+        let result = discover_with_environment(
+            dir.path(),
+            None,
+            Some(&environment),
+            EnvironmentReachability::Proven,
+        )
+        .unwrap();
+        let github_credentials: Vec<&ObservedCredential> = result
+            .credentials
+            .iter()
+            .filter(|credential| credential.provider == "github")
+            .collect();
+        assert_eq!(github_credentials.len(), 3);
+        let types: Vec<&str> = github_credentials
+            .iter()
+            .map(|credential| credential.credential_type)
+            .collect();
+        assert_eq!(types, ["classic_pat", "fine_grained_pat", "oauth"]);
+        for credential in &github_credentials {
+            assert_eq!(credential.source_type, "environment");
+            assert_eq!(credential.environment, EnvironmentReachability::Proven);
+            assert!(!credential.fingerprint.contains("cloudflare"));
+        }
+        let github_fingerprints: Vec<&str> = github_credentials
+            .iter()
+            .map(|credential| credential.fingerprint.as_str())
+            .collect();
+        let cloudflare = result
+            .credentials
+            .iter()
+            .find(|credential| credential.provider == "cloudflare")
+            .expect("cloudflare credential from env");
+        assert!(!github_fingerprints.contains(&cloudflare.fingerprint.as_str()));
+
+        // .env keys are recognized too.
+        let ws = tempdir().unwrap();
+        fs::write(
+            ws.path().join(".env"),
+            "GITHUB_TOKEN=ghp_dotenv_TESTFAKE00000000000000000000000000\n\
+             GH_TOKEN=gho_dotenv_TESTFAKE0000000000000000000000000000\n",
+        )
+        .unwrap();
+        fs::write(
+            ws.path().join("opencode.json"),
+            r#"{"permission":{"bash":"allow"}}"#,
+        )
+        .unwrap();
+        let dotenv =
+            discover_with_environment(ws.path(), None, None, EnvironmentReachability::Proven)
+                .unwrap();
+        let dotenv_github: Vec<&ObservedCredential> = dotenv
+            .credentials
+            .iter()
+            .filter(|credential| credential.provider == "github")
+            .collect();
+        assert_eq!(dotenv_github.len(), 2);
+        assert!(dotenv_github
+            .iter()
+            .any(|credential| credential.credential_type == "classic_pat"));
+        assert!(dotenv_github
+            .iter()
+            .any(|credential| credential.credential_type == "oauth"));
+        assert!(dotenv_github
+            .iter()
+            .all(|credential| credential.source_type == "project_dotenv"));
+        assert!(dotenv_github
+            .iter()
+            .all(|credential| credential.source_locator.starts_with(".env:")));
+
+        // GitHub-only environment: no cloudflare interaction, no live probe.
+        let only = tempdir().unwrap();
+        fs::write(
+            only.path().join(".env"),
+            "GITHUB_TOKEN=ghp_only_TESTFAKE00000000000000000000000000\n",
+        )
+        .unwrap();
+        fs::write(
+            only.path().join("opencode.json"),
+            r#"{"permission":{"bash":"allow"}}"#,
+        )
+        .unwrap();
+        let only_result =
+            discover_with_environment(only.path(), None, None, EnvironmentReachability::Proven)
+                .unwrap();
+        assert!(only_result
+            .credentials
+            .iter()
+            .any(|credential| credential.provider == "github"));
+        assert!(!only_result
+            .credentials
+            .iter()
+            .any(|credential| credential.provider == "cloudflare"));
+        // The offline default github result is UNKNOWN with the unobservable
+        // reason and never a write claim.
+        let github = only_result.github.as_ref().expect("github result present");
+        assert_eq!(
+            github.resolution,
+            crate::discovery::cloudflare::AuthorityResolution::Unknown
+        );
+        assert!(github
+            .unknown_reasons
+            .contains(&"GITHUB_REPO_WRITE_SCOPE_UNOBSERVABLE".to_string()));
+        assert_ne!(github.permission_state, "REPO_WRITE");
     }
 }

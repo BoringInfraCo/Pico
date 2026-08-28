@@ -70,6 +70,12 @@ pub struct ScanResult {
     /// status, suppression reasons, and confidence-reduction notes). A rendered
     /// projection of the same facts also lives on `findings.diagnostics`.
     pub diagnostics_detail: Option<ScanDiagnostics>,
+    /// Per-GitHub-credential authority facts observed by this scan (SPRINT-021
+    /// R6/R7). One entry per GitHub credential, carrying only safe normalized
+    /// classification facts (credential type, resolution tier, permission
+    /// state, and unknown-reason codes). Empty when no GitHub credential was
+    /// observed so the golden path renders nothing.
+    pub github_credentials: Vec<crate::application::GitHubCredentialView>,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -134,6 +140,47 @@ impl ScanService {
         environment_reachability: discovery::EnvironmentReachability,
         provider_result: Option<discovery::cloudflare::ProviderResult>,
     ) -> Result<ScanResult, PicoError> {
+        Self::run_with_home_and_environment_and_providers(
+            workspace,
+            home,
+            environment,
+            environment_reachability,
+            provider_result,
+            None,
+        )
+    }
+
+    /// Deterministic GitHub authority seam used by controlled fixtures. The
+    /// injected result is safe, normalized, and offline-safe; tests produce it
+    /// through a fixture transport without any network access.
+    pub fn run_with_home_and_environment_and_github(
+        workspace: &Path,
+        home: Option<&Path>,
+        environment: Option<&[(&str, &str)]>,
+        environment_reachability: discovery::EnvironmentReachability,
+        github_result: Option<discovery::github::GitHubAuthorityResult>,
+    ) -> Result<ScanResult, PicoError> {
+        Self::run_with_home_and_environment_and_providers(
+            workspace,
+            home,
+            environment,
+            environment_reachability,
+            None,
+            github_result,
+        )
+    }
+
+    /// Combined provider seam: injects optional Cloudflare and GitHub provider
+    /// results after discovery so fixtures can exercise either authority path
+    /// without network access.
+    pub fn run_with_home_and_environment_and_providers(
+        workspace: &Path,
+        home: Option<&Path>,
+        environment: Option<&[(&str, &str)]>,
+        environment_reachability: discovery::EnvironmentReachability,
+        provider_result: Option<discovery::cloudflare::ProviderResult>,
+        github_result: Option<discovery::github::GitHubAuthorityResult>,
+    ) -> Result<ScanResult, PicoError> {
         let mut db = Database::open_existing(&workspace.join(".pico").join("pico.db"))?;
         db.migrate()?;
 
@@ -155,6 +202,9 @@ impl ScanService {
         )?;
         if provider_result.is_some() {
             discovered.cloudflare = provider_result;
+        }
+        if github_result.is_some() {
+            discovered.github = github_result;
         }
         let resource_repo = ResourceRepo::new(db.connection());
         let evidence_repo = EvidenceRepo::new(db.connection());
@@ -556,6 +606,8 @@ impl ScanService {
         }
 
         let mut cloudflare_credential_observed = false;
+        let mut github_credential_observed = false;
+        let mut github_credentials: Vec<crate::application::GitHubCredentialView> = Vec::new();
         let mut credential_reachability = None;
         let mut cloudflare_credential_status = None;
         let mut cloudflare_account_count = 0;
@@ -563,18 +615,30 @@ impl ScanService {
         let mut worker_mutation_authority = None;
         let mut authority_resolution = None;
         for credential in &discovered.credentials {
-            cloudflare_credential_observed = true;
+            if credential.provider == "cloudflare" {
+                cloudflare_credential_observed = true;
+            }
             let credential_key = format!(
                 "credential:{}:{}",
                 credential.provider, credential.fingerprint
             );
+            let credential_name = if credential.provider == "github" {
+                "GitHub Token"
+            } else {
+                "Cloudflare API Token"
+            };
+            let fingerprint_version = if credential.provider == "github" {
+                "sha256:pico-github-token-v1"
+            } else {
+                "sha256:pico-credential-v1"
+            };
             let mut resource = match resource_repo.get_by_canonical_key(&credential_key)? {
                 Some(resource) => resource,
                 None => Resource::new(
                     &credential_key,
                     "credential",
                     credential.provider,
-                    "Cloudflare API Token",
+                    credential_name,
                 )?,
             };
             resource.last_observed_at = chrono::Utc::now();
@@ -587,7 +651,7 @@ impl ScanService {
                 "authority_resolution": "UNKNOWN",
                 "environment_reachability": credential.environment.as_str(),
                 "secret_stored": false,
-                "fingerprint_version": "sha256:pico-credential-v1",
+                "fingerprint_version": fingerprint_version,
             });
             validate_secret_safe(&resource_metadata)?;
             resource.metadata = Some(resource_metadata);
@@ -596,7 +660,7 @@ impl ScanService {
                 &observation_repo,
                 &scan.id,
                 &resource,
-                "cloudflare_credential_adapter",
+                &format!("{}_credential_adapter", credential.provider),
             )?;
             let reference_metadata = serde_json::json!({
                 "provider": credential.provider,
@@ -611,10 +675,13 @@ impl ScanService {
                 &evidence_repo,
                 &scan.id,
                 EvidenceClass::Direct,
-                "cloudflare_credential_reference",
+                &format!("{}_credential_reference", credential.provider),
                 &credential.source_locator,
                 &credential_key,
-                "supported Cloudflare credential reference is present",
+                &format!(
+                    "supported {} credential reference is present",
+                    credential.provider
+                ),
                 reference_metadata,
             )?;
 
@@ -672,6 +739,7 @@ impl ScanService {
                     relationship_metadata,
                     &format!("Bash credential reachability is {reachability}"),
                     &credential.source_locator,
+                    credential.provider,
                 )?;
             } else {
                 credential_reachability = Some("UNKNOWN".to_string());
@@ -710,6 +778,117 @@ impl ScanService {
                 cloudflare_worker_count = summary.worker_count;
                 worker_mutation_authority = summary.worker_mutation_authority;
                 authority_resolution = summary.authority_resolution;
+            }
+
+            // GitHub repository mutation authority (SPRINT-021). Purely
+            // additive: builds a provider-scoped repository resource and emits
+            // `can_mutate` ONLY when write authority is evidenced (EXACT or
+            // SCOPED); otherwise a read `can_access` edge. No cross-provider
+            // leakage and no duplicate edges with the Cloudflare branch.
+            if credential.provider == "github" {
+                github_credential_observed = true;
+                let github_result = discovered
+                    .github
+                    .as_ref()
+                    .filter(|result| result.credential_fingerprint == credential.fingerprint);
+                if let Some(result) = github_result {
+                    if !result.problems.is_empty() {
+                        discovered.problems.extend(result.problems.iter().cloned());
+                    }
+                }
+                let repo_key = "github:repository";
+                let mut repo_resource = match resource_repo.get_by_canonical_key(repo_key)? {
+                    Some(resource) => resource,
+                    None => Resource::new(repo_key, "repository", "github", "GitHub Repository")?,
+                };
+                repo_resource.last_observed_at = chrono::Utc::now();
+                repo_resource.metadata = Some(serde_json::json!({
+                    "provider": "github",
+                    "authority_resolution": github_result
+                        .map(|result| result.resolution.as_str())
+                        .unwrap_or(
+                            discovery::cloudflare::AuthorityResolution::Unknown.as_str(),
+                        ),
+                }));
+                validate_secret_safe(repo_resource.metadata.as_ref().expect("metadata set"))?;
+                resource_repo.upsert(&repo_resource)?;
+                observe_resource(
+                    &observation_repo,
+                    &scan.id,
+                    &repo_resource,
+                    "github_credential_adapter",
+                )?;
+
+                let (state, resolution, permission_state, unknown_reasons, credential_type) =
+                    match github_result {
+                        Some(result) => (
+                            result.state,
+                            result.resolution,
+                            result.permission_state.clone(),
+                            result.unknown_reasons.clone(),
+                            result
+                                .credential_type
+                                .clone()
+                                .unwrap_or_else(|| credential.credential_type.to_string()),
+                        ),
+                        None => {
+                            let offline = discovery::github::GitHubAuthorityResult::offline(
+                                &credential.fingerprint,
+                                Some(credential.credential_type),
+                            );
+                            (
+                                offline.state,
+                                offline.resolution,
+                                offline.permission_state,
+                                offline.unknown_reasons,
+                                credential.credential_type.to_string(),
+                            )
+                        }
+                    };
+                let can_mutate = matches!(
+                    resolution,
+                    discovery::cloudflare::AuthorityResolution::Exact
+                        | discovery::cloudflare::AuthorityResolution::Scoped
+                );
+                let kind = if can_mutate {
+                    "can_mutate"
+                } else {
+                    "can_access"
+                };
+                github_credentials.push(crate::application::GitHubCredentialView {
+                    credential_type: credential_type.clone(),
+                    authority_resolution: resolution.as_str().to_string(),
+                    permission_state: permission_state.clone(),
+                    unknown_reasons: unknown_reasons.clone(),
+                });
+                let relationship_key = format!("{credential_key}|{kind}|{repo_key}");
+                let metadata = serde_json::json!({
+                    "provider": "github",
+                    "credential_type": credential_type,
+                    "authority_resolution": resolution.as_str(),
+                    "permission_state": permission_state,
+                    "unknown_reasons": unknown_reasons,
+                });
+                persist_github_relationship(
+                    &relationship_repo,
+                    &evidence_repo,
+                    &observation_repo,
+                    &scan.id,
+                    &resource,
+                    &repo_resource,
+                    &relationship_key,
+                    kind,
+                    state,
+                    metadata,
+                    if can_mutate {
+                        "GitHub credential scope evidence resolved repository mutation authority"
+                    } else {
+                        "GitHub credential carries read access to repositories"
+                    },
+                    github_result
+                        .map(|result| result.source_locator.as_str())
+                        .unwrap_or("github:scope_probe:offline"),
+                )?;
             }
         }
 
@@ -805,6 +984,8 @@ impl ScanService {
                 .collect::<Vec<_>>()
                 .as_slice(),
             discovered.cloudflare.as_ref(),
+            discovered.github.as_ref(),
+            github_credential_observed,
         );
         let partial_reason = provider_statuses
             .iter()
@@ -888,6 +1069,7 @@ impl ScanService {
                 .count() as u64,
             unresolved_candidate_count: analysis.unresolved_candidate_count as u64,
             diagnostics_detail: Some(diagnostics_detail),
+            github_credentials,
         })
     }
 }
@@ -1010,13 +1192,18 @@ fn build_provider_statuses(
     problems: &[String],
     actor_providers: &[&str],
     cloudflare: Option<&discovery::cloudflare::ProviderResult>,
+    github: Option<&discovery::github::GitHubAuthorityResult>,
+    github_observed: bool,
 ) -> Vec<ProviderDiagnostic> {
     let cloudflare_problems: Vec<String> = cloudflare
         .map(|result| result.problems.clone())
         .unwrap_or_default();
+    let github_problems: Vec<String> = github
+        .map(|result| result.problems.clone())
+        .unwrap_or_default();
     let mut providers: std::collections::BTreeSet<&str> = actor_providers.iter().copied().collect();
     for problem in problems {
-        if !cloudflare_problems.contains(problem) {
+        if !cloudflare_problems.contains(problem) && !github_problems.contains(problem) {
             if let Some(provider) = problem_provider(problem) {
                 providers.insert(provider);
             }
@@ -1027,7 +1214,9 @@ fn build_provider_statuses(
         let provider_problems: Vec<String> = problems
             .iter()
             .filter(|problem| {
-                !cloudflare_problems.contains(problem) && problem_belongs_to(problem, provider)
+                !cloudflare_problems.contains(problem)
+                    && !github_problems.contains(problem)
+                    && problem_belongs_to(problem, provider)
             })
             .cloned()
             .collect();
@@ -1042,6 +1231,13 @@ fn build_provider_statuses(
             name: "cloudflare".to_string(),
             reachable: cloudflare.problems.is_empty(),
             problems: cloudflare.problems.clone(),
+        });
+    }
+    if github_observed {
+        statuses.push(ProviderDiagnostic {
+            name: "github".to_string(),
+            reachable: github_problems.is_empty(),
+            problems: github_problems,
         });
     }
     statuses
@@ -1494,6 +1690,55 @@ fn persist_cloudflare_relationship(
     observations.insert(&observation)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn persist_github_relationship(
+    relationships: &RelationshipRepo<'_>,
+    evidence: &EvidenceRepo<'_>,
+    observations: &ObservationRepo<'_>,
+    scan_id: &str,
+    from: &Resource,
+    to: &Resource,
+    key: &str,
+    kind: &str,
+    state: RelationshipState,
+    metadata: serde_json::Value,
+    explanation: &str,
+    locator: &str,
+) -> Result<(), PicoError> {
+    validate_secret_safe(&metadata)?;
+    let mut relationship = match relationships.get_by_canonical_key(key)? {
+        Some(relationship) => relationship,
+        None => Relationship::new(key, &from.id, &to.id, kind, state)?,
+    };
+    relationship.state = state;
+    relationship.last_observed_at = chrono::Utc::now();
+    relationship.metadata = Some(metadata.clone());
+    relationships.upsert(&relationship)?;
+
+    let mut item = Evidence::new(
+        scan_id,
+        EvidenceClass::Derived,
+        "github_authority_resolution",
+        locator,
+        key,
+        explanation,
+        Sensitivity::Internal,
+    )?;
+    item.metadata = Some(metadata.clone());
+    evidence.insert(&item)?;
+    relationships.link_evidence(&relationship.id, &item.id)?;
+
+    let mut observation = Observation::new(
+        scan_id,
+        "relationship",
+        &relationship.id,
+        "observed",
+        "github_credential_adapter",
+    )?;
+    observation.metadata = Some(relationship_snapshot_metadata(&relationship));
+    observations.insert(&observation)
+}
+
 fn validate_secret_safe(value: &serde_json::Value) -> Result<(), PicoError> {
     match value {
         serde_json::Value::Object(object) => {
@@ -1535,6 +1780,7 @@ fn persist_credential_relationship(
     metadata: serde_json::Value,
     explanation: &str,
     locator: &str,
+    provider: &str,
 ) -> Result<(), PicoError> {
     validate_secret_safe(&metadata)?;
     let mut relationship = match relationships.get_by_canonical_key(key)? {
@@ -1548,7 +1794,7 @@ fn persist_credential_relationship(
     let mut item = Evidence::new(
         scan_id,
         EvidenceClass::Derived,
-        "cloudflare_credential_reachability",
+        &format!("{provider}_credential_reachability"),
         locator,
         key,
         explanation,
@@ -1562,7 +1808,7 @@ fn persist_credential_relationship(
         "relationship",
         &relationship.id,
         "observed",
-        "cloudflare_credential_adapter",
+        &format!("{provider}_credential_adapter"),
     )?;
     observation.metadata = Some(relationship_snapshot_metadata(&relationship));
     observations.insert(&observation)

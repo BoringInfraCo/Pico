@@ -5,6 +5,7 @@
 
 pub mod agents;
 pub mod cloudflare;
+pub mod github;
 pub mod mcp;
 
 use std::path::Path;
@@ -192,6 +193,10 @@ pub struct DiscoveryResult {
     /// Safe, normalized result from the bounded Cloudflare provider adapter.
     /// Raw credentials and provider response bodies never enter this value.
     pub cloudflare: Option<cloudflare::ProviderResult>,
+    /// Safe, normalized GitHub authority result (SPRINT-021). Present only when
+    /// a GitHub credential was observed with a proven environment. Raw token
+    /// values never enter this value.
+    pub github: Option<github::GitHubAuthorityResult>,
     pub problems: Vec<String>,
 }
 
@@ -271,6 +276,13 @@ mod tests {
         }
         if let Some(cloudflare) = &result.cloudflare {
             check_cloudflare(cloudflare);
+        }
+        if let Some(github) = &result.github {
+            assert!(
+                source_locator_is_safe(&github.source_locator, &SENTINELS),
+                "github source_locator leaked: {}",
+                github.source_locator
+            );
         }
     }
 
