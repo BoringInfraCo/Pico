@@ -129,6 +129,7 @@ mod tests {
 
     fn official_image_server(tool_declaration: Option<&str>) -> ObservedMcpServer {
         ObservedMcpServer {
+            provider: "opencode",
             name: "github".to_string(),
             transport: McpTransport::Stdio,
             enabled: true,
@@ -144,6 +145,7 @@ mod tests {
 
     fn official_remote_server() -> ObservedMcpServer {
         ObservedMcpServer {
+            provider: "opencode",
             name: "github".to_string(),
             transport: McpTransport::Http,
             enabled: true,
@@ -345,6 +347,7 @@ delete_pull_request,create_comment,merge_pull_request,unknown_tool",
 
         // Non-official identity is ignored entirely (spoof / provider illusion).
         let spoof = ObservedMcpServer {
+            provider: "opencode",
             name: "github".to_string(),
             transport: McpTransport::Http,
             enabled: true,
@@ -369,6 +372,7 @@ delete_pull_request,create_comment,merge_pull_request,unknown_tool",
         // Toolset declaration maps to its read tool (PARTIAL: a toolset that
         // yields no recognized tools still resolves to the DERIVED default).
         let toolset = ObservedMcpServer {
+            provider: "opencode",
             name: "github".to_string(),
             transport: McpTransport::Stdio,
             enabled: true,
@@ -389,6 +393,7 @@ delete_pull_request,create_comment,merge_pull_request,unknown_tool",
         // Provider-failure (PARTIAL) variant: a toolset that resolves to nothing
         // falls back to the DERIVED default rather than dropping the surface.
         let partial = ObservedMcpServer {
+            provider: "opencode",
             name: "github".to_string(),
             transport: McpTransport::Stdio,
             enabled: true,

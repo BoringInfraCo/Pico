@@ -104,6 +104,7 @@ pub fn discover_with_environment(
         match resolve_effective_bash(&effective) {
             Ok((permission, scope, effective_state)) => {
                 result.bash_capabilities.push(ObservedBashCapability {
+                    provider: "opencode",
                     permission,
                     scope,
                     effective_state,
@@ -355,6 +356,7 @@ fn parse_mcp_servers(
         let tool_declaration = extract_declaration(server, "tools");
         let toolset_declaration = extract_declaration(server, "toolsets");
         output.push(ObservedMcpServer {
+            provider: "opencode",
             name: name.clone(),
             transport,
             enabled,

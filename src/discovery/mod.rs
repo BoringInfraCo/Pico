@@ -86,9 +86,12 @@ impl CapabilityScope {
     }
 }
 
-/// A provider-neutral fact about an actor's Bash policy.
+/// A provider-neutral fact about an actor's Bash policy. `provider` names the
+/// agent adapter that observed it so application services can pair each
+/// capability with its owning actor resource (`agent:<provider>`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedBashCapability {
+    pub provider: &'static str,
     pub permission: PermissionAction,
     pub scope: CapabilityScope,
     pub effective_state: EffectiveBashPermission,
@@ -114,9 +117,11 @@ impl McpTransport {
     }
 }
 
-/// Safe, normalized MCP server facts emitted by the OpenCode adapter.
+/// Safe, normalized MCP server facts emitted by the agent adapters. `provider`
+/// names the agent adapter that declared the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedMcpServer {
+    pub provider: &'static str,
     pub name: String,
     pub transport: McpTransport,
     pub enabled: bool,
@@ -190,10 +195,15 @@ pub struct DiscoveryResult {
     pub problems: Vec<String>,
 }
 
-/// Runs the single supported actor adapter. This is intentionally not a
-/// plugin registry: Sprint 002 has one explicit adapter only.
+/// Runs every supported agent adapter and merges their observed facts into one
+/// result. Credentials and the Cloudflare provider projection come exclusively
+/// from the OpenCode adapter (environment-level); the Claude Code adapter is
+/// config-only and emits no credential facts. Adapter order is deterministic so
+/// the OpenCode golden path stays the primary actor (`bash_capabilities[0]`).
 pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult, PicoError> {
-    agents::opencode::discover(workspace, home)
+    let opencode = agents::opencode::discover(workspace, home)?;
+    let claude = agents::claude::discover(workspace, home)?;
+    Ok(merge_results(opencode, claude))
 }
 
 /// Bounded discovery entrypoint used by deterministic fixtures. The optional
@@ -204,7 +214,22 @@ pub fn discover_with_environment(
     environment: Option<&[(&str, &str)]>,
     reachability: EnvironmentReachability,
 ) -> Result<DiscoveryResult, PicoError> {
-    agents::opencode::discover_with_environment(workspace, home, environment, reachability)
+    let opencode =
+        agents::opencode::discover_with_environment(workspace, home, environment, reachability)?;
+    let claude = agents::claude::discover(workspace, home)?;
+    Ok(merge_results(opencode, claude))
+}
+
+/// Concatenate the normalized facts from every adapter. Only the OpenCode
+/// adapter contributes `credentials` and `cloudflare`, so those fields are
+/// preserved from the OpenCode result untouched.
+fn merge_results(mut opencode: DiscoveryResult, claude: DiscoveryResult) -> DiscoveryResult {
+    opencode.actors.extend(claude.actors);
+    opencode.bash_capabilities.extend(claude.bash_capabilities);
+    opencode.mcp_servers.extend(claude.mcp_servers);
+    opencode.github_surfaces.extend(claude.github_surfaces);
+    opencode.problems.extend(claude.problems);
+    opencode
 }
 
 #[cfg(test)]
