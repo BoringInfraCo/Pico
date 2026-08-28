@@ -7316,6 +7316,9 @@ text could not describe.
   degrade to `UNKNOWN`, never invented.
 - Per-agent effective Bash state is surfaced in the finding-detail view (CLI
   `Agent <provider> effective Bash: …; boundary: …`, MCP `paths[].agents[]`).
+  Mixed-agent `pico scan` summaries list every agent's effective Bash
+  (`<provider>: <effective_state>`); the single-agent OpenCode line
+  `Effective Bash: ALLOW` is unchanged (S023 / F-U1).
 
 ### 28.4.2 GitHub repository mutation authority (S021)
 

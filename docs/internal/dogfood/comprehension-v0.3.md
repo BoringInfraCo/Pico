@@ -134,10 +134,13 @@ claims.
    scoped, not an all-clear.
 4. **Keep Pico installed and run again?** Yes.
 
-**Confusion points (proxy):** the scan-summary shows the primary agent's
-`Effective Bash`; per-agent posture (Claude) is in the finding-detail view,
-which requires a Finding. With zero Findings the per-agent line is not visible
-at summary level — recorded as follow-up F-U1 (SPRINT-022 §12).
+**Confusion points (proxy):** the original v0.3 scan-summary showed only the
+primary agent's `Effective Bash`; per-agent posture (Claude) lived in the
+finding-detail view, which requires a Finding. That hole was F-U1.
+**S023 close:** the S022 mixed-agent scenario re-run now shows both postures
+in the scan summary without a Finding (`opencode: AUTO_ALLOW`, `claude:
+APPROVAL_GATED` — `docs/internal/dogfood/transcripts/df23-E2-scan.txt`).
+Independent-developer gate still NOT RUN.
 
 ---
 

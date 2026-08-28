@@ -1,0 +1,48 @@
+# Sprint 023 comprehension re-run (S022 scenario)
+# Mode: offline-default / bounded-read. Synthetic tokens. Paths omitted.
+# Workspace: OpenCode bash allow + Claude ask + synthetic cfut_/ghp_ + GitHub MCP canary.
+# Binary: target/debug/pico after S023 implementation.
+
+Pico scan complete
+
+Scan: scan_<id>
+Status: PARTIAL
+
+Agents:        2
+Resources:     9
+Relationships: 9
+Evidence:      15
+Security Graph: PROJECTED
+Graph Nodes:    9
+Graph Edges:    9
+State-Eligible Edges: 7
+Non-Eligible Edges:   2
+Analysis:       COMPLETE
+Analysis Disposition: NONE
+Influence Paths: 1
+Authority Paths: 0
+Potentially Active AttackPaths: 0
+Blocked AttackPaths: 0
+Unresolved Candidates: 0
+Findings:        0
+Effective Bash:
+  opencode: AUTO_ALLOW
+  claude: APPROVAL_GATED
+GitHub MCP:    OBSERVED
+Influence:     AGENT_INJECTABLE
+Cloudflare Credential: OBSERVED
+Credential Reachability: REACHABLE
+Cloudflare Accounts: 0
+Cloudflare Workers: 0
+Credential Value Stored: NO
+
+GitHub credential authority:
+  GitHub classic_pat authority: resolution=UNKNOWN permission=READ_OR_UNKNOWN reasons=[GITHUB_REPO_WRITE_SCOPE_UNOBSERVABLE]
+
+Incomplete evidence
+Provider claude: reachable
+Provider opencode: reachable
+Provider cloudflare: FAILED
+  - cloudflare read returned HTTP 401
+Provider github: reachable
+Scan status: PARTIAL (cloudflare)

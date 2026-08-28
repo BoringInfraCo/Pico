@@ -979,7 +979,8 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..021; ADVANCE, §22)
       v0.3 exit review             PENDING    (SPRINT-022 dogfood; independent
-                                               comprehension gate still open)
+                                               comprehension gate still open;
+                                               F-U1 closed in S023)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
@@ -1258,3 +1259,11 @@ earned the second-agent slot in S020) or another authority surface is a
 further v0.3-style option. The v0.4-vs-expansion decision is the immediate
 next step (§18).
 ```
+
+S023 follow-up (2026-08-27): **F-U1 closed.** A mixed-agent `pico scan`
+summary now lists every detected agent's effective Bash (`opencode:
+AUTO_ALLOW`, `claude: APPROVAL_GATED` in the S022 scenario re-run). The
+single-agent OpenCode line `Effective Bash: ALLOW` is unchanged. The
+independent-developer comprehension gate remains open (S022/S023 proxies
+only; same caveat as v0.1, §20). Do not treat this as v0.3 exit-review
+close.

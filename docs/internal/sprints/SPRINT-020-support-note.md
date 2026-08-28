@@ -106,7 +106,10 @@ surfaces the effective Bash state **per agent**:
 
 - mixed workspace: one `Agent <provider> effective Bash: <state>; boundary:
   <kind>` line per agent on the CLI, and an `agents` array
-  (`[{provider, effective_bash_capability, bash_boundary}]`) in the MCP JSON,
+  (`[{provider, effective_bash_capability, bash_boundary}]`) in the MCP JSON.
+  Sprint 023 also lists every agent's effective Bash on the `pico scan`
+  summary (`<provider>: <effective_state>`) so a zero-Finding mixed scan
+  still shows non-primary postures (F-U1).
 - single-agent (golden) workspace: the legacy `Effective Bash capability:` /
   `Bash interrupting boundary:` fields and single `agent` entry, byte-identical
-  to Sprint 016.
+  to Sprint 016. The scan summary keeps `Effective Bash: ALLOW`.

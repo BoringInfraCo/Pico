@@ -14,9 +14,9 @@
 
 Sprints 020–021 added the v0.3 surfaces (Claude Code; GitHub mutation authority) and proved them with **fixtures**. ROADMAP §7 v0.3 exit criteria also require **controlled dogfood** of the new end-to-end path, **preserved scan clarity / local performance**, and demonstrated **user usefulness** (`ROADMAP.md:426`). This sprint runs the controlled dogfood and the comprehension close, then records the v0.3 advancement decision per ROADMAP §17.
 
-It is a **validation sprint**: it produces no new engine features; it exercises the shipped CLI against a controlled, offline workspace whose fixtures include the v0.3 surfaces, captures evidence, and evaluates the product gates.
+It is a **validation sprint**: it produces no new engine features; it exercises the shipped CLI against a controlled, offline-default / bounded-read workspace whose fixtures include the v0.3 surfaces, captures evidence, and evaluates the product gates.
 
-**Critical constraint:** the Sprint 012 live token (`cfut_…`, id `6b1a59bb84dd680a1dde77f49b3f357b`) is **pending dashboard deletion and must not be used**. This dogfood is **offline** with **synthetic tokens** (`cfut_TESTFAKE…`, `ghp_TESTFAKE…`). Offline authority is `UNKNOWN` by design (S021/S018) — an honest, demonstrable outcome, not a defect.
+**Critical constraint:** the Sprint 012 live token (`cfut_…`, id `6b1a59bb84dd680a1dde77f49b3f357b`) is **pending dashboard deletion and must not be used**. This dogfood is **offline-default / bounded-read** with **synthetic tokens** (`cfut_TESTFAKE…`, `ghp_TESTFAKE…`). Offline authority is `UNKNOWN` by design (S021/S018) — an honest, demonstrable outcome, not a defect. The Cloudflare verification made one allowlisted outbound request and degraded honestly on HTTP 401.
 
 ---
 
@@ -29,8 +29,9 @@ G1  Mixed-surface controlled scan: both agents (OpenCode + Claude Code), both
 G2  Scan clarity: output is parseable and understandable — per-agent effective
     Bash state, Cloudflare + GitHub credential authority, incomplete-evidence
     diagnostics — all present and self-explanatory.
-G3  Local performance + offline core: elapsed time recorded; zero outbound
-    network traffic (offline default transports).
+G3  Local performance + offline-default / bounded-read core: elapsed time
+    recorded; authority probes stay offline-default; the only outbound is the
+    allowlisted Cloudflare verify (honest HTTP 401 on the synthetic token).
 G4  Determinism: two independent runs produce identical normalized output and
     identical DB-structure hashes (ties S015/S020/S021 stability).
 G5  Secret sweep: synthetic token values and their first 8 chars appear ZERO
@@ -53,7 +54,7 @@ G7  Usefulness judgment: the output tells the user something new, would change
 
 ---
 
-# 4. Controlled Dogfood Runbook (offline)
+# 4. Controlled Dogfood Runbook (offline-default / bounded-read)
 
 Machine: macOS, zsh. Repo baseline `77e456e`. Binary `target/debug/pico` (built from baseline).
 
@@ -79,14 +80,15 @@ Create `$WS` (temp, outside repo). Write:
 {"permissions":{"ask":["Bash"]}}
 ```
 
-`.env` (synthetic credentials, offline):
+`.env` (synthetic credentials, offline-default / bounded-read):
 ```text
 CLOUDFLARE_API_TOKEN=cfut_TESTFAKE0000000000000000000000000000
 GITHUB_TOKEN=ghp_TESTFAKE0000000000000000000000000000
 ```
 `__CANARY__` = unique canary, e.g. `PICO-DF22-CANARY-<rand>`.
 
-Export nothing (offline); the `.env` is the documented dotenv contract.
+Export nothing; the `.env` is the documented dotenv contract. Cloudflare
+verify may make one allowlisted outbound request and must degrade honestly.
 
 ## W2 — Init + scan
 
@@ -94,7 +96,7 @@ Export nothing (offline); the `.env` is the documented dotenv contract.
 "$BIN" init
 { time "$BIN" scan ; } 2>&1 | tee transcript-E2-scan.txt
 ```
-Record: status (expect PARTIAL — cloudflare provider offline/unreachable, honest), full counter block, `real` elapsed, provider diagnostics, per-agent Bash state, credential authority lines.
+Record: status (expect PARTIAL — Cloudflare verify HTTP 401 on the synthetic token, honest), full counter block, `real` elapsed, provider diagnostics, per-agent Bash state, credential authority lines.
 
 ## W3 — Findings + detail
 
@@ -104,7 +106,7 @@ Record: status (expect PARTIAL — cloudflare provider offline/unreachable, hone
 ```
 Record scoped zero-Finding language (or the honest findings if any), clean not-found error.
 
-## W4 — MCP parity (offline)
+## W4 — MCP parity (offline-default / bounded-read)
 
 Newline-delimited JSON-RPC over stdio (SPRINT-011 §5): `initialize`, `tools/list`, `list_findings`, `get_finding` (bogus id), malformed line, `ping`. Record negotiated protocolVersion, tool set, list/detail semantics, malformed-line behavior, exit 0.
 
@@ -192,8 +194,9 @@ gate results G1–G7 (evidence citations in evidence-v0.3.md):
   G1 mixed-surface scan:      PASS  (2 agents, both credentials, GitHub influence, honest UNKNOWN)
   G2 scan clarity:            PASS  (with observation F-U1: scan summary shows primary Effective Bash;
                                      per-agent Bash in finding-detail view)
-  G3 offline + performance:   PASS  (0.326s; ONLY outbound = allowlisted Cloudflare verify 401 on
-                                     synthetic token; GitHub probe offline — see correction in §8)
+  G3 offline-default / bounded-read + performance: PASS  (0.326s; ONLY outbound = allowlisted
+                                     Cloudflare verify 401 on synthetic token; GitHub probe
+                                     offline — see correction in §8)
   G4 determinism:             PASS  (identical normalized output; identical DB structure hashes)
   G5 secret sweep:            PASS  (ZERO; zero-write proof OK)
   G6 comprehension proxy:     PASS  (proxy; independent-developer gate NOT RUN + reason)

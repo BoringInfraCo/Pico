@@ -1,7 +1,7 @@
 # Sprint 022 Controlled Dogfood — Evidence Record (v0.3)
 
 **Baseline:** `77e456e` (post-Sprint-021). **Binary:** `target/debug/pico` (built from baseline).
-**Date:** 2026-08-26. **Mode:** controlled, offline-adjacent, synthetic tokens.
+**Date:** 2026-08-26. **Mode:** controlled, offline-default / bounded-read, synthetic tokens.
 **Gates:** G1–G7 per SPRINT-022.md §2. **Result:** all gates PASS (G6 proxy; independent-developer gate NOT RUN).
 
 ---
@@ -124,7 +124,7 @@ Patterns swept (full + first-8 + canary) across both DBs and every transcript/MC
 G1  mixed-surface scan:         PASS  (2 agents, both credentials, GitHub influence, honest UNKNOWN)
 G2  scan clarity:               PASS  (with observation: per-agent Bash in finding-detail view;
                                       scan summary shows primary; follow-up F-U1)
-G3  offline + performance:      PASS  (0.326s; only allowlisted Cloudflare verify 401; GitHub probe offline)
+G3  offline-default / bounded-read + performance: PASS  (0.326s; only allowlisted Cloudflare verify 401; GitHub probe offline)
 G4  determinism:                PASS  (identical normalized output + identical DB structure hashes)
 G5  secret sweep:               PASS  (ZERO; zero-write proof OK)
 G6  comprehension proxy:        PASS  (proxy; independent-developer NOT RUN — see comprehension-v0.3.md)
@@ -133,7 +133,7 @@ G7  usefulness:                 PASS  (see comprehension-v0.3.md usefulness judg
 
 ## 9. Known observations / limitations
 
-- **F-U1:** scan summary shows only the primary agent's `Effective Bash`; the per-agent view (S020 `agents[]`) renders in the finding-detail view, which requires a Finding. When a mixed-agent workspace yields zero Findings, the per-agent Bash posture is not visible at scan-summary level. Suggest surfacing per-agent Bash in the scan summary when `Agents > 1`.
+- **F-U1 (closed in S023):** scan summary originally showed only the primary agent's `Effective Bash`; the per-agent view (S020 `agents[]`) rendered in the finding-detail view, which requires a Finding. When a mixed-agent workspace yielded zero Findings, the per-agent Bash posture was not visible at scan-summary level. Sprint 023 lists every agent's effective Bash in the scan summary when more than one posture is present; the S022 scenario re-run is in `docs/internal/dogfood/transcripts/df23-E2-scan.txt`.
 - Cloudflare accounts/workers = 0 and `Findings = 0` are honest consequences of the synthetic-token 401 and offline `UNKNOWN` authority — not defects.
 - GitHub `can_mutate` correctly absent (no write evidence) — honest per S021.
 
