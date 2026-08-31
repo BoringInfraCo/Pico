@@ -1,7 +1,97 @@
 //! Bounded MCP adapter boundaries. Protocol facts are normalized here, while
 //! OpenCode configuration parsing remains in the OpenCode adapter.
 
-use super::{ObservedGithubSurface, ObservedGithubTool, ObservedMcpServer, PermissionAction};
+use std::path::Path;
+
+use super::{
+    McpTransport, ObservedGithubSurface, ObservedGithubTool, ObservedMcpServer, PermissionAction,
+};
+
+const OFFICIAL_GITHUB_MCP_IDENTITIES: [&str; 2] =
+    ["ghcr.io/github/github-mcp-server", "github-mcp-server"];
+const OFFICIAL_COMMAND_RUNNERS: [&str; 12] = [
+    "docker", "podman", "nerdctl", "npx", "npx.cmd", "npm", "pnpm", "yarn", "bunx", "bun", "uvx",
+    "deno",
+];
+const SECRET_KEYWORDS: [&str; 6] = [
+    "token",
+    "secret",
+    "password",
+    "apikey",
+    "authorization",
+    "bearer",
+];
+const TOKEN_PREFIXES: [&str; 5] = ["ghp_", "gho_", "ghs_", "ghr_", "github_pat_"];
+
+/// Official GitHub MCP identity, only when the executable is the official
+/// image/binary or a known runner that launches that image. Arbitrary argv
+/// containing `github-mcp-server` is not an identity signal.
+pub(crate) fn official_identity_from_command_parts(parts: &[String]) -> Option<String> {
+    let identity = parts.iter().find_map(|part| official_image_name(part))?;
+    let executable = parts.first()?;
+    let exec_name = Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(executable);
+    let exec_stem = exec_name
+        .strip_suffix(".exe")
+        .or_else(|| exec_name.strip_suffix(".cmd"))
+        .unwrap_or(exec_name);
+    if official_image_name(exec_stem).is_some()
+        || OFFICIAL_COMMAND_RUNNERS
+            .iter()
+            .any(|runner| exec_stem.eq_ignore_ascii_case(runner))
+    {
+        Some(identity)
+    } else {
+        None
+    }
+}
+
+fn official_image_name(part: &str) -> Option<String> {
+    let normalized = part.trim_end_matches('/');
+    let image = normalized.split(':').next().unwrap_or(normalized);
+    let basename = Path::new(image)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(image);
+    OFFICIAL_GITHUB_MCP_IDENTITIES
+        .iter()
+        .copied()
+        .find(|identity| *identity == image || *identity == basename)
+        .map(str::to_string)
+}
+
+pub(crate) fn looks_secret(value: &str) -> bool {
+    let trimmed = value.trim();
+    if TOKEN_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+    {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    SECRET_KEYWORDS.iter().any(|needle| lower.contains(needle))
+}
+
+/// Strip query, fragment, and URL userinfo so credentials in `user:pass@host`
+/// never become a persisted endpoint.
+pub(crate) fn normalize_endpoint(url: &str) -> String {
+    let mut endpoint = url.split(['?', '#']).next().unwrap_or(url).to_string();
+    if let Some(scheme_end) = endpoint.find("://") {
+        let after_scheme = scheme_end + 3;
+        if let Some(at) = endpoint[after_scheme..].find('@') {
+            let at_abs = after_scheme + at;
+            if !endpoint[after_scheme..at_abs].contains('/') {
+                endpoint.replace_range(after_scheme..at_abs + 1, "");
+            }
+        }
+    }
+    while endpoint.ends_with('/') {
+        endpoint.pop();
+    }
+    endpoint
+}
 
 pub mod github {
     use super::*;
@@ -81,13 +171,31 @@ pub mod github {
         }
     }
 
+    fn is_official_identity(identity: Option<&str>) -> bool {
+        identity.is_some_and(|identity| OFFICIAL_GITHUB_MCP_IDENTITIES.contains(&identity))
+    }
+
+    fn is_official_endpoint(endpoint: Option<&str>) -> bool {
+        endpoint == Some(OFFICIAL_REMOTE)
+    }
+
+    /// HTTP is official only by exact remote origin. Stdio is official only by
+    /// command identity. Identity OR an unrelated URL is not enough: a spoofed
+    /// argv must not admit an attacker endpoint as `mcp:github:official`.
     fn is_official(server: &ObservedMcpServer) -> bool {
-        server.safe_identity.as_deref().is_some_and(|identity| {
-            identity == "ghcr.io/github/github-mcp-server" || identity == "github-mcp-server"
-        }) || server
-            .safe_endpoint
-            .as_deref()
-            .is_some_and(|endpoint| endpoint == OFFICIAL_REMOTE)
+        match server.transport {
+            McpTransport::Http => is_official_endpoint(server.safe_endpoint.as_deref()),
+            McpTransport::Stdio => {
+                is_official_identity(server.safe_identity.as_deref())
+                    && (server.safe_endpoint.is_none()
+                        || is_official_endpoint(server.safe_endpoint.as_deref()))
+            }
+            McpTransport::Unknown => {
+                is_official_endpoint(server.safe_endpoint.as_deref())
+                    || (is_official_identity(server.safe_identity.as_deref())
+                        && server.safe_endpoint.is_none())
+            }
+        }
     }
 
     fn declared_tools(server: &ObservedMcpServer) -> (Vec<String>, &'static str) {
@@ -340,8 +448,7 @@ delete_pull_request,create_comment,merge_pull_request,unknown_tool",
             "PUBLIC_EXTERNAL"
         );
 
-        // Local stdio transport with official image is admitted (transport is
-        // not the admission gate).
+        // Local stdio transport with official image is admitted by identity.
         let local = official_image_server(Some("issue_read"));
         assert_eq!(github::classify(&[local]).len(), 1);
 
@@ -360,6 +467,22 @@ delete_pull_request,create_comment,merge_pull_request,unknown_tool",
             toolset_declaration: None,
         };
         assert!(github::classify(&[spoof]).is_empty());
+
+        // Identity from a command must not admit an attacker HTTP endpoint.
+        let identity_or_url = ObservedMcpServer {
+            provider: "opencode",
+            name: "github".to_string(),
+            transport: McpTransport::Http,
+            enabled: true,
+            source_locator: "project:opencode.json".to_string(),
+            safe_identity: Some("github-mcp-server".to_string()),
+            safe_endpoint: Some("https://attacker.example/mcp".to_string()),
+            safe_command: Some("evil-proxy github-mcp-server".to_string()),
+            environment_keys: vec![],
+            tool_declaration: Some("issue_read".to_string()),
+            toolset_declaration: None,
+        };
+        assert!(github::classify(&[identity_or_url]).is_empty());
 
         // Disabled official server is still classified (admission is by
         // identity, not enabled state); the scan layer suppresses its edges.
@@ -422,5 +545,58 @@ delete_pull_request,create_comment,merge_pull_request,unknown_tool",
             github::classify(&[server])
         };
         assert_eq!(build(), build());
+    }
+}
+
+#[cfg(test)]
+mod command_identity_tests {
+    use super::*;
+
+    fn parts(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn official_docker_image_is_an_identity() {
+        assert_eq!(
+            official_identity_from_command_parts(&parts(&[
+                "docker",
+                "run",
+                "--rm",
+                "ghcr.io/github/github-mcp-server:0.1.0",
+            ])),
+            Some("ghcr.io/github/github-mcp-server".to_string())
+        );
+        assert_eq!(
+            official_identity_from_command_parts(&parts(&["github-mcp-server"])),
+            Some("github-mcp-server".to_string())
+        );
+    }
+
+    #[test]
+    fn arbitrary_argv_containing_the_image_is_not_an_identity() {
+        assert_eq!(
+            official_identity_from_command_parts(&parts(&["evil-proxy", "github-mcp-server"])),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_strips_userinfo_and_query() {
+        assert_eq!(
+            normalize_endpoint("https://user:ghp_live@api.githubcopilot.com/mcp/?x=1"),
+            "https://api.githubcopilot.com/mcp"
+        );
+        assert_eq!(
+            normalize_endpoint("https://api.githubcopilot.com/mcp/"),
+            "https://api.githubcopilot.com/mcp"
+        );
+    }
+
+    #[test]
+    fn looks_secret_matches_token_prefixes() {
+        assert!(looks_secret("ghp_liveTokenShouldBeRedacted0000000000"));
+        assert!(looks_secret("--token"));
+        assert!(!looks_secret("issue_read"));
     }
 }

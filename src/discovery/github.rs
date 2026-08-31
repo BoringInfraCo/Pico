@@ -11,6 +11,7 @@
 use crate::discovery::cloudflare::AuthorityResolution;
 use crate::domain::RelationshipState;
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::time::Duration;
 
 const API_ORIGIN: &str = "https://api.github.com";
@@ -131,13 +132,8 @@ impl GetTransport for HttpsTransport {
             .and_then(|value| value.to_str().ok())
             .map(parse_scopes)
             .unwrap_or_default();
-        let bytes = response
-            .bytes()
-            .map_err(|_| "github response could not be read".to_string())?;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err("github response exceeded bounded size".to_string());
-        }
-        let body = String::from_utf8(bytes.to_vec())
+        let bytes = read_bounded_body(response)?;
+        let body = String::from_utf8(bytes)
             .map_err(|_| "github response was not valid UTF-8".to_string())?;
         Ok(GetResponse {
             status,
@@ -146,6 +142,23 @@ impl GetTransport for HttpsTransport {
             redirected_to,
         })
     }
+}
+
+fn read_bounded_body(response: reqwest::blocking::Response) -> Result<Vec<u8>, String> {
+    if let Some(len) = response.content_length() {
+        if len > MAX_RESPONSE_BYTES as u64 {
+            return Err("github response exceeded bounded size".to_string());
+        }
+    }
+    let mut limited = response.take(MAX_RESPONSE_BYTES as u64 + 1);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|_| "github response could not be read".to_string())?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err("github response exceeded bounded size".to_string());
+    }
+    Ok(bytes)
 }
 
 fn parse_scopes(header: &str) -> Vec<String> {

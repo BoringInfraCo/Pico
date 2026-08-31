@@ -1780,6 +1780,11 @@ fn validate_secret_safe(value: &serde_json::Value) -> Result<(), PicoError> {
                 validate_secret_safe(item)?;
             }
         }
+        serde_json::Value::String(value) if crate::shared::looks_like_token_value(value) => {
+            return Err(PicoError::scan(
+                "secret-safety validation rejected a token-shaped value".to_string(),
+            ));
+        }
         _ => {}
     }
     Ok(())

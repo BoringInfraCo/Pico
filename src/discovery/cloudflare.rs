@@ -7,6 +7,7 @@
 use crate::domain::RelationshipState;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::time::Duration;
 
 const API_ORIGIN: &str = "https://api.cloudflare.com/client/v4";
@@ -220,13 +221,8 @@ impl GetTransport for HttpsTransport {
             .get(reqwest::header::LOCATION)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        let bytes = response
-            .bytes()
-            .map_err(|_| "cloudflare response could not be read".to_string())?;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err("cloudflare response exceeded bounded size".to_string());
-        }
-        let body = String::from_utf8(bytes.to_vec())
+        let bytes = read_bounded_body(response, "cloudflare")?;
+        let body = String::from_utf8(bytes)
             .map_err(|_| "cloudflare response was not valid UTF-8".to_string())?;
         Ok(GetResponse {
             status,
@@ -501,6 +497,26 @@ pub fn inspect_live(token: &str, fingerprint: &str) -> ProviderResult {
             ..ProviderResult::default()
         },
     }
+}
+
+fn read_bounded_body(
+    response: reqwest::blocking::Response,
+    provider: &str,
+) -> Result<Vec<u8>, String> {
+    if let Some(len) = response.content_length() {
+        if len > MAX_RESPONSE_BYTES as u64 {
+            return Err(format!("{provider} response exceeded bounded size"));
+        }
+    }
+    let mut limited = response.take(MAX_RESPONSE_BYTES as u64 + 1);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|_| format!("{provider} response could not be read"))?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err(format!("{provider} response exceeded bounded size"));
+    }
+    Ok(bytes)
 }
 
 fn is_allowlisted_path(path: &str) -> bool {

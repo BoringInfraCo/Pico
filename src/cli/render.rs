@@ -546,7 +546,10 @@ pub fn render_scan_diagnostics(diagnostics: &ScanDiagnostics) -> String {
             "Scan status: PARTIAL ({})\n",
             terminal_safe(reason)
         )),
-        None => out.push_str(&format!("Scan status: {}\n", diagnostics.scan_status)),
+        None => out.push_str(&format!(
+            "Scan status: {}\n",
+            terminal_safe(&diagnostics.scan_status)
+        )),
     }
 
     for suppressed in &diagnostics.suppressed {

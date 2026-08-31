@@ -5,8 +5,13 @@
 //! failure, migration failure, and scan failure.
 
 use std::fmt;
+use std::io::Read;
+use std::path::Path;
 
 use crate::domain::DomainError;
+
+/// Maximum bytes read from a local config or dotenv file.
+pub const MAX_LOCAL_FILE_BYTES: u64 = 1_048_576;
 
 /// Top-level Pico error, distinguishing failure classes.
 #[derive(Debug)]
@@ -91,6 +96,42 @@ impl From<chrono::ParseError> for PicoError {
 /// The Pico version reported in scans and CLI output.
 pub const PICO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Read a regular file with a hard size cap. Symlinks, FIFOs, and devices are
+/// refused so a workspace cannot hang or OOM the scanner.
+pub fn read_regular_file_bounded(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|err| format!("cannot read file: {err}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("refusing to read a non-regular file".to_string());
+    }
+    if metadata.len() > max_bytes {
+        return Err("file exceeded bounded size".to_string());
+    }
+    let file = std::fs::File::open(path).map_err(|err| format!("cannot read file: {err}"))?;
+    let mut limited = file.take(max_bytes.saturating_add(1));
+    let mut contents = String::new();
+    limited
+        .read_to_string(&mut contents)
+        .map_err(|err| format!("cannot read file: {err}"))?;
+    if contents.len() as u64 > max_bytes {
+        return Err("file exceeded bounded size".to_string());
+    }
+    Ok(contents)
+}
+
+/// Token-shaped values that must never be persisted. Keyed substring matches
+/// like "token" are intentionally excluded so metadata such as
+/// `pico-github-token-v1` still stores.
+pub fn looks_like_token_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("ghp_")
+        || trimmed.starts_with("gho_")
+        || trimmed.starts_with("ghs_")
+        || trimmed.starts_with("ghr_")
+        || trimmed.starts_with("github_pat_")
+        || trimmed.starts_with("cfut_")
+}
+
 /// Applies the deterministic terminal-safety policy to persisted text.
 ///
 /// Printable ASCII (0x20-0x7E) and Unicode scalar values at or above U+00A0
@@ -116,6 +157,16 @@ pub fn terminal_safe(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::terminal_safe;
+
+    #[test]
+    fn looks_like_token_value_matches_known_prefixes_only() {
+        assert!(super::looks_like_token_value("ghp_LIVE"));
+        assert!(super::looks_like_token_value("github_pat_LIVE"));
+        assert!(!super::looks_like_token_value(
+            "sha256:pico-github-token-v1"
+        ));
+        assert!(!super::looks_like_token_value("CLOUDFLARE_API_TOKEN"));
+    }
 
     #[test]
     fn terminal_safe_passes_printable_and_unicode_text_through() {

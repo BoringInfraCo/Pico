@@ -107,7 +107,7 @@ fn application_tool_error(error: &PicoError) -> ToolError {
             PicoError::Usage(_) => INVALID_PARAMS,
             _ => APPLICATION_ERROR,
         },
-        error.to_string(),
+        terminal_safe(&error.to_string()),
     )
 }
 

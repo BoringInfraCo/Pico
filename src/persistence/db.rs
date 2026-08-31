@@ -282,9 +282,32 @@ pub struct Database {
     conn: Connection,
 }
 
+fn reject_symlink_db_path(path: &Path) -> Result<(), PicoError> {
+    if let Some(parent) = path.parent() {
+        match std::fs::symlink_metadata(parent) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(PicoError::database(
+                    "refusing to use symlink at .pico".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(PicoError::database(
+                "refusing to use symlink at pico.db".to_string(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 impl Database {
     /// Open (creating if necessary) the database at `path`.
     pub fn open(path: &Path) -> Result<Self, PicoError> {
+        reject_symlink_db_path(path)?;
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
@@ -299,6 +322,7 @@ impl Database {
     /// Used by `pico scan` so that a scan fails clearly when Pico has
     /// not been initialized.
     pub fn open_existing(path: &Path) -> Result<Self, PicoError> {
+        reject_symlink_db_path(path)?;
         let conn =
             Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|e| {
                 PicoError::scan(format!(
@@ -317,16 +341,15 @@ impl Database {
     /// run DDL, or update `user_version`.
     pub fn open_read_only(path: &Path) -> Result<Self, PicoError> {
         if !path.exists() {
-            return Err(PicoError::scan(format!(
-                "no Pico state at {} (run `pico init` first)",
-                path.display()
-            )));
+            return Err(PicoError::scan(
+                "no Pico state in this workspace (run `pico init` first)".to_string(),
+            ));
         }
+        reject_symlink_db_path(path)?;
         let conn =
             Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
                 PicoError::scan(format!(
-                    "cannot read Pico state at {} (run `pico init` first): {e}",
-                    path.display()
+                    "cannot read Pico state (run `pico init` first): {e}"
                 ))
             })?;
         conn.pragma_update(None, "foreign_keys", true)?;

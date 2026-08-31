@@ -6,7 +6,6 @@
 //! object and retain only the small permission projection required to resolve
 //! the default actor's Bash policy. Raw configuration is discarded.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -310,7 +309,10 @@ fn project_dotenv_credentials(workspace: &Path) -> Vec<(String, TransientCredent
         .ancestors()
         .find(|candidate| candidate.join(".git").exists())
         .unwrap_or(workspace);
-    let Ok(contents) = fs::read_to_string(root.join(".env")) else {
+    let Ok(contents) = crate::shared::read_regular_file_bounded(
+        &root.join(".env"),
+        crate::shared::MAX_LOCAL_FILE_BYTES,
+    ) else {
         return Vec::new();
     };
     contents
@@ -428,7 +430,7 @@ fn parse_mcp_servers(
         let safe_endpoint = server
             .get("url")
             .and_then(Value::as_str)
-            .map(normalize_endpoint);
+            .map(crate::discovery::mcp::normalize_endpoint);
         let environment_keys = server
             .get("environment")
             .or_else(|| server.get("env"))
@@ -467,30 +469,14 @@ fn normalize_command(value: Option<&Value>) -> (Option<String>, Option<String>) 
     if parts.is_empty() {
         return (None, None);
     }
-    let identity = parts.iter().find_map(|part| {
-        let normalized = part.trim_end_matches('/');
-        let image = normalized.split(':').next().unwrap_or(normalized);
-        if image == "ghcr.io/github/github-mcp-server" || image == "github-mcp-server" {
-            Some(image.to_string())
-        } else {
-            None
-        }
-    });
+    let identity = crate::discovery::mcp::official_identity_from_command_parts(&parts);
     let safe = parts
         .iter()
-        .filter(|part| !looks_secret(part))
+        .filter(|part| !crate::discovery::mcp::looks_secret(part))
         .cloned()
         .collect::<Vec<_>>()
         .join(" ");
     (Some(safe), identity)
-}
-
-fn normalize_endpoint(url: &str) -> String {
-    url.split('?')
-        .next()
-        .unwrap_or(url)
-        .trim_end_matches('/')
-        .to_string()
 }
 
 fn extract_declaration(server: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
@@ -505,20 +491,6 @@ fn extract_declaration(server: &serde_json::Map<String, Value>, key: &str) -> Op
         ),
         _ => None,
     })
-}
-
-fn looks_secret(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    [
-        "token",
-        "secret",
-        "password",
-        "apikey",
-        "authorization",
-        "bearer",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
 }
 
 fn project_candidates(workspace: &Path) -> Vec<(PathBuf, String)> {
@@ -567,7 +539,8 @@ fn user_candidates(home: &Path) -> Vec<(PathBuf, String)> {
 
 fn parse_config_object(path: &Path) -> Result<Value, String> {
     let contents =
-        fs::read_to_string(path).map_err(|err| format!("cannot read configuration: {err}"))?;
+        crate::shared::read_regular_file_bounded(path, crate::shared::MAX_LOCAL_FILE_BYTES)
+            .map_err(|err| format!("cannot read configuration: {err}"))?;
     let normalized = if path.extension().is_some_and(|ext| ext == "jsonc") {
         strip_jsonc(&contents)?
     } else {
@@ -1054,6 +1027,7 @@ mod tests {
     use crate::domain::RelationshipState;
     use crate::graph::model::{EdgeUsability, GraphEdge};
     use crate::graph::SecurityGraph;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]

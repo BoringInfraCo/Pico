@@ -112,10 +112,13 @@ fn read_only_open_requires_an_existing_database() {
         Ok(_) => panic!("missing database must fail"),
         Err(error) => error,
     };
-    assert!(error
-        .to_string()
-        .contains(path.display().to_string().as_str()));
-    assert!(error.to_string().contains("pico init"));
+    let message = error.to_string();
+    assert!(
+        !message.contains(path.display().to_string().as_str()),
+        "read-only open must not leak the absolute database path: {message}"
+    );
+    assert!(message.contains("no Pico state in this workspace"));
+    assert!(message.contains("pico init"));
 }
 
 #[test]
