@@ -516,10 +516,12 @@ over the last two COMPLETE scans, joined on S015 fingerprints. Collection
 failure is never disappearance. Sprint 025 adds `pico history` (scan
 catalog) and `pico diff <from> <to>` (explicit pair comparison). Sprint 026
 adds resource/relationship graph memory over COMPLETE observation sets.
-This is not v0.4 complete. Authoritative slice scope:
+Sprint 027 adds causal explanation of Finding diffs from those graph
+changes. This is not v0.4 complete. Authoritative slice scope:
 `docs/internal/sprints/SPRINT-024-support-note.md`,
-`docs/internal/sprints/SPRINT-025.md`, and
-`docs/internal/sprints/SPRINT-026.md`.
+`docs/internal/sprints/SPRINT-025.md`,
+`docs/internal/sprints/SPRINT-026.md`, and
+`docs/internal/sprints/SPRINT-027.md`.
 
 ---
 
@@ -989,7 +991,7 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
-v0.4  Security memory              IN PROGRESS (S024 finding-set; S025 history + explicit diff; S026 graph memory)
+v0.4  Security memory              IN PROGRESS (S024–S026; S027 causal explanation)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
