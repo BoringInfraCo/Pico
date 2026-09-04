@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::analysis::{
     analyze_with_scan_status, AnalysisLimits, AnalysisResult, AnalysisStatus, CandidateDisposition,
 };
+use crate::application::compare_contract::COMPARISON_CONTRACT_VERSION;
 use crate::discovery;
 use crate::domain::{
     relationship_snapshot_metadata, resource_snapshot_metadata, Evidence, EvidenceClass,
@@ -14,7 +15,7 @@ use crate::domain::{
 use crate::findings::diagnostics::{ProviderDiagnostic, ScanDiagnostics};
 use crate::findings::{
     eligibility_diagnostics, generate_with_scan_status, FindingGenerationStatus, FindingLimits,
-    FindingResult,
+    FindingResult, FINDING_VERSION,
 };
 use crate::graph::{project, ProjectionInput, SecurityGraph};
 use crate::persistence::{
@@ -198,11 +199,14 @@ impl ScanService {
 
         let scan_repo = ScanRepo::new(db.connection());
         let mut scan = Scan::start(PICO_VERSION)?;
-        // Every scan created after the graph snapshot contract exists declares
-        // the version needed for safe scan-scoped projection. The graph layer
-        // can distinguish an intentionally empty scan from legacy state.
+        // Every scan declares the full comparison-contract tuple (SPRINT-029):
+        // comparison_contract_version and finding_version join the existing
+        // graph_snapshot_version declaration. scan_analyses remains the
+        // authoritative analysis_version, so it is not declared here.
         scan.metadata = Some(serde_json::json!({
+            "comparison_contract_version": COMPARISON_CONTRACT_VERSION,
             "graph_snapshot_version": GRAPH_SNAPSHOT_VERSION,
+            "finding_version": FINDING_VERSION,
         }));
         scan_repo.insert(&scan)?;
 

@@ -86,6 +86,36 @@ struct GraphSets {
     relationships: BTreeMap<String, Relationship>,
 }
 
+/// Validate that `from` is at or before `to` in the COMPLETE history
+/// (SPRINT-029 §5.4): `to` must appear in the newest-first COMPLETE list and
+/// `from` must appear at or after it. Shared by `compare_graph` and the diff
+/// guard so a reversed pair never reaches comparison work.
+pub(crate) fn validate_complete_chronology(
+    from: &Scan,
+    to: &Scan,
+    complete_newest_first: &[Scan],
+) -> Result<(), PicoError> {
+    let mut saw_to = false;
+    for scan in complete_newest_first {
+        if scan.id == to.id {
+            saw_to = true;
+        }
+        if saw_to && scan.id == from.id {
+            return Ok(());
+        }
+    }
+    if !saw_to {
+        return Err(PicoError::database(format!(
+            "scan {} missing from COMPLETE history",
+            to.id
+        )));
+    }
+    Err(PicoError::database(format!(
+        "scan {} is not at or before {}",
+        from.id, to.id
+    )))
+}
+
 /// Compare observation snapshots for `from` → `to` using COMPLETE history
 /// at or before `to` (newest-first `complete` list).
 pub fn compare_graph(
@@ -94,22 +124,11 @@ pub fn compare_graph(
     to: &Scan,
     complete_newest_first: &[Scan],
 ) -> Result<GraphDiff, PicoError> {
+    validate_complete_chronology(from, to, complete_newest_first)?;
     let window: Vec<&Scan> = complete_newest_first
         .iter()
         .skip_while(|scan| scan.id != to.id)
         .collect();
-    if window.is_empty() {
-        return Err(PicoError::database(format!(
-            "scan {} missing from COMPLETE history",
-            to.id
-        )));
-    }
-    if !window.iter().any(|scan| scan.id == from.id) {
-        return Err(PicoError::database(format!(
-            "scan {} is not at or before {}",
-            from.id, to.id
-        )));
-    }
 
     let mut cached: BTreeMap<String, GraphSets> = BTreeMap::new();
     for scan in &window {

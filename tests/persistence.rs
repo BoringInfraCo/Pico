@@ -13,3 +13,5 @@ mod finding_query_multi_test;
 mod findings_test;
 #[path = "persistence/repos_test.rs"]
 mod repos_test;
+#[path = "persistence/sprint029_analysis_test.rs"]
+mod sprint029_analysis_test;

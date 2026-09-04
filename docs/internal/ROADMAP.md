@@ -518,7 +518,7 @@ catalog) and `pico diff <from> <to>` (explicit pair comparison). Sprint 026
 adds resource/relationship graph memory over COMPLETE observation sets.
 Sprint 027 adds causal explanation of Finding diffs from those graph
 changes. Sprint 028 adds finding lifecycle (weakened / strengthened /
-uncertain) via a family fingerprint. Proposed Sprint 029 adds a composite
+uncertain) via a family fingerprint. Sprint 029 adds a composite
 comparison-contract guard so graph, analysis, or Finding contract changes
 cannot masquerade as ordinary lifecycle or environment changes. This is not
 v0.4 complete.
@@ -526,8 +526,8 @@ Authoritative slice scope:
 `docs/internal/sprints/SPRINT-024-support-note.md`,
 `docs/internal/sprints/SPRINT-025.md`,
 `docs/internal/sprints/SPRINT-026.md`,
-`docs/internal/sprints/SPRINT-027.md`, and
-`docs/internal/sprints/SPRINT-028.md`. Proposed scope awaiting approval:
+`docs/internal/sprints/SPRINT-027.md`,
+`docs/internal/sprints/SPRINT-028.md`, and
 `docs/internal/sprints/SPRINT-029.md`.
 
 ---
@@ -998,7 +998,7 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
-v0.4  Security memory              IN PROGRESS (S024–S028 DONE; S029 PROPOSED)
+v0.4  Security memory              IN PROGRESS (S024–S029 DONE)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and

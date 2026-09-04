@@ -188,9 +188,32 @@ impl<'a> ScanAnalysisRepo<'a> {
     }
 
     /// Each analyzed scan has one summary row; rerunning replaces the summary
-    /// while AttackPath rows remain append-oriented.
+    /// while AttackPath rows remain append-oriented. Replacement is refused
+    /// once the parent Scan is COMPLETE (SPRINT-029): the summary is the
+    /// authoritative comparison-provenance input and must not be rewritten
+    /// after completion.
     pub fn upsert(&self, record: &ScanAnalysisRecord) -> Result<(), PicoError> {
         record.validate()?;
+        let status: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT status FROM scans WHERE id = ?1",
+                [&record.scan_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err)?;
+        let Some(status) = status else {
+            return Err(PicoError::database(format!(
+                "scan {} does not exist",
+                record.scan_id
+            )));
+        };
+        if status == "COMPLETE" {
+            return Err(PicoError::database(
+                "scan analysis summary is immutable once its scan is COMPLETE",
+            ));
+        }
         self.conn
             .execute(
                 "INSERT INTO scan_analyses

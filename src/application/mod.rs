@@ -5,6 +5,7 @@
 //! separation).
 
 pub mod cause;
+pub mod compare_contract;
 pub mod diff;
 pub mod findings;
 pub mod graph_diff;
@@ -13,9 +14,14 @@ pub mod init;
 pub mod scan;
 
 pub use cause::FindingCause;
+pub use compare_contract::{
+    validate_pico_version, ComparisonContractField, ComparisonContractVersions,
+    ComparisonProvenanceGap, DiffProvenance, DiffSide, DiffSideProvenance,
+    COMPARISON_CONTRACT_VERSION, CURRENT_COMPARISON_CONTRACT,
+};
 pub use diff::{
-    ComparedVia, DiffFinding, DiffService, FindingDiff, FindingDiffResult, FindingLifecycleChange,
-    FindingRatingDelta,
+    ComparedVia, DiffFinding, DiffNotComparable, DiffNotComparableReason, DiffService, FindingDiff,
+    FindingDiffResult, FindingLifecycleChange, FindingRatingDelta,
 };
 pub use findings::{
     finding_navigation_ids, findings_list_guidance, findings_list_state, BoundaryView, Currentness,

@@ -11,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{params, Connection};
 
 use pico::application::{
     ComparedVia, DiffService, FindingDiff, FindingDiffResult, Freshness, InitService, ScanService,
@@ -183,9 +183,32 @@ fn setup_db() -> (tempfile::TempDir, Database) {
 }
 
 fn insert_complete_scan(db: &Database) -> String {
-    let scan = Scan::start(PICO_VERSION).unwrap().complete().unwrap();
+    let mut scan = Scan::start(PICO_VERSION).unwrap();
+    // Every fixture scan declares the full comparison contract (SPRINT-029).
+    scan.metadata = Some(serde_json::json!({
+        "comparison_contract_version": 1,
+        "graph_snapshot_version": 1,
+        "finding_version": 1,
+    }));
+    let scan = scan.complete().unwrap();
     ScanRepo::new(db.connection()).insert(&scan).unwrap();
+    seed_complete_analysis(db.connection(), &scan.id);
     scan.id
+}
+
+/// Seed the COMPLETE analysis summary for a fixture scan with raw SQL: the
+/// summary is immutable once its parent scan is COMPLETE, so the repository
+/// boundary (which enforces that) cannot seed a finished scan.
+fn seed_complete_analysis(conn: &Connection, scan_id: &str) {
+    conn.execute(
+        "INSERT INTO scan_analyses
+         (scan_id, analysis_version, status, overall_disposition,
+          influence_path_count, authority_path_count, active_path_count,
+          blocked_path_count, unresolved_candidate_count, created_at)
+         VALUES (?1, '1', 'COMPLETE', 'NONE', 0, 0, 0, 0, 0, ?2)",
+        params![scan_id, codec::ts_to_text(Utc::now())],
+    )
+    .unwrap();
 }
 
 fn finding_record(
@@ -200,7 +223,7 @@ fn finding_record(
         scan_id: scan_id.to_string(),
         fingerprint: fingerprint.to_string(),
         family_fingerprint: family.to_string(),
-        finding_version: "v1".to_string(),
+        finding_version: "1".to_string(),
         finding_class: "UNTRUSTED_TO_PRODUCTION".to_string(),
         title: format!("Finding {fingerprint}"),
         summary: format!("Summary of {fingerprint}"),
@@ -248,7 +271,7 @@ fn insert_legacy_finding(
             scan_id,
             fingerprint,
             placeholder,
-            "v1",
+            "1",
             "UNTRUSTED_TO_PRODUCTION",
             format!("Finding {fingerprint}"),
             format!("Summary of {fingerprint}"),
@@ -723,7 +746,7 @@ fn migration6_integrity_objects() {
         "INSERT INTO findings
          (id, scan_id, fingerprint, family_fingerprint, finding_version, finding_class, title,
           summary, severity, confidence, status, metadata, created_at)
-         VALUES ('finding-dup', ?1, 'sha256:dup', 'sha256:fam-1', 'v1',
+         VALUES ('finding-dup', ?1, 'sha256:dup', 'sha256:fam-1', '1',
                  'UNTRUSTED_TO_PRODUCTION', 'Finding dup', 'Summary of dup',
                  'LOW', 'LOW', 'OPEN', NULL, '2026-01-01T00:00:00Z')",
         [&scan_id],
@@ -734,7 +757,7 @@ fn migration6_integrity_objects() {
         "INSERT INTO findings
          (id, scan_id, fingerprint, family_fingerprint, finding_version, finding_class, title,
           summary, severity, confidence, status, metadata, created_at)
-         VALUES ('finding-empty', ?1, 'sha256:empty', '', 'v1',
+         VALUES ('finding-empty', ?1, 'sha256:empty', '', '1',
                  'UNTRUSTED_TO_PRODUCTION', 'Finding empty', 'Summary of empty',
                  'LOW', 'LOW', 'OPEN', NULL, '2026-01-01T00:00:00Z')",
         [&scan_id],
@@ -850,7 +873,7 @@ fn null_family_fails_closed() {
         "INSERT INTO findings
          (id, scan_id, fingerprint, family_fingerprint, finding_version, finding_class,
           title, summary, severity, confidence, status, metadata, created_at)
-         VALUES ('finding-null', ?1, 'sha256:new', NULL, 'v1',
+         VALUES ('finding-null', ?1, 'sha256:new', NULL, '1',
                  'UNTRUSTED_TO_PRODUCTION', 'Finding null', 'Summary of null',
                  'HIGH', 'HIGH', 'OPEN', NULL, ?2)",
         params![to_id, codec::ts_to_text(Utc::now())],

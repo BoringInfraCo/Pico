@@ -1,6 +1,6 @@
 # Pico — Sprint 029: Comparison Contract Guard (v0.4 slice 6)
 
-**Status:** PROPOSED — awaiting review
+**Status:** DONE
 
 **Sprint:** 029
 **Phase:** v0.4 — Security Memory and Change Detection
@@ -447,20 +447,25 @@ Implementation conventional. Do not amend. Do not claim v0.4 complete.
 # 8. Completion Evidence (filled at execution)
 
 ```text
-Date:
-Baseline: 5a1e9e4 (post-Sprint-028 implementation); spec: <commit>
-Verified by:
+Date: 2026-09-04
+Baseline: 5a1e9e4 (post-Sprint-028 implementation); spec: 8329ec8
+Verified by: three staged review checkpoints (persistence → guard → render),
+full cargo test --all-targets after each stage
 
 fixtures (R1–R9) — tests/integration/sprint029_cli_test.rs
-  R1
-  R2
-  R3
-  R4
-  R5
-  R6
-  R7
-  R8
-  R9
+  R1  current_contract_pair_is_comparable
+  R2  pico_version_change_alone_does_not_block
+  R3  changed_contract_component_blocks_comparison
+  R4  equal_unsupported_contract_is_not_comparable
+  R5  legacy_missing_provenance_is_explicit
+  R6  contradictory_provenance_fails_closed
+  R7  latest_and_explicit_guard_decisions_agree
+  R8  contract_guard_precedes_comparison_loading
+  R9  contract_guard_is_read_only_and_secret_safe
+  (plus in-module unit coverage: canonical parsing, pico_version grammar,
+   tuple equality, gap ordering, current-version construction, guard
+   decisions, chronology extraction; persistence-level COMPLETE-summary
+   immutability in tests/persistence/sprint029_analysis_test.rs)
 
 schema evidence:
   SUPPORTED_SCHEMA_VERSION = 6
@@ -468,17 +473,22 @@ schema evidence:
 
 MCP evidence:
   descriptors: list_findings, get_finding (unchanged)
-  golden payloads: unchanged
+  golden payloads: unchanged (git diff --stat -- src/mcp/ empty)
 
 security/read-only evidence:
-  schema-and-table content digest before/after:
-  secret/control sweep:
+  schema-and-table content digest before/after: unchanged across latest()
+  and compare() on Ready, ContractChanged, and ProvenanceUnavailable pairs
+  (R9; sha256 over sqlite_master rows, user_version, and full table row
+  content)
+  secret/control sweep: SECRET_SENTINEL + "synthetic-token" + "ghp_" absent
+  from all renders and error strings (R8/R9)
 
 gates:
-  cargo fmt --all -- --check
-  cargo clippy --all-targets -- -D warnings
-  cargo test --all-targets
-  git diff --check
+  cargo fmt --all -- --check            PASS
+  cargo clippy --all-targets -- -D warnings PASS
+  cargo test --all-targets              PASS (482: 202 lib, 30 domain,
+                                        208 integration, 42 persistence)
+  git diff --check                      PASS
 ```
 
 ---

@@ -10,7 +10,11 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::application::cause::{attach_causes, FindingCause};
-use crate::application::graph_diff::{compare_graph, GraphDiff};
+use crate::application::compare_contract::{
+    load_side_provenance, ComparisonContractVersions, ComparisonProvenanceGap, DiffProvenance,
+    DiffSide, DiffSideProvenance, SideProvenance, CURRENT_COMPARISON_CONTRACT,
+};
+use crate::application::graph_diff::{compare_graph, validate_complete_chronology, GraphDiff};
 use crate::application::{Freshness, ScanBrief};
 use crate::domain::Scan;
 use crate::persistence::{codec, require_schema_version, Database, ScanRepo};
@@ -56,6 +60,10 @@ pub struct FindingDiff {
     pub freshness: Freshness,
     pub freshness_warning: Option<String>,
     pub compared_via: ComparedVia,
+    /// Persisted comparison-contract provenance for both sides (SPRINT-029
+    /// §5.3). On `Ready` both contracts are `Some`, equal, and equal to
+    /// `CURRENT_COMPARISON_CONTRACT`.
+    pub provenance: DiffProvenance,
     pub unchanged: Vec<DiffFinding>,
     pub appeared: Vec<DiffFinding>,
     pub disappeared: Vec<DiffFinding>,
@@ -74,6 +82,37 @@ pub enum ComparedVia {
     ExplicitPair,
 }
 
+/// Why a comparison pair is not comparable (SPRINT-029 §5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum DiffNotComparableReason {
+    /// Required legacy provenance cannot be derived for at least one side.
+    ProvenanceUnavailable,
+    /// Both tuples are derivable but differ.
+    ContractChanged,
+    /// Both tuples are equal but unsupported by this build.
+    ContractUnsupported,
+}
+
+/// A comparison pair that may not be compared (SPRINT-029 §5.3).
+///
+/// This is a successful read result, not an error: the CLI explains why
+/// comparison was skipped and never renders it as an all-clear. No Finding,
+/// graph, or Cause comparison input is materialized for this pair.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DiffNotComparable {
+    pub from: ScanBrief,
+    pub to: ScanBrief,
+    pub newest_attempt: Option<ScanBrief>,
+    pub freshness: Freshness,
+    pub freshness_warning: Option<String>,
+    pub compared_via: ComparedVia,
+    pub provenance: DiffProvenance,
+    pub reason: DiffNotComparableReason,
+    /// Missing provenance components by side in tuple-field order. Non-empty
+    /// only for `ProvenanceUnavailable`.
+    pub gaps: Vec<ComparisonProvenanceGap>,
+}
+
 /// Outcome of `pico diff` when two COMPLETE scans may not exist yet.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[allow(clippy::large_enum_variant)]
@@ -83,6 +122,7 @@ pub enum FindingDiffResult {
         newest_complete: ScanBrief,
         newest_attempt: Option<ScanBrief>,
     },
+    NotComparable(DiffNotComparable),
     Ready(FindingDiff),
 }
 
@@ -119,30 +159,56 @@ impl DiffService {
                     to_scan.status.as_str()
                 )));
             }
-            let from_findings = findings_by_fingerprint(conn, &from_scan.id)?;
-            let to_findings = findings_by_fingerprint(conn, &to_scan.id)?;
             let complete = scans.list_complete()?;
-            let graph = compare_graph(conn, &from_scan, &to_scan, &complete)?;
-            let mut diff = compare(
-                scan_brief(&from_scan),
-                scan_brief(&to_scan),
-                None,
-                Freshness::LatestComplete,
-                None,
-                ComparedVia::ExplicitPair,
-                from_findings,
-                to_findings,
-                graph,
-            );
-            attach_causes(
-                conn,
-                &from_scan.id,
-                &to_scan.id,
-                &mut diff.appeared,
-                &mut diff.disappeared,
-                &diff.graph,
-            )?;
-            Ok(FindingDiffResult::Ready(diff))
+            validate_complete_chronology(&from_scan, &to_scan, &complete)?;
+            let ComparisonGuardDecision {
+                provenance,
+                outcome,
+            } = evaluate_contract_guard(conn, &from_scan, &to_scan)?;
+            match outcome {
+                ComparisonGuardOutcome::NotComparable { reason, gaps } => {
+                    Ok(FindingDiffResult::NotComparable(DiffNotComparable {
+                        from: scan_brief(&from_scan),
+                        to: scan_brief(&to_scan),
+                        newest_attempt: None,
+                        freshness: Freshness::LatestComplete,
+                        freshness_warning: None,
+                        compared_via: ComparedVia::ExplicitPair,
+                        provenance,
+                        reason,
+                        gaps,
+                    }))
+                }
+                ComparisonGuardOutcome::Proceed(contract) => {
+                    // A Ready result guarantees both provenance contracts are
+                    // Some, equal, and equal to the current contract.
+                    debug_assert_eq!(contract, CURRENT_COMPARISON_CONTRACT);
+                    let from_findings = findings_by_fingerprint(conn, &from_scan.id)?;
+                    let to_findings = findings_by_fingerprint(conn, &to_scan.id)?;
+                    let graph = compare_graph(conn, &from_scan, &to_scan, &complete)?;
+                    let mut diff = compare(
+                        scan_brief(&from_scan),
+                        scan_brief(&to_scan),
+                        None,
+                        Freshness::LatestComplete,
+                        None,
+                        ComparedVia::ExplicitPair,
+                        provenance,
+                        from_findings,
+                        to_findings,
+                        graph,
+                    );
+                    attach_causes(
+                        conn,
+                        &from_scan.id,
+                        &to_scan.id,
+                        &mut diff.appeared,
+                        &mut diff.disappeared,
+                        &diff.graph,
+                    )?;
+                    Ok(FindingDiffResult::Ready(diff))
+                }
+            }
         })
     }
 
@@ -161,29 +227,55 @@ impl DiffService {
                 [to, from, ..] => {
                     let (freshness, freshness_warning) =
                         freshness_context(to, newest_attempt.as_ref());
-                    let from_findings = findings_by_fingerprint(conn, &from.id)?;
-                    let to_findings = findings_by_fingerprint(conn, &to.id)?;
-                    let graph = compare_graph(conn, from, to, &complete)?;
-                    let mut diff = compare(
-                        scan_brief(from),
-                        scan_brief(to),
-                        newest_attempt.as_ref().map(scan_brief),
-                        freshness,
-                        freshness_warning,
-                        ComparedVia::LatestTwo,
-                        from_findings,
-                        to_findings,
-                        graph,
-                    );
-                    attach_causes(
-                        conn,
-                        &from.id,
-                        &to.id,
-                        &mut diff.appeared,
-                        &mut diff.disappeared,
-                        &diff.graph,
-                    )?;
-                    Ok(FindingDiffResult::Ready(diff))
+                    validate_complete_chronology(from, to, &complete)?;
+                    let ComparisonGuardDecision {
+                        provenance,
+                        outcome,
+                    } = evaluate_contract_guard(conn, from, to)?;
+                    match outcome {
+                        ComparisonGuardOutcome::NotComparable { reason, gaps } => {
+                            Ok(FindingDiffResult::NotComparable(DiffNotComparable {
+                                from: scan_brief(from),
+                                to: scan_brief(to),
+                                newest_attempt: newest_attempt.as_ref().map(scan_brief),
+                                freshness,
+                                freshness_warning,
+                                compared_via: ComparedVia::LatestTwo,
+                                provenance,
+                                reason,
+                                gaps,
+                            }))
+                        }
+                        ComparisonGuardOutcome::Proceed(contract) => {
+                            // A Ready result guarantees both provenance
+                            // contracts are Some, equal, and current.
+                            debug_assert_eq!(contract, CURRENT_COMPARISON_CONTRACT);
+                            let from_findings = findings_by_fingerprint(conn, &from.id)?;
+                            let to_findings = findings_by_fingerprint(conn, &to.id)?;
+                            let graph = compare_graph(conn, from, to, &complete)?;
+                            let mut diff = compare(
+                                scan_brief(from),
+                                scan_brief(to),
+                                newest_attempt.as_ref().map(scan_brief),
+                                freshness,
+                                freshness_warning,
+                                ComparedVia::LatestTwo,
+                                provenance,
+                                from_findings,
+                                to_findings,
+                                graph,
+                            );
+                            attach_causes(
+                                conn,
+                                &from.id,
+                                &to.id,
+                                &mut diff.appeared,
+                                &mut diff.disappeared,
+                                &diff.graph,
+                            )?;
+                            Ok(FindingDiffResult::Ready(diff))
+                        }
+                    }
                 }
             }
         })
@@ -212,6 +304,100 @@ fn with_read_snapshot<T>(
             let _ = tx.rollback();
             Err(error)
         }
+    }
+}
+
+/// Guard outcome for one comparison pair (SPRINT-029 §5.4, frozen ordering).
+struct ComparisonGuardDecision {
+    /// Persisted provenance for both sides; attached to every result (Ready
+    /// and NotComparable alike). Built from version columns and metadata only.
+    provenance: DiffProvenance,
+    outcome: ComparisonGuardOutcome,
+}
+
+enum ComparisonGuardOutcome {
+    /// Both tuples are present, equal, and current; the comparison may load
+    /// Findings, graph sets, and causes.
+    Proceed(ComparisonContractVersions),
+    /// Comparison is skipped before any diff input is materialized.
+    NotComparable {
+        reason: DiffNotComparableReason,
+        gaps: Vec<ComparisonProvenanceGap>,
+    },
+}
+
+/// Evaluate the comparison-contract guard for one COMPLETE pair
+/// (SPRINT-029 §5.4): unavailable provenance → `ProvenanceUnavailable`, a
+/// differing tuple → `ContractChanged`, an equal non-current tuple →
+/// `ContractUnsupported`, and only the current tuple proceeds.
+///
+/// Provenance loading inspects version columns and metadata only (the R8
+/// structural guarantee): no Finding fingerprint sets, no graph-set
+/// projection, and no causes are materialized before the guard decides
+/// `Proceed`.
+fn evaluate_contract_guard(
+    conn: &Connection,
+    from: &Scan,
+    to: &Scan,
+) -> Result<ComparisonGuardDecision, PicoError> {
+    let from_provenance = load_side_provenance(conn, from)?;
+    let to_provenance = load_side_provenance(conn, to)?;
+    let provenance = DiffProvenance {
+        from: side_provenance(from, &from_provenance),
+        to: side_provenance(to, &to_provenance),
+    };
+    let outcome = match (&from_provenance, &to_provenance) {
+        (SideProvenance::Available(from_contract), SideProvenance::Available(to_contract)) => {
+            if from_contract != to_contract {
+                ComparisonGuardOutcome::NotComparable {
+                    reason: DiffNotComparableReason::ContractChanged,
+                    gaps: Vec::new(),
+                }
+            } else if *from_contract != CURRENT_COMPARISON_CONTRACT {
+                ComparisonGuardOutcome::NotComparable {
+                    reason: DiffNotComparableReason::ContractUnsupported,
+                    gaps: Vec::new(),
+                }
+            } else {
+                ComparisonGuardOutcome::Proceed(*from_contract)
+            }
+        }
+        _ => {
+            // Side gaps in From-then-To order, each side's fields in
+            // tuple-field declaration order (from the loader).
+            let mut gaps = Vec::new();
+            for (side, loaded) in [
+                (DiffSide::From, &from_provenance),
+                (DiffSide::To, &to_provenance),
+            ] {
+                if let SideProvenance::Unavailable(fields) = loaded {
+                    gaps.extend(fields.iter().map(|field| ComparisonProvenanceGap {
+                        side,
+                        field: *field,
+                    }));
+                }
+            }
+            ComparisonGuardOutcome::NotComparable {
+                reason: DiffNotComparableReason::ProvenanceUnavailable,
+                gaps,
+            }
+        }
+    };
+    Ok(ComparisonGuardDecision {
+        provenance,
+        outcome,
+    })
+}
+
+/// Project one side's loaded provenance into the public DTO. An unavailable
+/// side carries no contract but still reports its validated package version.
+fn side_provenance(scan: &Scan, loaded: &SideProvenance) -> DiffSideProvenance {
+    DiffSideProvenance {
+        pico_version: scan.pico_version.clone(),
+        contract: match loaded {
+            SideProvenance::Available(contract) => Some(*contract),
+            SideProvenance::Unavailable(_) => None,
+        },
     }
 }
 
@@ -275,6 +461,7 @@ fn compare(
     freshness: Freshness,
     freshness_warning: Option<String>,
     compared_via: ComparedVia,
+    provenance: DiffProvenance,
     from_findings: BTreeMap<String, DiffFinding>,
     to_findings: BTreeMap<String, DiffFinding>,
     graph: GraphDiff,
@@ -367,6 +554,7 @@ fn compare(
         freshness,
         freshness_warning,
         compared_via,
+        provenance,
         unchanged,
         appeared,
         disappeared,
@@ -527,6 +715,20 @@ fn attempt_is_newer(attempt: &Scan, complete: &Scan) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::compare_contract::ComparisonContractField;
+    use crate::persistence::ScanAnalysisRepo;
+    use crate::shared::PICO_VERSION;
+
+    fn provenance_current() -> DiffProvenance {
+        let side = DiffSideProvenance {
+            pico_version: "0.1.0".to_string(),
+            contract: Some(CURRENT_COMPARISON_CONTRACT),
+        };
+        DiffProvenance {
+            from: side.clone(),
+            to: side,
+        }
+    }
 
     fn finding(
         id: &str,
@@ -570,6 +772,7 @@ mod tests {
             Freshness::LatestComplete,
             None,
             ComparedVia::LatestTwo,
+            provenance_current(),
             map_of(from),
             map_of(to),
             GraphDiff::default(),
@@ -782,6 +985,190 @@ mod tests {
         assert_eq!(
             to_count,
             diff.unchanged.len() + diff.appeared.len() + lifecycle
+        );
+    }
+
+    // Comparison-contract guard decisions (SPRINT-029 §5.4).
+
+    fn guard_conn() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        crate::persistence::db::migrate(&mut conn).unwrap();
+        conn
+    }
+
+    fn declared(envelope: u32, graph: u64, finding: u32) -> serde_json::Value {
+        serde_json::json!({
+            "comparison_contract_version": envelope,
+            "graph_snapshot_version": graph,
+            "finding_version": finding,
+        })
+    }
+
+    fn seed_guard_scan(
+        conn: &Connection,
+        metadata: Option<serde_json::Value>,
+        analysis_version: &str,
+    ) -> Scan {
+        let mut scan = Scan::start(PICO_VERSION).unwrap();
+        scan.metadata = metadata;
+        ScanRepo::new(conn).insert(&scan).unwrap();
+        ScanAnalysisRepo::new(conn)
+            .upsert(&crate::persistence::ScanAnalysisRecord {
+                scan_id: scan.id.clone(),
+                analysis_version: analysis_version.to_string(),
+                status: "COMPLETE".to_string(),
+                overall_disposition: Some("NONE".to_string()),
+                influence_path_count: 0,
+                authority_path_count: 0,
+                active_path_count: 0,
+                blocked_path_count: 0,
+                unresolved_candidate_count: 0,
+                limit_reasons: None,
+                diagnostics: None,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        scan
+    }
+
+    fn seed_guard_finding(conn: &Connection, scan_id: &str, version: &str) {
+        crate::persistence::FindingRepo::new(conn)
+            .insert(&crate::persistence::FindingRecord {
+                id: format!("finding-{scan_id}"),
+                scan_id: scan_id.to_string(),
+                fingerprint: format!("sha256:{scan_id}"),
+                family_fingerprint: format!("sha256:fam-{scan_id}"),
+                finding_version: version.to_string(),
+                finding_class: "UNTRUSTED_TO_PRODUCTION".to_string(),
+                title: "t".to_string(),
+                summary: "s".to_string(),
+                severity: "LOW".to_string(),
+                confidence: "HIGH".to_string(),
+                status: "OPEN".to_string(),
+                metadata: None,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn guard_proceeds_on_current_equal_tuples() {
+        let conn = guard_conn();
+        let from = seed_guard_scan(&conn, Some(declared(1, 1, 1)), "1");
+        seed_guard_finding(&conn, &from.id, "1");
+        let to = seed_guard_scan(&conn, Some(declared(1, 1, 1)), "1");
+        seed_guard_finding(&conn, &to.id, "1");
+        let decision = evaluate_contract_guard(&conn, &from, &to).unwrap();
+        match decision.outcome {
+            ComparisonGuardOutcome::Proceed(contract) => {
+                assert_eq!(contract, CURRENT_COMPARISON_CONTRACT);
+            }
+            ComparisonGuardOutcome::NotComparable { .. } => {
+                panic!("current tuples must proceed")
+            }
+        }
+        assert_eq!(
+            decision.provenance.from.contract,
+            Some(CURRENT_COMPARISON_CONTRACT)
+        );
+        assert_eq!(
+            decision.provenance.to.contract,
+            Some(CURRENT_COMPARISON_CONTRACT)
+        );
+    }
+
+    #[test]
+    fn guard_unavailable_gaps_run_from_then_to_in_declaration_order() {
+        let conn = guard_conn();
+        let from = seed_guard_scan(&conn, None, "1");
+        // Strip the summary so the FROM side is a genuine legacy scan.
+        conn.execute("DELETE FROM scan_analyses WHERE scan_id = ?1", [&from.id])
+            .unwrap();
+        let to = seed_guard_scan(&conn, Some(declared(1, 1, 1)), "1");
+        seed_guard_finding(&conn, &to.id, "1");
+        let decision = evaluate_contract_guard(&conn, &from, &to).unwrap();
+        match decision.outcome {
+            ComparisonGuardOutcome::NotComparable { reason, gaps } => {
+                assert_eq!(reason, DiffNotComparableReason::ProvenanceUnavailable);
+                assert_eq!(
+                    gaps,
+                    vec![
+                        ComparisonProvenanceGap {
+                            side: DiffSide::From,
+                            field: ComparisonContractField::GraphSnapshotVersion,
+                        },
+                        ComparisonProvenanceGap {
+                            side: DiffSide::From,
+                            field: ComparisonContractField::AnalysisVersion,
+                        },
+                        ComparisonProvenanceGap {
+                            side: DiffSide::From,
+                            field: ComparisonContractField::FindingVersion,
+                        },
+                    ]
+                );
+            }
+            ComparisonGuardOutcome::Proceed(_) => panic!("legacy side must not proceed"),
+        }
+        assert!(decision.provenance.from.contract.is_none());
+        assert_eq!(decision.provenance.from.pico_version, PICO_VERSION);
+        assert_eq!(
+            decision.provenance.to.contract,
+            Some(CURRENT_COMPARISON_CONTRACT)
+        );
+    }
+
+    #[test]
+    fn guard_reports_changed_for_differing_tuples_with_empty_gaps() {
+        let conn = guard_conn();
+        let from = seed_guard_scan(&conn, Some(declared(1, 1, 1)), "1");
+        seed_guard_finding(&conn, &from.id, "1");
+        let to = seed_guard_scan(&conn, Some(declared(1, 1, 1)), "2");
+        seed_guard_finding(&conn, &to.id, "1");
+        let decision = evaluate_contract_guard(&conn, &from, &to).unwrap();
+        match decision.outcome {
+            ComparisonGuardOutcome::NotComparable { reason, gaps } => {
+                assert_eq!(reason, DiffNotComparableReason::ContractChanged);
+                assert!(gaps.is_empty());
+            }
+            ComparisonGuardOutcome::Proceed(_) => panic!("differing tuples must not proceed"),
+        }
+        assert_eq!(
+            decision.provenance.to.contract,
+            Some(ComparisonContractVersions {
+                comparison_contract_version: 1,
+                graph_snapshot_version: 1,
+                analysis_version: 2,
+                finding_version: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn guard_reports_unsupported_for_equal_non_current_tuples() {
+        let conn = guard_conn();
+        let from = seed_guard_scan(&conn, Some(declared(2, 2, 2)), "2");
+        seed_guard_finding(&conn, &from.id, "2");
+        let to = seed_guard_scan(&conn, Some(declared(2, 2, 2)), "2");
+        seed_guard_finding(&conn, &to.id, "2");
+        let decision = evaluate_contract_guard(&conn, &from, &to).unwrap();
+        match decision.outcome {
+            ComparisonGuardOutcome::NotComparable { reason, gaps } => {
+                assert_eq!(reason, DiffNotComparableReason::ContractUnsupported);
+                assert!(gaps.is_empty());
+            }
+            ComparisonGuardOutcome::Proceed(_) => {
+                panic!("unsupported tuples must not proceed")
+            }
+        }
+        assert_eq!(
+            decision.provenance.from.contract,
+            decision.provenance.to.contract
+        );
+        assert_ne!(
+            decision.provenance.from.contract,
+            Some(CURRENT_COMPARISON_CONTRACT)
         );
     }
 }

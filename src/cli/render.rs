@@ -7,8 +7,11 @@
 use crate::application::diff::{FindingLifecycleChange, FindingRatingDelta};
 use crate::application::{
     findings_list_guidance, findings_list_state, DiffFinding, FindingDetail, FindingDiff,
-    FindingDiffResult, FindingList, FindingSummary, FindingsListState, Freshness, GraphSubject,
+    FindingDiffResult, FindingList, FindingSummary, FindingsListState, GraphSubject,
     GraphSubjectDiff, ScanHistory, ScanResult,
+};
+use crate::application::{
+    ComparedVia, ComparisonContractVersions, DiffNotComparable, DiffNotComparableReason, Freshness,
 };
 use crate::findings::diagnostics::ScanDiagnostics;
 use crate::shared::terminal_safe;
@@ -581,7 +584,8 @@ pub fn render_scan_diagnostics(diagnostics: &ScanDiagnostics) -> String {
     out
 }
 
-/// Renders `pico diff` for the last two COMPLETE scans (SPRINT-024).
+/// Renders `pico diff` (SPRINT-024; comparison-contract provenance and
+/// non-comparable states per SPRINT-029 §5.5).
 pub fn render_finding_diff(result: &FindingDiffResult) -> String {
     match result {
         FindingDiffResult::NoCompleteScan => {
@@ -594,8 +598,125 @@ pub fn render_finding_diff(result: &FindingDiffResult) -> String {
                 terminal_safe(&newest_complete.status)
             )
         }
+        FindingDiffResult::NotComparable(nc) => render_not_comparable_diff(nc),
         FindingDiffResult::Ready(diff) => render_ready_diff(diff),
     }
+}
+
+/// `c{ccv}-g{gsv}-a{av}-f{fv}` for one side's persisted comparison contract
+/// (SPRINT-029.md §5.5). Integer components are validated u32/u64 values, so
+/// they render as plain integers without sanitization.
+fn comparison_contract_label(contract: Option<&ComparisonContractVersions>) -> String {
+    match contract {
+        Some(contract) => format!(
+            "c{}-g{}-a{}-f{}",
+            contract.comparison_contract_version,
+            contract.graph_snapshot_version,
+            contract.analysis_version,
+            contract.finding_version
+        ),
+        // The guard only decides ContractChanged/ContractUnsupported when
+        // both side tuples are present; this keeps the renderer total for an
+        // invariant violation instead of fabricating a tuple.
+        None => "(unavailable)".to_string(),
+    }
+}
+
+/// Renders a comparison pair the contract guard refused to compare
+/// (SPRINT-029.md §5.5, frozen). Comparison is skipped: the render names both
+/// sides and the guard decision, then states that no Finding, graph,
+/// lifecycle, or Cause claim was computed. It never renders Findings,
+/// Resources, Relationships, change counts, the S024 no-change sentence, or a
+/// Cause line, and never reads as an all-clear.
+fn render_not_comparable_diff(nc: &DiffNotComparable) -> String {
+    let mut out = String::from("Pico diff\n\n");
+    out.push_str(&format!(
+        "From: {} ({})\n",
+        terminal_safe(&nc.from.id),
+        terminal_safe(&nc.from.status)
+    ));
+    out.push_str(&format!(
+        "To:   {} ({})\n",
+        terminal_safe(&nc.to.id),
+        terminal_safe(&nc.to.status)
+    ));
+    match nc.compared_via {
+        ComparedVia::LatestTwo => {
+            out.push_str("Compared: LAST TWO COMPLETE SCANS\n");
+            out.push_str(match nc.freshness {
+                Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
+                Freshness::NewerIncomplete => "Freshness: NEWER INCOMPLETE ATTEMPT\n",
+            });
+            if let Some(warning) = &nc.freshness_warning {
+                for line in warning.split('\n') {
+                    out.push_str(&terminal_safe(line));
+                    out.push('\n');
+                }
+            }
+        }
+        ComparedVia::ExplicitPair => {
+            out.push_str("Compared: EXPLICIT PAIR\n");
+        }
+    }
+    out.push('\n');
+    match nc.reason {
+        DiffNotComparableReason::ContractChanged => {
+            debug_assert!(
+                nc.provenance.from.contract.is_some() && nc.provenance.to.contract.is_some(),
+                "ContractChanged requires both side tuples"
+            );
+            out.push_str(&format!(
+                "Comparison contracts: {} → {} (MISMATCH)\n",
+                comparison_contract_label(nc.provenance.from.contract.as_ref()),
+                comparison_contract_label(nc.provenance.to.contract.as_ref()),
+            ));
+        }
+        DiffNotComparableReason::ContractUnsupported => {
+            debug_assert!(
+                nc.provenance.from.contract.is_some() && nc.provenance.to.contract.is_some(),
+                "ContractUnsupported requires both side tuples"
+            );
+            out.push_str(&format!(
+                "Comparison contracts: {} → {} (UNSUPPORTED)\n",
+                comparison_contract_label(nc.provenance.from.contract.as_ref()),
+                comparison_contract_label(nc.provenance.to.contract.as_ref()),
+            ));
+        }
+        DiffNotComparableReason::ProvenanceUnavailable => {
+            out.push_str("Comparison contracts: (PROVENANCE UNAVAILABLE)\n");
+            // Render the gaps as the guard produced them: all FROM-side gaps
+            // first, then TO-side, each side's fields in tuple-field
+            // declaration order. Reordering here would hide guard ordering.
+            for gap in &nc.gaps {
+                out.push_str(&format!(
+                    "Missing: {} {}\n",
+                    terminal_safe(gap.side.as_str()),
+                    terminal_safe(gap.field.as_str())
+                ));
+            }
+        }
+    }
+    out.push_str(&format!(
+        "Pico versions: {} → {}\n",
+        terminal_safe(&nc.provenance.from.pico_version),
+        terminal_safe(&nc.provenance.to.pico_version)
+    ));
+    out.push('\n');
+    out.push_str(match nc.reason {
+        DiffNotComparableReason::ContractChanged => {
+            "Security change comparison was skipped because the persisted comparison contracts differ."
+        }
+        DiffNotComparableReason::ContractUnsupported => {
+            "Security change comparison was skipped because this Pico build does not support the persisted comparison contract."
+        }
+        DiffNotComparableReason::ProvenanceUnavailable => {
+            "Security change comparison was skipped because required historical provenance is unavailable."
+        }
+    });
+    out.push('\n');
+    out.push_str("No Finding, graph, lifecycle, or Cause claim was computed for this pair.\n");
+    out.push_str("This is not an all-clear.\n");
+    out
 }
 
 /// Renders `pico history`.
@@ -661,6 +782,24 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
         crate::application::ComparedVia::ExplicitPair => {
             out.push_str("Compared: EXPLICIT PAIR\n");
         }
+    }
+    // Persisted comparison-contract provenance (SPRINT-029.md §5.5): both
+    // tuples are guaranteed Some, equal, and current on a Ready result.
+    if let (Some(from_contract), Some(to_contract)) = (
+        diff.provenance.from.contract.as_ref(),
+        diff.provenance.to.contract.as_ref(),
+    ) {
+        debug_assert_eq!(from_contract, to_contract);
+        out.push_str(&format!(
+            "Comparison contracts: {} → {} (SUPPORTED MATCH)\n",
+            comparison_contract_label(Some(from_contract)),
+            comparison_contract_label(Some(to_contract)),
+        ));
+        out.push_str(&format!(
+            "Pico versions: {} → {}\n",
+            terminal_safe(&diff.provenance.from.pico_version),
+            terminal_safe(&diff.provenance.to.pico_version)
+        ));
     }
     out.push_str("\nFindings\n");
     out.push_str(&format!("  Unchanged: {}\n", diff.unchanged.len()));

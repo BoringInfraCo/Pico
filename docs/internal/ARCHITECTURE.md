@@ -6018,9 +6018,12 @@ pico status
 appeared/disappeared Findings from graph memory, and then lists
 resources/relationships by observation-snapshot canonical_key.
 `pico history` (S025) lists scans. Explicit `pico diff <from> <to>` is
-COMPLETE-only. This is not the full v0.4 product (no retention or MCP diff).
-See `docs/internal/sprints/SPRINT-024-support-note.md` and
-`docs/internal/sprints/SPRINT-027.md`.
+COMPLETE-only. Since S028 the diff classifies finding lifecycle; since S029
+the diff carries comparison-contract provenance and returns an explicit
+non-comparable result instead of comparing across differing or unsupported
+contract tuples (schema stays v6). This is not the full v0.4 product (no
+retention or MCP diff). See `docs/internal/sprints/SPRINT-024-support-note.md`
+and `docs/internal/sprints/SPRINT-027.md`.
 
 Potential future commands:
 
@@ -7378,7 +7381,7 @@ still exactly one active finding under the golden fixture, with
 §2), read-only allowlisted probes, secret transience, and provider-aware
 adapters.
 
-## 28.5 Started v0.4 — finding-set memory, history, graph memory, lifecycle (S024–S028)
+## 28.5 Started v0.4 — finding-set memory, history, graph memory, lifecycle, contract guard (S024–S029)
 
 v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
 
@@ -7403,12 +7406,28 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   `idx_findings_scan_family` and the non-empty insert trigger
   `findings_family_nonempty_insert`; legacy rows backfill to `''`.
 - No MCP diff/history tool, no retention.
+- Comparison contract guard (S029, schema stays v6): `pico diff` loads and
+  validates a composite comparison tuple
+  (`comparison_contract_version + graph_snapshot_version + analysis_version +
+  finding_version`) for both COMPLETE sides before any comparison work. New
+  scans declare the tuple in Scan metadata (`scan_analyses.analysis_version`
+  stays the authoritative analysis version); legacy COMPLETE scans are
+  compared only when every component is derivable and consistent, otherwise
+  the diff returns an explicit `NotComparable` result
+  (`ProvenanceUnavailable` / `ContractChanged` / `ContractUnsupported`) that
+  never becomes empty buckets, ordinary appeared/disappeared movement, or an
+  all-clear. Contradictory persisted provenance and summary rewrites after
+  scan completion fail closed as database integrity errors. The guard runs
+  before Finding loading, graph projection, and Cause attachment, and is
+  byte-deterministic and read-only (schema-and-table content digest
+  unchanged).
 - Authoritative slice scope:
   `docs/internal/sprints/SPRINT-024-support-note.md`,
   `docs/internal/sprints/SPRINT-025.md`,
   `docs/internal/sprints/SPRINT-026.md`,
   `docs/internal/sprints/SPRINT-027.md`,
-  `docs/internal/sprints/SPRINT-028.md`.
+  `docs/internal/sprints/SPRINT-028.md`,
+  `docs/internal/sprints/SPRINT-029.md`.
 
 ---
 

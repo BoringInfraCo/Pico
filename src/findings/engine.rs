@@ -1912,11 +1912,28 @@ mod tests {
     }
 
     fn insert_complete_scan(db: &Database) -> String {
-        let scan = crate::domain::Scan::start(PICO_VERSION)
-            .unwrap()
-            .complete()
-            .unwrap();
+        let mut scan = crate::domain::Scan::start(PICO_VERSION).unwrap();
+        // Every fixture scan declares the comparison contract (SPRINT-029).
+        scan.metadata = Some(json!({
+            "comparison_contract_version": 1,
+            "graph_snapshot_version": 1,
+            "finding_version": 1,
+        }));
+        let scan = scan.complete().unwrap();
         ScanRepo::new(db.connection()).insert(&scan).unwrap();
+        // The COMPLETE-summary guard makes the repository refuse a summary
+        // once the parent scan row is COMPLETE, so the fixture seeds it with
+        // raw SQL.
+        db.connection()
+            .execute(
+                "INSERT INTO scan_analyses
+                 (scan_id, analysis_version, status, overall_disposition,
+                  influence_path_count, authority_path_count, active_path_count,
+                  blocked_path_count, unresolved_candidate_count, created_at)
+                 VALUES (?1, '1', 'COMPLETE', 'NONE', 0, 0, 0, 0, 0, ?2)",
+                rusqlite::params![scan.id, crate::persistence::codec::ts_to_text(Utc::now())],
+            )
+            .unwrap();
         scan.id
     }
 
