@@ -770,6 +770,9 @@ fn push_diff_finding(out: &mut String, finding: &DiffFinding) {
         terminal_safe(&finding.fingerprint)
     ));
     out.push_str(&format!("  ID: {}\n", terminal_safe(&finding.id)));
+    if let Some(cause) = &finding.cause {
+        out.push_str(&format!("  Cause: {}\n", terminal_safe(&cause.summary)));
+    }
 }
 
 /// Renders the scan-summary Effective Bash block (S023 / F-U1).

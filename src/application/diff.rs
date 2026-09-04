@@ -9,6 +9,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::application::cause::{attach_causes, FindingCause};
 use crate::application::graph_diff::{compare_graph, GraphDiff};
 use crate::application::{Freshness, ScanBrief};
 use crate::domain::Scan;
@@ -25,6 +26,7 @@ pub struct DiffFinding {
     pub title: String,
     pub severity: String,
     pub confidence: String,
+    pub cause: Option<FindingCause>,
 }
 
 /// Fingerprint-set comparison of two COMPLETE scans.
@@ -100,7 +102,7 @@ impl DiffService {
             let to_findings = findings_by_fingerprint(conn, &to_scan.id)?;
             let complete = scans.list_complete()?;
             let graph = compare_graph(conn, &from_scan, &to_scan, &complete)?;
-            Ok(FindingDiffResult::Ready(compare(
+            let mut diff = compare(
                 scan_brief(&from_scan),
                 scan_brief(&to_scan),
                 None,
@@ -110,7 +112,16 @@ impl DiffService {
                 from_findings,
                 to_findings,
                 graph,
-            )))
+            );
+            attach_causes(
+                conn,
+                &from_scan.id,
+                &to_scan.id,
+                &mut diff.appeared,
+                &mut diff.disappeared,
+                &diff.graph,
+            )?;
+            Ok(FindingDiffResult::Ready(diff))
         })
     }
 
@@ -132,7 +143,7 @@ impl DiffService {
                     let from_findings = findings_by_fingerprint(conn, &from.id)?;
                     let to_findings = findings_by_fingerprint(conn, &to.id)?;
                     let graph = compare_graph(conn, from, to, &complete)?;
-                    Ok(FindingDiffResult::Ready(compare(
+                    let mut diff = compare(
                         scan_brief(from),
                         scan_brief(to),
                         newest_attempt.as_ref().map(scan_brief),
@@ -142,7 +153,16 @@ impl DiffService {
                         from_findings,
                         to_findings,
                         graph,
-                    )))
+                    );
+                    attach_causes(
+                        conn,
+                        &from.id,
+                        &to.id,
+                        &mut diff.appeared,
+                        &mut diff.disappeared,
+                        &diff.graph,
+                    )?;
+                    Ok(FindingDiffResult::Ready(diff))
                 }
             }
         })
@@ -189,6 +209,7 @@ fn findings_by_fingerprint(
                 title: record.title,
                 severity: record.severity,
                 confidence: record.confidence,
+                cause: None,
             });
     }
     Ok(by_fingerprint)

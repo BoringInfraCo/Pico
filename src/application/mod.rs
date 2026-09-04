@@ -4,6 +4,7 @@
 //! coordinate domain and persistence. See SPRINT-001.md §6 (Interface
 //! separation).
 
+pub mod cause;
 pub mod diff;
 pub mod findings;
 pub mod graph_diff;
@@ -11,6 +12,7 @@ pub mod history;
 pub mod init;
 pub mod scan;
 
+pub use cause::FindingCause;
 pub use diff::{ComparedVia, DiffFinding, DiffService, FindingDiff, FindingDiffResult};
 pub use findings::{
     finding_navigation_ids, findings_list_guidance, findings_list_state, BoundaryView, Currentness,

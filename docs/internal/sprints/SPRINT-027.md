@@ -1,6 +1,6 @@
 # Pico — Sprint 027: Causal Explanation of Finding Diffs (v0.4 slice 4)
 
-**Status:** IN PROGRESS
+**Status:** DONE
 
 **Sprint:** 027
 **Phase:** v0.4 — Security Memory and Change Detection
@@ -202,9 +202,42 @@ complete.
 
 ```text
 completion date and verified baseline
-  Date: TBD
-  Baseline: a5470f2
-  Verified by: TBD
+  Date: 2026-09-04
+  Baseline: a5470f2 (post-S026); spec 5b8664a
+  Verified by: cargo test --lib (151 passed); sprint027_cli_test (7);
+               sprint024/025/026 green; cargo clippy --all-targets -- -D warnings
+
+commits
+  authored: 5b8664a docs(sprints): define Sprint 027 causal explanation …
+  impl:     feat(cli): explain finding diffs from graph causes
+
+repository state
+  A  src/application/cause.rs
+  M  src/application/diff.rs          (DiffFinding.cause; attach_causes)
+  M  src/application/mod.rs
+  M  src/cli/render.rs                (Cause: line under appeared/disappeared)
+  A  tests/integration/sprint027_cli_test.rs
+  M  tests/integration.rs
+  M  docs/internal/sprints/SPRINT-027.md
+  M  docs/internal/ARCHITECTURE.md
+
+new fixtures (R1–R10)
+  R1 unchanged_diff_has_no_cause_lines
+  R2 bash_deny_cause_is_effective_state_not_mcp
+  R3 worker_churn_cause_is_sink_identity_on_both_sides
+  R4 partial_attempt_does_not_invent_cause
+  R5 covered by R1
+  R6 unknown_cause_sentence_is_explicit (unit)
+  R7 cause_summaries_stable_across_identical_pairs
+  R8 secret_sweep_never_leaks_in_cause
+  R9 findings_counts_contract_with_optional_cause_lines
+  R10 MCP N/A
+
+MCP N/A justification
+  MCP tools remain list_findings / get_finding.
+
+roadmap note
+  ROADMAP §18: v0.4 IN PROGRESS (S024–S027); independent comprehension PENDING
 ```
 
 ---
@@ -213,7 +246,16 @@ completion date and verified baseline
 
 ```text
 Sprint: SPRINT-027 — Causal Explanation of Finding Diffs
-Status: IN PROGRESS
+Status: DONE
 Baseline: a5470f2
+
+Cause:
+  Bash deny names effective state, not MCP: PASS
+  Worker churn is one sink-identity story: PASS
+  PARTIAL does not invent a cause: PASS
+  Unchanged pair has no Cause lines: PASS
+  MCP: N/A
+
+Golden path: intact
 v0.4: not complete
 ```

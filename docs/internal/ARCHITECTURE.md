@@ -5997,12 +5997,13 @@ pico agents
 pico status
 ```
 
-`pico diff` (S024–S026) compares Findings by fingerprint and, after that
-block, resources/relationships by observation-snapshot canonical_key.
+`pico diff` (S024–S027) compares Findings by fingerprint, names a Cause for
+appeared/disappeared Findings from graph memory, and then lists
+resources/relationships by observation-snapshot canonical_key.
 `pico history` (S025) lists scans. Explicit `pico diff <from> <to>` is
-COMPLETE-only. This is not the full v0.4 product (no causal explanation,
-retention, or MCP diff). See `docs/internal/sprints/SPRINT-024-support-note.md`
-and `docs/internal/sprints/SPRINT-026.md`.
+COMPLETE-only. This is not the full v0.4 product (no retention or MCP diff).
+See `docs/internal/sprints/SPRINT-024-support-note.md` and
+`docs/internal/sprints/SPRINT-027.md`.
 
 Potential future commands:
 
@@ -7373,8 +7374,11 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   relationships from observation snapshots by `canonical_key` (`first_seen` /
   `reappeared` / `changed` / `disappeared`). Stable-row timestamps are not
   product first-seen / last-seen. PARTIAL is never graph disappearance.
-- No new schema, no MCP diff/history tool, no causal explanation, no
-  retention.
+- Causal explanation (S027): appeared/disappeared Findings get one `Cause:`
+  line from the smallest path-local graph change (Bash effective state beats
+  MCP absence; worker identity churn is one paired sink story). PARTIAL does
+  not invent a cause.
+- No new schema, no MCP diff/history tool, no retention.
 - Authoritative slice scope:
   `docs/internal/sprints/SPRINT-024-support-note.md`,
   `docs/internal/sprints/SPRINT-025.md`,
