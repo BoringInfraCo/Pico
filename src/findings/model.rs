@@ -117,6 +117,7 @@ pub struct Finding {
     pub id: String,
     pub scan_id: String,
     pub fingerprint: String,
+    pub family_fingerprint: String,
     pub finding_version: u32,
     pub finding_class: FindingClass,
     pub status: FindingStatus,

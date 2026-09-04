@@ -4,6 +4,7 @@
 //! security logic, and no provider interpretation. Every persisted string is
 //! passed through `terminal_safe` so untrusted text cannot spoof the layout.
 
+use crate::application::diff::{FindingLifecycleChange, FindingRatingDelta};
 use crate::application::{
     findings_list_guidance, findings_list_state, DiffFinding, FindingDetail, FindingDiff,
     FindingDiffResult, FindingList, FindingSummary, FindingsListState, Freshness, GraphSubject,
@@ -665,6 +666,9 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
     out.push_str(&format!("  Unchanged: {}\n", diff.unchanged.len()));
     out.push_str(&format!("  Appeared:  {}\n", diff.appeared.len()));
     out.push_str(&format!("  Disappeared: {}\n", diff.disappeared.len()));
+    out.push_str(&format!("  Weakened: {}\n", diff.weakened.len()));
+    out.push_str(&format!("  Strengthened: {}\n", diff.strengthened.len()));
+    out.push_str(&format!("  Uncertain: {}\n", diff.uncertain.len()));
 
     if !diff.appeared.is_empty() {
         out.push_str("\nAppeared\n");
@@ -678,8 +682,31 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
             push_diff_finding(&mut out, finding);
         }
     }
+    if !diff.weakened.is_empty() {
+        out.push_str("\nWeakened\n");
+        for change in &diff.weakened {
+            push_lifecycle_change(&mut out, change);
+        }
+    }
+    if !diff.strengthened.is_empty() {
+        out.push_str("\nStrengthened\n");
+        for change in &diff.strengthened {
+            push_lifecycle_change(&mut out, change);
+        }
+    }
+    if !diff.uncertain.is_empty() {
+        out.push_str("\nUncertain\n");
+        for change in &diff.uncertain {
+            push_lifecycle_change(&mut out, change);
+        }
+    }
 
-    if diff.appeared.is_empty() && diff.disappeared.is_empty() {
+    if diff.appeared.is_empty()
+        && diff.disappeared.is_empty()
+        && diff.weakened.is_empty()
+        && diff.strengthened.is_empty()
+        && diff.uncertain.is_empty()
+    {
         out.push('\n');
         out.push_str("No security-significant finding change.\n");
         if diff.unchanged.is_empty() {
@@ -772,6 +799,99 @@ fn push_diff_finding(out: &mut String, finding: &DiffFinding) {
     out.push_str(&format!("  ID: {}\n", terminal_safe(&finding.id)));
     if let Some(cause) = &finding.cause {
         out.push_str(&format!("  Cause: {}\n", terminal_safe(&cause.summary)));
+    }
+}
+
+fn push_lifecycle_change(out: &mut String, change: &FindingLifecycleChange) {
+    out.push_str(&format!(
+        "  {} · {} confidence\n",
+        terminal_safe(&change.to.severity),
+        terminal_safe(&change.to.confidence)
+    ));
+    out.push_str("  ");
+    out.push_str(&terminal_safe(&change.to.title));
+    out.push('\n');
+    out.push_str(&format!(
+        "  Fingerprint: {}\n",
+        terminal_safe(&change.to.fingerprint)
+    ));
+    out.push_str(&format!("  ID: {}\n", terminal_safe(&change.to.id)));
+    out.push_str(&format!(
+        "  From fingerprint: {}\n",
+        terminal_safe(&change.from.fingerprint)
+    ));
+    out.push_str(&format!(
+        "  From: {} · {} confidence\n",
+        terminal_safe(&change.from.severity),
+        terminal_safe(&change.from.confidence)
+    ));
+    out.push_str(&format!(
+        "  Cause: {}\n",
+        lifecycle_cause_summary(&change.deltas)
+    ));
+}
+
+/// Render-time label for a delta field: the machine values "severity" and
+/// "confidence" map to their title-cased display forms; any unknown value is
+/// still rendered safely (title-cased, then passed through `terminal_safe`).
+fn delta_field_label(field: &str) -> String {
+    let title = match field {
+        "severity" => "Severity".to_string(),
+        "confidence" => "Confidence".to_string(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    };
+    terminal_safe(&title)
+}
+
+fn lifecycle_cause_summary(deltas: &[FindingRatingDelta]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for delta in deltas {
+        if delta.field == "severity"
+            && delta.from_value != delta.to_value
+            && !parts.iter().any(|part| part.starts_with("Severity "))
+        {
+            parts.push(format!(
+                "Severity {} → {}",
+                terminal_safe(&delta.from_value),
+                terminal_safe(&delta.to_value)
+            ));
+        }
+    }
+    for delta in deltas {
+        if delta.field == "confidence"
+            && delta.from_value != delta.to_value
+            && !parts.iter().any(|part| part.starts_with("Confidence "))
+        {
+            parts.push(format!(
+                "Confidence {} → {}",
+                terminal_safe(&delta.from_value),
+                terminal_safe(&delta.to_value)
+            ));
+        }
+    }
+    for delta in deltas {
+        if delta.field != "severity"
+            && delta.field != "confidence"
+            && delta.from_value != delta.to_value
+        {
+            parts.push(format!(
+                "{} {} → {}",
+                delta_field_label(&delta.field),
+                terminal_safe(&delta.from_value),
+                terminal_safe(&delta.to_value)
+            ));
+        }
+    }
+    if parts.is_empty() {
+        "Ratings unchanged; fingerprint changed".to_string()
+    } else {
+        parts.join("; ")
     }
 }
 

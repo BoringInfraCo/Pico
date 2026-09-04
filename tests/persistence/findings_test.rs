@@ -100,6 +100,7 @@ fn finding(fixture: &Fixture) -> FindingRecord {
         id: format!("finding_{}:digest", fixture.scan_id),
         scan_id: fixture.scan_id.clone(),
         fingerprint: "finding-fingerprint".to_string(),
+        family_fingerprint: "finding-family".to_string(),
         finding_version: "finding-v1".to_string(),
         finding_class: "UNTRUSTED_TO_PRODUCTION".to_string(),
         title: "External content can reach production mutation authority".to_string(),

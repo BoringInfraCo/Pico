@@ -7,11 +7,11 @@ use pico::shared::{PicoError, PICO_VERSION};
 use tempfile::tempdir;
 
 #[test]
-fn fresh_database_initializes_to_schema_version_5() {
+fn fresh_database_initializes_to_schema_version_6() {
     let dir = tempdir().unwrap();
     let mut db = Database::open(&dir.path().join("pico.db")).unwrap();
     db.migrate().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 5);
+    assert_eq!(db.schema_version().unwrap(), 6);
 }
 
 #[test]
@@ -20,9 +20,9 @@ fn migration_is_idempotent() {
     let path = dir.path().join("pico.db");
     let mut db = Database::open(&path).unwrap();
     db.migrate().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 5);
+    assert_eq!(db.schema_version().unwrap(), 6);
     db.migrate().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 5);
+    assert_eq!(db.schema_version().unwrap(), 6);
 }
 
 #[test]

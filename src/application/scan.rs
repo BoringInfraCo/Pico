@@ -1132,6 +1132,7 @@ fn persist_finding_results(
             id: finding.id.clone(),
             scan_id: finding.scan_id.clone(),
             fingerprint: finding.fingerprint.clone(),
+            family_fingerprint: finding.family_fingerprint.clone(),
             finding_version: finding.finding_version.to_string(),
             finding_class: finding.finding_class.as_str().to_string(),
             title: finding.title.clone(),

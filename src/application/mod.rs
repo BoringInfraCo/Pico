@@ -13,7 +13,10 @@ pub mod init;
 pub mod scan;
 
 pub use cause::FindingCause;
-pub use diff::{ComparedVia, DiffFinding, DiffService, FindingDiff, FindingDiffResult};
+pub use diff::{
+    ComparedVia, DiffFinding, DiffService, FindingDiff, FindingDiffResult, FindingLifecycleChange,
+    FindingRatingDelta,
+};
 pub use findings::{
     finding_navigation_ids, findings_list_guidance, findings_list_state, BoundaryView, Currentness,
     EvidenceView, ExplainedPath, FindingDetail, FindingList, FindingQueryService, FindingSummary,

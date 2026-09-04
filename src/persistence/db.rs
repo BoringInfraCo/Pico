@@ -271,11 +271,21 @@ const MIGRATIONS: &[&str] = &[
 
     CREATE INDEX IF NOT EXISTS idx_scan_diagnostics_scan ON scan_diagnostics(scan_id);
     "#,
+    // Migration 6: Sprint 028 family identity for Finding lifecycle.
+    // Legacy rows backfill to '' (pre-family); new writes must carry a
+    // non-empty family_fingerprint enforced by the insert trigger. The
+    // partial unique index scopes family identity per scan while ignoring
+    // legacy empty rows.
+    r#"
+    ALTER TABLE findings ADD COLUMN family_fingerprint TEXT NOT NULL DEFAULT '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_scan_family ON findings(scan_id, family_fingerprint) WHERE family_fingerprint <> '';
+    CREATE TRIGGER IF NOT EXISTS findings_family_nonempty_insert BEFORE INSERT ON findings FOR EACH ROW WHEN NEW.family_fingerprint = '' BEGIN SELECT RAISE(ABORT, 'family_fingerprint is required'); END;
+    "#,
 ];
 
 /// The only schema version supported by this build. Query commands must
 /// never migrate; a mismatch is a compatibility error.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 5;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 6;
 
 /// A SQLite-backed Pico database.
 pub struct Database {
@@ -375,9 +385,37 @@ impl Database {
 
 /// Apply all pending migrations, recording each via `user_version`.
 pub fn migrate(conn: &mut Connection) -> Result<(), PicoError> {
+    migrate_to_version(conn, MIGRATIONS.len() as i64)
+}
+
+/// Applies migrations 1..=target. Internal helper for migration tests and
+/// tooling; partial migrations are NOT a supported public surface.
+fn migrate_to_version(conn: &mut Connection, target: i64) -> Result<(), PicoError> {
+    let len = MIGRATIONS.len() as i64;
+    if target < 1 || target > len {
+        return Err(PicoError::migration(format!(
+            "unsupported migration target {target}; supported range is 1..={len}"
+        )));
+    }
     let current = schema_version(conn).map_err(|e| PicoError::migration(e.to_string()))?;
+    if current > len {
+        return Err(PicoError::migration(format!(
+            "unsupported schema version {current}; this build supports schema \
+             version {SUPPORTED_SCHEMA_VERSION} (upgrade Pico or use a compatible \
+             build; database downgrade is unsupported)"
+        )));
+    }
+    if target < current {
+        return Err(PicoError::migration(format!(
+            "requested migration target {target} is below current schema version \
+             {current}; downgrade is unsupported"
+        )));
+    }
     for (i, sql) in MIGRATIONS.iter().enumerate() {
         let version = (i + 1) as i64;
+        if version > target {
+            break;
+        }
         if version <= current {
             continue;
         }
@@ -406,9 +444,17 @@ pub fn schema_version(conn: &Connection) -> Result<i64, PicoError> {
 pub fn require_schema_version(conn: &Connection) -> Result<i64, PicoError> {
     let version = schema_version(conn)?;
     if version != SUPPORTED_SCHEMA_VERSION {
+        let remedy = if version < SUPPORTED_SCHEMA_VERSION {
+            // `pico init` genuinely migrates older databases forward.
+            "run `pico init` to upgrade"
+        } else {
+            // A newer database cannot be migrated down; init would hit the
+            // same rejection.
+            "upgrade Pico or use a compatible build; database downgrade is unsupported"
+        };
         return Err(PicoError::migration(format!(
             "unsupported schema version {version}; this build requires schema \
-             version {SUPPORTED_SCHEMA_VERSION} (run `pico init` to upgrade)"
+             version {SUPPORTED_SCHEMA_VERSION} ({remedy})"
         )));
     }
     Ok(version)
@@ -420,9 +466,13 @@ mod tests {
     use crate::persistence::codec;
     use crate::shared::PICO_VERSION;
     use crate::{
-        domain::{Observation, Resource, Scan, ScanStatus},
-        persistence::{EvidenceRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo},
+        domain::{Evidence, EvidenceClass, Observation, Resource, Scan, ScanStatus},
+        persistence::{
+            EvidenceRepo, FindingRepo, ObservationRepo, RelationshipRepo, ResourceRepo, ScanRepo,
+        },
     };
+    use chrono::Utc;
+    use rusqlite::params;
 
     #[test]
     fn fresh_database_initializes() {
@@ -446,6 +496,35 @@ mod tests {
             db.migrate().unwrap();
             assert_eq!(db.schema_version().unwrap(), MIGRATIONS.len() as i64);
         }
+    }
+
+    #[test]
+    fn migrate_to_version_stops_at_target_and_rejects_invalid_targets() {
+        let len = MIGRATIONS.len() as i64;
+        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = conn;
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+
+        // Target 0 and beyond the newest migration are rejected outright.
+        assert!(migrate_to_version(&mut conn, 0).is_err());
+        assert!(migrate_to_version(&mut conn, len + 1).is_err());
+        assert_eq!(schema_version(&conn).unwrap(), 0);
+
+        // Migrate partially, then verify behavior relative to current version.
+        migrate_to_version(&mut conn, 5).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 5);
+
+        // Targets below the current version are rejected (no downgrade).
+        assert!(migrate_to_version(&mut conn, 4).is_err());
+        assert_eq!(schema_version(&conn).unwrap(), 5);
+
+        // Re-running at the current version is a no-op.
+        migrate_to_version(&mut conn, 5).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 5);
+
+        // Migrating forward to an explicit target works.
+        migrate_to_version(&mut conn, len).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), len);
     }
 
     #[test]
@@ -606,5 +685,287 @@ mod tests {
             db.migrate().unwrap();
         }
         drop(path);
+    }
+
+    /// Real v5 → v6 migration: build a genuine schema-v5 database, seed rows
+    /// (a findings row carries no family column at v5), migrate to v6, and
+    /// prove preservation, legacy-read semantics, integrity objects, idempotency,
+    /// and rollback safety. All four link types are seeded and proven to survive:
+    /// finding_paths, finding_evidence, finding_reasons, finding_remediations.
+    #[test]
+    fn migration6_from_v5_preserves_rows_and_links() {
+        let workspace = tempfile::tempdir().unwrap();
+        let dir = workspace.path().join(".pico");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("pico.db");
+
+        // --- Build a true v5 database and seed it. ---
+        {
+            let mut conn = Connection::open(&db_path).unwrap();
+            conn.pragma_update(None, "foreign_keys", true).unwrap();
+            migrate_to_version(&mut conn, 5).unwrap();
+            assert_eq!(schema_version(&conn).unwrap(), 5);
+
+            let scan = Scan::start(PICO_VERSION).unwrap().complete().unwrap();
+            ScanRepo::new(&conn).insert(&scan).unwrap();
+
+            let source = Resource::new(
+                "external_source:github",
+                "external_source",
+                "github",
+                "GitHub",
+            )
+            .unwrap();
+            let actor =
+                Resource::new("agent:opencode:default", "agent", "opencode", "OpenCode").unwrap();
+            let sink = Resource::new(
+                "provider_account:cloudflare",
+                "provider_account",
+                "cloudflare",
+                "Acct",
+            )
+            .unwrap();
+            let resources = ResourceRepo::new(&conn);
+            for resource in [&source, &actor, &sink] {
+                resources.upsert(resource).unwrap();
+            }
+
+            let evidence = Evidence::new(
+                &scan.id,
+                EvidenceClass::Direct,
+                "opencode_config",
+                "~/.config/opencode/opencode.json",
+                "permission.bash",
+                "allow",
+                crate::domain::Sensitivity::Internal,
+            )
+            .unwrap();
+            EvidenceRepo::new(&conn).insert(&evidence).unwrap();
+
+            conn.execute(
+                "INSERT INTO scan_analyses
+                 (scan_id, analysis_version, status, influence_path_count,
+                  authority_path_count, active_path_count, blocked_path_count,
+                  unresolved_candidate_count, created_at)
+                 VALUES (?1, '1', 'COMPLETE', 1, 1, 1, 0, 0, ?2)",
+                params![scan.id, codec::ts_to_text(Utc::now())],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO attack_paths
+                 (id, scan_id, fingerprint, analysis_version, source_resource_id,
+                  actor_resource_id, sink_resource_id, disposition, source_trust,
+                  influence_strength, capability, authority_resolution,
+                  sink_impact, created_at)
+                 VALUES ('ap-legacy', ?1, 'sha256:path-legacy', '1', ?2, ?3, ?4,
+                         'ACTIVE', 'PUBLIC_EXTERNAL', 'AGENT_RETRIEVABLE',
+                         'EXECUTE', 'EXACT', 'PRODUCTION', ?5)",
+                params![
+                    scan.id,
+                    source.id,
+                    actor.id,
+                    sink.id,
+                    codec::ts_to_text(Utc::now())
+                ],
+            )
+            .unwrap();
+            // v5 findings have NO family_fingerprint column.
+            conn.execute(
+                "INSERT INTO findings
+                 (id, scan_id, fingerprint, finding_version, finding_class, title,
+                  summary, severity, confidence, status, metadata, created_at)
+                 VALUES ('finding-legacy', ?1, 'sha256:legacy', 'v1',
+                         'UNTRUSTED_TO_PRODUCTION', 'Legacy finding',
+                         'Summary of legacy', 'CRITICAL', 'HIGH', 'OPEN', NULL, ?2)",
+                params![scan.id, codec::ts_to_text(Utc::now())],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO finding_paths (finding_id, attack_path_id, position)
+                 VALUES ('finding-legacy', 'ap-legacy', 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO finding_evidence (finding_id, evidence_id, position, support_role)
+                 VALUES ('finding-legacy', ?1, 0, 'EDGE')",
+                [&evidence.id],
+            )
+            .unwrap();
+            let evidence_ids_json = format!("[\"{}\"]", evidence.id);
+            conn.execute(
+                "INSERT INTO finding_reasons
+                 (finding_id, position, reason_code, resource_ids, relationship_ids,
+                  attack_path_ids, evidence_ids)
+                 VALUES ('finding-legacy', 0, 'PRODUCTION_SINK', '[]', '[]',
+                         '[\"ap-legacy\"]', ?1)",
+                [&evidence_ids_json],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO finding_remediations
+                 (finding_id, position, rule_id, title, description, security_effect,
+                  cut_phase, target_resource_ids, target_relationship_ids)
+                 VALUES ('finding-legacy', 0, 'ENFORCE_BASH_APPROVAL_OR_DENY',
+                         'Require enforced approval for Bash',
+                         'Ensure the Actor cannot self-approve execution of the shell capability.',
+                         'Interrupt autonomous execution before authority becomes reachable.',
+                         'AUTHORITY', '[\"actor\",\"bash\"]', '[\"execute\"]')",
+                [],
+            )
+            .unwrap();
+        }
+
+        // --- Migrate v5 → v6. ---
+        let mut db = Database::open(&db_path).unwrap();
+        db.migrate().unwrap();
+        assert_eq!(db.schema_version().unwrap(), 6);
+        let conn = db.connection();
+
+        // Integrity objects exist.
+        for object in [
+            "idx_findings_scan_family",
+            "findings_family_nonempty_insert",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+                    [object],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "missing {object}");
+        }
+        // FKs and the database itself are healthy after the migration.
+        let mut fk = conn.prepare("PRAGMA foreign_key_check").unwrap();
+        assert!(
+            fk.query([]).unwrap().next().unwrap().is_none(),
+            "foreign_key_check must be empty"
+        );
+        drop(fk);
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+
+        // Every seeded row survived with identical key values.
+        let count = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        for (table, expected) in [
+            ("scans", 1),
+            ("resources", 3),
+            ("scan_analyses", 1),
+            ("attack_paths", 1),
+            ("evidence", 1),
+            ("findings", 1),
+            ("finding_paths", 1),
+            ("finding_evidence", 1),
+            ("finding_reasons", 1),
+            ("finding_remediations", 1),
+        ] {
+            assert_eq!(count(table), expected, "row count mismatch in {table}");
+        }
+        let path_link: String = conn
+            .query_row(
+                "SELECT attack_path_id FROM finding_paths
+                 WHERE finding_id = 'finding-legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(path_link, "ap-legacy");
+        let evidence_link: String = conn
+            .query_row(
+                "SELECT evidence_id FROM finding_evidence WHERE finding_id = 'finding-legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!evidence_link.is_empty());
+        let reason_links: String = conn
+            .query_row(
+                "SELECT attack_path_ids FROM finding_reasons
+                 WHERE finding_id = 'finding-legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason_links, "[\"ap-legacy\"]");
+        let (rule_id, target_resources, target_relationships): (String, String, String) = conn
+            .query_row(
+                "SELECT rule_id, target_resource_ids, target_relationship_ids
+                 FROM finding_remediations WHERE finding_id = 'finding-legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(rule_id, "ENFORCE_BASH_APPROVAL_OR_DENY");
+        assert_eq!(target_resources, "[\"actor\",\"bash\"]");
+        assert_eq!(target_relationships, "[\"execute\"]");
+
+        // Legacy-read semantics: the migrated row keeps an empty family (no
+        // backfill), validates, and lists through the repository.
+        {
+            let repo = FindingRepo::new(conn);
+            let loaded = repo.get("finding-legacy").unwrap().unwrap();
+            assert_eq!(loaded.fingerprint, "sha256:legacy");
+            assert_eq!(loaded.severity, "CRITICAL");
+            assert_eq!(loaded.confidence, "HIGH");
+            assert_eq!(loaded.family_fingerprint, "");
+            loaded.validate().unwrap();
+            let rows = repo.list_for_scan(&loaded.scan_id).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].id, "finding-legacy");
+        }
+
+        // Idempotency: a second full migrate is a no-op with data intact.
+        db.migrate().unwrap();
+        assert_eq!(db.schema_version().unwrap(), 6);
+        let conn = db.connection();
+        let count = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count("findings"), 1);
+        assert_eq!(count("finding_paths"), 1);
+        assert_eq!(count("finding_remediations"), 1);
+        let repo = FindingRepo::new(conn);
+        assert_eq!(
+            repo.get("finding-legacy")
+                .unwrap()
+                .unwrap()
+                .family_fingerprint,
+            ""
+        );
+        drop(workspace);
+
+        // --- Rollback safety: a conflicting pre-existing object makes migration
+        // 6 fail closed with user_version untouched; removing it re-migrates. ---
+        let dir2 = tempfile::tempdir().unwrap();
+        let db_path2 = dir2.path().join(".pico").join("pico.db");
+        std::fs::create_dir_all(db_path2.parent().unwrap()).unwrap();
+        {
+            let mut conn = Connection::open(&db_path2).unwrap();
+            conn.pragma_update(None, "foreign_keys", true).unwrap();
+            migrate_to_version(&mut conn, 5).unwrap();
+            // Squat on a migration-6 object name; CREATE ... IF NOT EXISTS must
+            // not silently skip past a clashing table.
+            conn.execute("CREATE TABLE idx_findings_scan_family (id TEXT)", [])
+                .unwrap();
+        }
+        let mut db2 = Database::open(&db_path2).unwrap();
+        let error = db2.migrate().unwrap_err();
+        assert!(
+            error.to_string().contains("idx_findings_scan_family"),
+            "expected a clash error, got {error}"
+        );
+        assert_eq!(db2.schema_version().unwrap(), 5);
+        db2.connection()
+            .execute("DROP TABLE idx_findings_scan_family", [])
+            .unwrap();
+        db2.migrate().unwrap();
+        assert_eq!(db2.schema_version().unwrap(), 6);
     }
 }

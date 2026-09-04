@@ -540,6 +540,7 @@ fn built(builder: FindingBuilder) -> Finding {
         id: builder.id.to_string(),
         scan_id: "scan_navigation".to_string(),
         fingerprint: builder.fingerprint.to_string(),
+        family_fingerprint: format!("family:{}", builder.fingerprint),
         finding_version: 1,
         finding_class: FindingClass::UntrustedToProduction,
         status: FindingStatus::Open,

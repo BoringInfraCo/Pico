@@ -248,6 +248,7 @@ mod tests {
                 id: (*id).to_string(),
                 scan_id: "scan_nav".to_string(),
                 fingerprint: format!("sha256:fp{index}"),
+                family_fingerprint: format!("sha256:family{index}"),
                 finding_version: 1,
                 finding_class: FindingClass::UntrustedToProduction,
                 status: FindingStatus::Open,

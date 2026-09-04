@@ -72,6 +72,7 @@ pub struct FindingRecord {
     pub id: String,
     pub scan_id: String,
     pub fingerprint: String,
+    pub family_fingerprint: String,
     pub finding_version: String,
     pub finding_class: String,
     pub title: String,
@@ -248,16 +249,20 @@ impl<'a> FindingRepo<'a> {
 
     pub fn insert(&self, finding: &FindingRecord) -> Result<(), PicoError> {
         finding.validate()?;
+        if finding.family_fingerprint.trim().is_empty() {
+            return Err(PicoError::database("family_fingerprint is required"));
+        }
         self.conn
             .execute(
                 "INSERT INTO findings
-                 (id, scan_id, fingerprint, finding_version, finding_class, title,
+                 (id, scan_id, fingerprint, family_fingerprint, finding_version, finding_class, title,
                   summary, severity, confidence, status, metadata, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     finding.id,
                     finding.scan_id,
                     finding.fingerprint,
+                    finding.family_fingerprint,
                     finding.finding_version,
                     finding.finding_class,
                     finding.title,
@@ -276,7 +281,7 @@ impl<'a> FindingRepo<'a> {
     pub fn get(&self, id: &str) -> Result<Option<FindingRecord>, PicoError> {
         self.conn
             .query_row(
-                "SELECT id, scan_id, fingerprint, finding_version, finding_class,
+                "SELECT id, scan_id, fingerprint, family_fingerprint, finding_version, finding_class,
                         title, summary, severity, confidence, status, metadata, created_at
                  FROM findings WHERE id = ?1",
                 [id],
@@ -290,7 +295,7 @@ impl<'a> FindingRepo<'a> {
         let mut statement = self
             .conn
             .prepare(
-                "SELECT id, scan_id, fingerprint, finding_version, finding_class,
+                "SELECT id, scan_id, fingerprint, family_fingerprint, finding_version, finding_class,
                         title, summary, severity, confidence, status, metadata, created_at
                  FROM findings WHERE scan_id = ?1 ORDER BY fingerprint, id",
             )
@@ -470,15 +475,16 @@ fn row_to_finding(row: &Row<'_>) -> rusqlite::Result<FindingRecord> {
         id: row.get(0)?,
         scan_id: row.get(1)?,
         fingerprint: row.get(2)?,
-        finding_version: row.get(3)?,
-        finding_class: row.get(4)?,
-        title: row.get(5)?,
-        summary: row.get(6)?,
-        severity: row.get(7)?,
-        confidence: row.get(8)?,
-        status: row.get(9)?,
-        metadata: parse_json(row.get(10)?),
-        created_at: codec::text_to_ts(&row.get::<_, String>(11)?)
+        family_fingerprint: row.get(3)?,
+        finding_version: row.get(4)?,
+        finding_class: row.get(5)?,
+        title: row.get(6)?,
+        summary: row.get(7)?,
+        severity: row.get(8)?,
+        confidence: row.get(9)?,
+        status: row.get(10)?,
+        metadata: parse_json(row.get(11)?),
+        created_at: codec::text_to_ts(&row.get::<_, String>(12)?)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
     })
 }

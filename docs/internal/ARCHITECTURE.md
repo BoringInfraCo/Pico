@@ -3164,6 +3164,11 @@ findings (
     severity TEXT NOT NULL,
     confidence TEXT NOT NULL,
 
+    -- S028 (schema v6): family identity omits severity/confidence so
+    -- rating-only changes stay one family. Legacy migrated rows backfill
+    -- to '' (effective family = full fingerprint, exact-match only).
+    family_fingerprint TEXT NOT NULL DEFAULT '',
+
     status TEXT NOT NULL,
 
     metadata_json TEXT,
@@ -3173,6 +3178,18 @@ findings (
     FOREIGN KEY(scan_id)
         REFERENCES scans(id)
 )
+
+CREATE UNIQUE INDEX idx_findings_scan_family
+    ON findings(scan_id, family_fingerprint)
+    WHERE family_fingerprint <> '';
+
+CREATE TRIGGER findings_family_nonempty_insert
+    BEFORE INSERT ON findings
+    FOR EACH ROW
+    WHEN NEW.family_fingerprint = ''
+BEGIN
+    SELECT RAISE(ABORT, 'family_fingerprint must be non-empty');
+END;
 ```
 
 ---
@@ -7361,7 +7378,7 @@ still exactly one active finding under the golden fixture, with
 §2), read-only allowlisted probes, secret transience, and provider-aware
 adapters.
 
-## 28.5 Started v0.4 — finding-set memory, history, graph memory (S024–S026)
+## 28.5 Started v0.4 — finding-set memory, history, graph memory, lifecycle (S024–S028)
 
 v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
 
@@ -7378,11 +7395,20 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   line from the smallest path-local graph change (Bash effective state beats
   MCP absence; worker identity churn is one paired sink story). PARTIAL does
   not invent a cause.
-- No new schema, no MCP diff/history tool, no retention.
+- Finding lifecycle (S028, schema v6): family-linked Findings whose full
+  fingerprint changed are classified `weakened` / `strengthened` /
+  `uncertain` from severity/confidence direction (distinct sinks or
+  boundaries stay appeared/disappeared; row status stays OPEN). Schema v6
+  adds `findings.family_fingerprint` with the partial unique index
+  `idx_findings_scan_family` and the non-empty insert trigger
+  `findings_family_nonempty_insert`; legacy rows backfill to `''`.
+- No MCP diff/history tool, no retention.
 - Authoritative slice scope:
   `docs/internal/sprints/SPRINT-024-support-note.md`,
   `docs/internal/sprints/SPRINT-025.md`,
-  `docs/internal/sprints/SPRINT-026.md`.
+  `docs/internal/sprints/SPRINT-026.md`,
+  `docs/internal/sprints/SPRINT-027.md`,
+  `docs/internal/sprints/SPRINT-028.md`.
 
 ---
 

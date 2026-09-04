@@ -650,6 +650,13 @@ fn materialize_finding(
         first.confidence,
         &remediation_rule_ids,
     );
+    let family_fingerprint = finding_family_fingerprint(
+        &sources,
+        &actors,
+        &sinks,
+        &path_fingerprints,
+        &remediation_rule_ids,
+    );
     Ok(Finding {
         id: format!(
             "finding_{}:{}",
@@ -658,6 +665,7 @@ fn materialize_finding(
         ),
         scan_id: graph.scan_id.clone(),
         fingerprint,
+        family_fingerprint,
         finding_version: FINDING_VERSION,
         finding_class: FindingClass::UntrustedToProduction,
         status: FindingStatus::Open,
@@ -798,13 +806,13 @@ fn canonical_node(graph: &SecurityGraph, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-fn finding_fingerprint(
+fn fingerprint_input(
     sources: &[String],
     actors: &[String],
     sinks: &[String],
     paths: &[String],
-    severity: Severity,
-    confidence: Confidence,
+    severity: Option<Severity>,
+    confidence: Option<Confidence>,
     remediation_rules: &[String],
 ) -> String {
     let mut input = String::new();
@@ -826,11 +834,48 @@ fn finding_fingerprint(
     for value in paths {
         field(&mut input, "path", value);
     }
-    field(&mut input, "severity", severity.as_str());
-    field(&mut input, "confidence", confidence.as_str());
+    if let Some(severity) = severity {
+        field(&mut input, "severity", severity.as_str());
+    }
+    if let Some(confidence) = confidence {
+        field(&mut input, "confidence", confidence.as_str());
+    }
     for value in remediation_rules {
         field(&mut input, "remediation", value);
     }
+    input
+}
+
+fn finding_fingerprint(
+    sources: &[String],
+    actors: &[String],
+    sinks: &[String],
+    paths: &[String],
+    severity: Severity,
+    confidence: Confidence,
+    remediation_rules: &[String],
+) -> String {
+    let input = fingerprint_input(
+        sources,
+        actors,
+        sinks,
+        paths,
+        Some(severity),
+        Some(confidence),
+        remediation_rules,
+    );
+    let digest = Sha256::digest(input.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
+fn finding_family_fingerprint(
+    sources: &[String],
+    actors: &[String],
+    sinks: &[String],
+    paths: &[String],
+    remediation_rules: &[String],
+) -> String {
+    let input = fingerprint_input(sources, actors, sinks, paths, None, None, remediation_rules);
     let digest = Sha256::digest(input.as_bytes());
     format!("sha256:{digest:x}")
 }
@@ -844,19 +889,50 @@ fn field(output: &mut String, label: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::BoundaryKind;
     use crate::analysis::{
-        AnalysisLimits, AnalysisResult, AnalysisStatus, AttackPath, AuthorityResolution,
-        BoundaryDecision, BoundaryEvaluation, BoundaryKind, CandidateDisposition, CapabilityClass,
-        InfluenceStrength, PathEdgeRef, PathPhase, SinkImpact, SourceTrust, TraversalDirection,
-        ANALYSIS_VERSION,
+        BoundaryEvaluation, PathEdgeRef, PathPhase, TraversalDirection, ANALYSIS_VERSION,
     };
-    use crate::domain::{EvidenceClass, RelationshipState, ScanStatus, Sensitivity};
-    use crate::findings::confidence::freshness_confidence;
+    use crate::application::{DiffService, FindingDiff, FindingDiffResult, FindingRatingDelta};
+    use crate::cli::render::render_finding_diff;
+    use crate::domain::{RelationshipState, Sensitivity};
     use crate::graph::{EdgeUsability, GraphEdge, GraphEvidenceIndex, GraphNode, SecurityRole};
+    use crate::persistence::{Database, FindingRecord, FindingRepo, ScanRepo};
+    use crate::shared::PICO_VERSION;
     use serde_json::json;
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::tempdir;
 
-    fn fixture() -> (SecurityGraph, AnalysisResult) {
-        let scan_id = "scan-finding".to_string();
+    /// Test-support fixture (Sprint 028 engine test). Builds the golden
+    /// six-node graph (source/tool/actor/bash/credential/sink with
+    /// call/retrieve/execute/access/mutate edges carrying per-edge Evidence
+    /// plus production evidence) for `scan_id`, and the single-candidate-path
+    /// COMPLETE analysis whose source trust is `source_trust`. All Evidence and
+    /// AttackPath identities carry `scan_id`, so [`generate`] accepts the
+    /// fixture output unchanged.
+    fn severity_change_fixture(
+        scan_id: &str,
+        source_trust: SourceTrust,
+    ) -> (SecurityGraph, AnalysisResult) {
+        let graph = fixture_graph(scan_id);
+        let analysis = analysis_of(
+            &graph.scan_id,
+            vec![candidate_path(
+                &graph,
+                "p-candidate",
+                source_trust,
+                &["call", "retrieve"],
+                &["execute", "access", "mutate"],
+                Vec::new(),
+            )],
+        );
+        (graph, analysis)
+    }
+
+    /// The golden graph behind [`severity_change_fixture`], built for `scan_id`.
+    fn fixture_graph(scan_id: &str) -> SecurityGraph {
+        let scan_id = scan_id.to_string();
         let ids = ["source", "tool", "actor", "bash", "credential", "sink"];
         let mut nodes = Vec::new();
         for id in ids {
@@ -963,17 +1039,91 @@ mod tests {
         evidence
             .by_evidence_id
             .insert(production.id.clone(), production);
-        let graph = SecurityGraph {
-            scan_id: scan_id.clone(),
+        SecurityGraph {
+            scan_id,
             snapshot_version: 1,
             nodes,
             edges,
             outgoing_index: outgoing,
             incoming_index: incoming,
             evidence_index: evidence,
-        };
-        let analysis = crate::analysis::analyze(&graph, &AnalysisLimits::default());
-        (graph, analysis)
+        }
+    }
+
+    /// Construct an eligible candidate AttackPath reaching the production sink.
+    /// `influence`/`authority` are relationship ids present in `graph`.
+    fn candidate_path(
+        graph: &SecurityGraph,
+        id: &str,
+        source_trust: SourceTrust,
+        influence: &[&str],
+        authority: &[&str],
+        boundaries: Vec<BoundaryEvaluation>,
+    ) -> AttackPath {
+        let influence_edges = influence
+            .iter()
+            .enumerate()
+            .map(|(i, rid)| PathEdgeRef {
+                relationship_id: (*rid).into(),
+                phase: PathPhase::Influence,
+                traversal: TraversalDirection::Forward,
+                position: i,
+            })
+            .collect::<Vec<_>>();
+        let authority_edges = authority
+            .iter()
+            .enumerate()
+            .map(|(i, rid)| PathEdgeRef {
+                relationship_id: (*rid).into(),
+                phase: PathPhase::Authority,
+                traversal: TraversalDirection::Forward,
+                position: i,
+            })
+            .collect::<Vec<_>>();
+        let mut evidence_ids = vec!["ev-production".to_string()];
+        for rid in influence.iter().chain(authority.iter()) {
+            evidence_ids.push(format!("ev-{rid}"));
+        }
+        AttackPath {
+            id: id.into(),
+            scan_id: graph.scan_id.clone(),
+            fingerprint: String::new(),
+            analysis_version: ANALYSIS_VERSION,
+            source_resource_id: "source".into(),
+            actor_resource_id: "actor".into(),
+            sink_resource_id: "sink".into(),
+            influence_edges,
+            authority_edges,
+            boundary_evaluations: boundaries,
+            source_trust,
+            influence_strength: InfluenceStrength::AgentRetrievable,
+            capability: CapabilityClass::Execute,
+            authority_resolution: AuthorityResolution::Exact,
+            sink_impact: SinkImpact::Production,
+            evidence_ids,
+            disposition: CandidateDisposition::Active,
+        }
+        .with_fingerprint(graph)
+    }
+
+    /// A COMPLETE analysis result carrying exactly `paths` as its attack paths.
+    fn analysis_of(scan_id: &str, paths: Vec<AttackPath>) -> AnalysisResult {
+        AnalysisResult {
+            scan_id: scan_id.into(),
+            analysis_version: ANALYSIS_VERSION,
+            status: AnalysisStatus::Complete,
+            candidate_disposition: CandidateDisposition::Active,
+            influence_paths: Vec::new(),
+            authority_paths: Vec::new(),
+            boundary_evaluations: Vec::new(),
+            attack_paths: paths,
+            unresolved_candidate_count: 0,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn fixture() -> (SecurityGraph, AnalysisResult) {
+        severity_change_fixture("scan-finding", SourceTrust::PublicExternal)
     }
 
     #[test]
@@ -1040,6 +1190,170 @@ mod tests {
             second.findings[0].fingerprint
         );
         assert_ne!(first.findings[0].id, second.findings[0].id);
+        assert_eq!(
+            first.findings[0].family_fingerprint,
+            second.findings[0].family_fingerprint
+        );
+    }
+
+    #[test]
+    fn family_fingerprint_ignores_severity_and_confidence() {
+        let sources = vec!["source:github".into()];
+        let actors = vec!["agent:opencode".into()];
+        let sinks = vec!["cloudflare:worker:a".into()];
+        let paths = vec!["sha256:path".into()];
+        let rules = vec!["ENFORCE_BASH_APPROVAL_OR_DENY".into()];
+        let family = finding_family_fingerprint(&sources, &actors, &sinks, &paths, &rules);
+        let critical = finding_fingerprint(
+            &sources,
+            &actors,
+            &sinks,
+            &paths,
+            Severity::Critical,
+            Confidence::High,
+            &rules,
+        );
+        let high = finding_fingerprint(
+            &sources,
+            &actors,
+            &sinks,
+            &paths,
+            Severity::High,
+            Confidence::Medium,
+            &rules,
+        );
+        assert_ne!(critical, high);
+        // Family identity is stable across severity/confidence-only changes:
+        // both full fingerprints share the same family.
+        assert_eq!(
+            family,
+            finding_family_fingerprint(&sources, &actors, &sinks, &paths, &rules)
+        );
+        // Canonical encoder: family input omits severity/confidence while the
+        // full input carries them.
+        let family_input = fingerprint_input(&sources, &actors, &sinks, &paths, None, None, &rules);
+        let full_input = fingerprint_input(
+            &sources,
+            &actors,
+            &sinks,
+            &paths,
+            Some(Severity::Critical),
+            Some(Confidence::High),
+            &rules,
+        );
+        assert!(!family_input.contains("severity"));
+        assert!(!family_input.contains("confidence"));
+        assert!(full_input.contains("severity"));
+        assert!(full_input.contains("confidence"));
+        // Version is part of the family identity.
+        assert!(
+            family_input.contains("7:version:1:1;"),
+            "family input must carry the finding version prefix"
+        );
+        assert_ne!(
+            family,
+            finding_family_fingerprint(
+                &sources,
+                &actors,
+                &["cloudflare:worker:b".into()],
+                &paths,
+                &rules
+            )
+        );
+        assert_ne!(
+            family,
+            finding_family_fingerprint(&sources, &actors, &sinks, &["sha256:other".into()], &rules)
+        );
+        assert_ne!(
+            family,
+            finding_family_fingerprint(
+                &sources,
+                &actors,
+                &sinks,
+                &paths,
+                &["RESTRICT_EXTERNAL_RETRIEVAL".into()]
+            ),
+            "family must flip when remediation rules change"
+        );
+        assert_ne!(
+            family,
+            finding_family_fingerprint(&["source:other".into()], &actors, &sinks, &paths, &rules),
+            "family must flip when sources change"
+        );
+    }
+
+    #[test]
+    fn fingerprint_input_is_canonical_for_full_and_family() {
+        let sources = vec!["source:github".into()];
+        let actors = vec!["agent:opencode".into()];
+        let sinks = vec!["cloudflare:worker:a".into()];
+        let paths = vec!["sha256:path".into()];
+        let rules = vec!["ENFORCE_BASH_APPROVAL_OR_DENY".into()];
+        let full_input = fingerprint_input(
+            &sources,
+            &actors,
+            &sinks,
+            &paths,
+            Some(Severity::Critical),
+            Some(Confidence::High),
+            &rules,
+        );
+        let digest = Sha256::digest(full_input.as_bytes());
+        assert_eq!(
+            finding_fingerprint(
+                &sources,
+                &actors,
+                &sinks,
+                &paths,
+                Severity::Critical,
+                Confidence::High,
+                &rules,
+            ),
+            format!("sha256:{digest:x}")
+        );
+        let family_input = fingerprint_input(&sources, &actors, &sinks, &paths, None, None, &rules);
+        let digest = Sha256::digest(family_input.as_bytes());
+        assert_eq!(
+            finding_family_fingerprint(&sources, &actors, &sinks, &paths, &rules),
+            format!("sha256:{digest:x}")
+        );
+        // Severity/confidence appear after paths and before remediations.
+        let path_pos = full_input.find("4:path").expect("path field present");
+        let sev_pos = full_input.find("severity").expect("severity present");
+        let conf_pos = full_input.find("confidence").expect("confidence present");
+        let rem_pos = full_input.find("remediation").expect("remediation present");
+        assert!(path_pos < sev_pos && sev_pos < conf_pos && conf_pos < rem_pos);
+        assert!(family_input.find("severity").is_none());
+        assert!(family_input.find("confidence").is_none());
+    }
+
+    #[test]
+    fn family_fingerprint_flips_when_remediation_rules_change() {
+        let sources = vec!["source:github".into()];
+        let actors = vec!["agent:opencode".into()];
+        let sinks = vec!["cloudflare:worker:a".into()];
+        let paths = vec!["sha256:path".into()];
+        let base = finding_family_fingerprint(
+            &sources,
+            &actors,
+            &sinks,
+            &paths,
+            &["ENFORCE_BASH_APPROVAL_OR_DENY".into()],
+        );
+        assert_ne!(
+            base,
+            finding_family_fingerprint(&sources, &actors, &sinks, &paths, &[])
+        );
+        assert_ne!(
+            base,
+            finding_family_fingerprint(
+                &sources,
+                &actors,
+                &sinks,
+                &paths,
+                &["SCOPE_PRODUCTION_MUTATION_AUTHORITY".into()]
+            )
+        );
     }
 
     #[test]
@@ -1137,77 +1451,6 @@ mod tests {
             graph.edges.push(edge);
         }
         graph
-    }
-
-    /// Construct an eligible candidate AttackPath reaching the production sink.
-    /// `influence`/`authority` are relationship ids present in `graph`.
-    fn candidate_path(
-        graph: &SecurityGraph,
-        id: &str,
-        source_trust: SourceTrust,
-        influence: &[&str],
-        authority: &[&str],
-        boundaries: Vec<BoundaryEvaluation>,
-    ) -> AttackPath {
-        let influence_edges = influence
-            .iter()
-            .enumerate()
-            .map(|(i, rid)| PathEdgeRef {
-                relationship_id: (*rid).into(),
-                phase: PathPhase::Influence,
-                traversal: TraversalDirection::Forward,
-                position: i,
-            })
-            .collect::<Vec<_>>();
-        let authority_edges = authority
-            .iter()
-            .enumerate()
-            .map(|(i, rid)| PathEdgeRef {
-                relationship_id: (*rid).into(),
-                phase: PathPhase::Authority,
-                traversal: TraversalDirection::Forward,
-                position: i,
-            })
-            .collect::<Vec<_>>();
-        let mut evidence_ids = vec!["ev-production".to_string()];
-        for rid in influence.iter().chain(authority.iter()) {
-            evidence_ids.push(format!("ev-{rid}"));
-        }
-        AttackPath {
-            id: id.into(),
-            scan_id: graph.scan_id.clone(),
-            fingerprint: String::new(),
-            analysis_version: ANALYSIS_VERSION,
-            source_resource_id: "source".into(),
-            actor_resource_id: "actor".into(),
-            sink_resource_id: "sink".into(),
-            influence_edges,
-            authority_edges,
-            boundary_evaluations: boundaries,
-            source_trust,
-            influence_strength: InfluenceStrength::AgentRetrievable,
-            capability: CapabilityClass::Execute,
-            authority_resolution: AuthorityResolution::Exact,
-            sink_impact: SinkImpact::Production,
-            evidence_ids,
-            disposition: CandidateDisposition::Active,
-        }
-        .with_fingerprint(graph)
-    }
-
-    fn analysis_of(scan_id: &str, paths: Vec<AttackPath>) -> AnalysisResult {
-        AnalysisResult {
-            scan_id: scan_id.into(),
-            analysis_version: ANALYSIS_VERSION,
-            status: AnalysisStatus::Complete,
-            candidate_disposition: CandidateDisposition::Active,
-            influence_paths: Vec::new(),
-            authority_paths: Vec::new(),
-            boundary_evaluations: Vec::new(),
-            attack_paths: paths,
-            unresolved_candidate_count: 0,
-            diagnostics: Vec::new(),
-        }
     }
 
     /// R1: identical scans must yield byte-identical finding fingerprints (no
@@ -1365,22 +1608,28 @@ mod tests {
         assert_eq!(first.findings[0].severity, second.findings[0].severity);
         assert_eq!(first.findings[0].confidence, second.findings[0].confidence);
 
-        // Change only the severity input (AuthenticatedExternal -> High) and
-        // confirm the confidence axis is untouched.
+        // Change only the severity input (PUBLIC_EXTERNAL →
+        // AUTHENTICATED_EXTERNAL on the analyzed path; source trust is
+        // deliberately excluded from the path fingerprint) and confirm the
+        // confidence axis is untouched.
         let mut auth_analysis = analysis.clone();
-        auth_analysis.attack_paths[0] = candidate_path(
-            &graph,
-            "p-auth",
-            SourceTrust::AuthenticatedExternal,
-            &["call", "retrieve"],
-            &["execute", "access", "mutate"],
-            Vec::new(),
-        );
+        auth_analysis.attack_paths[0].source_trust = SourceTrust::AuthenticatedExternal;
         let auth = generate(&graph, &auth_analysis, &FindingLimits::default());
         assert_eq!(auth.findings[0].severity, Severity::High);
         assert_eq!(
             auth.findings[0].confidence, first.findings[0].confidence,
             "confidence axis is independent of the severity driver"
+        );
+        // Lifecycle continuity: the severity-driver change flips the full
+        // fingerprint while the family fingerprint stays identical — the
+        // engine itself pairs CRITICAL → HIGH findings into one family.
+        assert_ne!(
+            first.findings[0].fingerprint, auth.findings[0].fingerprint,
+            "a severity change must flip the full fingerprint"
+        );
+        assert_eq!(
+            first.findings[0].family_fingerprint, auth.findings[0].family_fingerprint,
+            "family identity must survive a severity change"
         );
     }
 
@@ -1649,5 +1898,182 @@ mod tests {
         let second =
             eligibility_diagnostics(&graph, &analysis, ScanStatus::Complete, &generated.findings);
         assert_eq!(first, second);
+    }
+
+    // --- Persistence / diff seam (Sprint 028 lifecycle continuity) ---
+
+    fn setup_db() -> (tempfile::TempDir, Database) {
+        let workspace = tempdir().unwrap();
+        let dir = workspace.path().join(".pico");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut db = Database::open(&dir.join("pico.db")).unwrap();
+        db.migrate().unwrap();
+        (workspace, db)
+    }
+
+    fn insert_complete_scan(db: &Database) -> String {
+        let scan = crate::domain::Scan::start(PICO_VERSION)
+            .unwrap()
+            .complete()
+            .unwrap();
+        ScanRepo::new(db.connection()).insert(&scan).unwrap();
+        scan.id
+    }
+
+    fn compare_ready(workspace: &std::path::Path, from_id: &str, to_id: &str) -> FindingDiff {
+        match DiffService::compare(workspace, from_id, to_id).unwrap() {
+            FindingDiffResult::Ready(value) => value,
+            other => panic!("expected Ready diff, got {other:?}"),
+        }
+    }
+
+    /// Rendered text of one lifecycle bucket heading up to the next heading.
+    fn lifecycle_section<'a>(rendered: &'a str, heading: &str) -> &'a str {
+        let marker = format!("\n{heading}\n");
+        let start = rendered
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{heading} section missing in:\n{rendered}"));
+        let rest = &rendered[start..];
+        let end = [
+            "\nAppeared\n",
+            "\nDisappeared\n",
+            "\nWeakened\n",
+            "\nStrengthened\n",
+            "\nUncertain\n",
+            "\nResources\n",
+        ]
+        .iter()
+        .filter(|next| **next != marker)
+        .filter_map(|next| rest.find(*next))
+        .min()
+        .unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    /// P1-5: engine-generated lifecycle continuity through the persisted
+    /// compare path, with no fabricated identities. Both sides of the pair
+    /// come from the findings engine itself: `severity_change_fixture` builds
+    /// the golden graph for each scan id, and the source-trust change
+    /// (PUBLIC_EXTERNAL → AUTHENTICATED_EXTERNAL) flips the full fingerprint
+    /// while the engine keeps the family fingerprint identical. The engine
+    /// Findings are persisted via FindingRepo and diffed end-to-end:
+    /// weakened=1 with a severity delta, conserving every row.
+    #[test]
+    fn engine_generated_severity_change_is_weakened() {
+        let (graph_a, analysis_a) =
+            severity_change_fixture("scanA-engine-severity", SourceTrust::PublicExternal);
+        let (graph_b, analysis_b) =
+            severity_change_fixture("scanB-engine-severity", SourceTrust::AuthenticatedExternal);
+        let result_a = generate(&graph_a, &analysis_a, &FindingLimits::default());
+        let result_b = generate(&graph_b, &analysis_b, &FindingLimits::default());
+        assert_eq!(result_a.findings.len(), 1);
+        assert_eq!(result_b.findings.len(), 1);
+        let finding_a = &result_a.findings[0];
+        let finding_b = &result_b.findings[0];
+        assert_eq!(finding_a.severity, Severity::Critical);
+        assert_eq!(finding_a.confidence, Confidence::High);
+        assert_eq!(finding_b.severity, Severity::High);
+        assert_eq!(finding_b.confidence, Confidence::High);
+        assert_ne!(
+            finding_a.fingerprint, finding_b.fingerprint,
+            "the severity change must flip the full fingerprint"
+        );
+        assert_eq!(
+            finding_a.family_fingerprint, finding_b.family_fingerprint,
+            "the severity change must keep the engine family fingerprint"
+        );
+        for fingerprint in [&finding_a.fingerprint, &finding_b.fingerprint] {
+            assert!(
+                fingerprint.starts_with("sha256:"),
+                "engine fingerprints must be sha256, got {fingerprint}"
+            );
+            assert_ne!(*fingerprint, "sha256:engine-critical");
+            assert_ne!(*fingerprint, "sha256:engine-high");
+        }
+        assert_ne!(
+            finding_a.family_fingerprint, "sha256:family-engine",
+            "family fingerprint must come from the engine, not the old fixture literal"
+        );
+
+        let (workspace, db) = setup_db();
+        let from_id = insert_complete_scan(&db);
+        // Distinct started_at so the from scan is at-or-before the to scan for
+        // the temporal guard.
+        thread::sleep(Duration::from_millis(2));
+        let to_id = insert_complete_scan(&db);
+        let repo = FindingRepo::new(db.connection());
+        // The engine Finding carries the fixture's scan_id; map it onto the
+        // persisted scan row so the findings FK holds. Identities
+        // (fingerprint, family_fingerprint) come from the engine directly.
+        let record = |scan_id: &str, finding: &Finding| FindingRecord {
+            id: finding.id.clone(),
+            scan_id: scan_id.to_string(),
+            fingerprint: finding.fingerprint.clone(),
+            family_fingerprint: finding.family_fingerprint.clone(),
+            finding_version: finding.finding_version.to_string(),
+            finding_class: finding.finding_class.as_str().to_string(),
+            title: finding.title.clone(),
+            summary: finding.summary.clone(),
+            severity: finding.severity.as_str().to_string(),
+            confidence: finding.confidence.as_str().to_string(),
+            status: finding.status.as_str().to_string(),
+            metadata: None,
+            created_at: finding.created_at,
+        };
+        repo.insert(&record(&from_id, finding_a)).unwrap();
+        repo.insert(&record(&to_id, finding_b)).unwrap();
+
+        let comparison = compare_ready(workspace.path(), &from_id, &to_id);
+        assert_eq!(comparison.unchanged.len(), 0);
+        assert_eq!(comparison.appeared.len(), 0);
+        assert_eq!(comparison.disappeared.len(), 0);
+        assert_eq!(comparison.strengthened.len(), 0);
+        assert_eq!(comparison.uncertain.len(), 0);
+        assert_eq!(comparison.weakened.len(), 1);
+        let change = &comparison.weakened[0];
+        // CRUX: the diff seam carries the actual engine-generated identities.
+        assert_eq!(change.from.fingerprint, finding_a.fingerprint);
+        assert_eq!(change.to.fingerprint, finding_b.fingerprint);
+        assert_eq!(change.from.family_fingerprint, finding_a.family_fingerprint);
+        assert_eq!(change.to.family_fingerprint, finding_b.family_fingerprint);
+        assert_eq!(
+            change.deltas,
+            vec![FindingRatingDelta {
+                field: "severity".to_string(),
+                from_value: "CRITICAL".to_string(),
+                to_value: "HIGH".to_string(),
+            }]
+        );
+
+        // Conservation: from = unchanged + disappeared + weakened + strengthened
+        // + uncertain (and likewise for the to side).
+        let from_count = repo.count_for_scan(&from_id).unwrap() as usize;
+        let to_count = repo.count_for_scan(&to_id).unwrap() as usize;
+        let lifecycle =
+            comparison.weakened.len() + comparison.strengthened.len() + comparison.uncertain.len();
+        assert_eq!(
+            from_count,
+            comparison.unchanged.len()
+                + comparison.disappeared.len()
+                + comparison.weakened.len()
+                + comparison.strengthened.len()
+                + comparison.uncertain.len()
+        );
+        assert_eq!(from_count, lifecycle);
+        assert_eq!(
+            to_count,
+            comparison.unchanged.len()
+                + comparison.appeared.len()
+                + comparison.weakened.len()
+                + comparison.strengthened.len()
+                + comparison.uncertain.len()
+        );
+        assert_eq!(to_count, lifecycle);
+
+        let rendered = render_finding_diff(&FindingDiffResult::Ready(comparison));
+        let section = lifecycle_section(&rendered, "Weakened");
+        assert!(section.contains("Cause: Severity CRITICAL → HIGH"));
+        assert!(section.contains(&finding_a.fingerprint));
+        assert!(section.contains(&finding_b.fingerprint));
     }
 }
