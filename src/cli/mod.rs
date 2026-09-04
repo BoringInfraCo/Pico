@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::application::{
-    finding_navigation_ids, DiffService, FindingQueryService, InitService, ScanService,
+    finding_navigation_ids, DiffService, FindingQueryService, HistoryService, InitService,
+    ScanService,
 };
 use crate::shared::{PicoError, PICO_VERSION};
 
@@ -34,12 +35,19 @@ enum Command {
     Init,
     /// Run a scan of the current workspace.
     Scan,
+    /// List all scans with status and finding counts.
+    History,
     /// List Findings from the newest COMPLETE scan.
     Findings,
     /// Show one Finding by its exact ID.
     Finding { id: String },
-    /// Compare Findings across the last two COMPLETE scans.
-    Diff,
+    /// Compare Findings across scans. No args: last two COMPLETE. Two args: explicit pair.
+    Diff {
+        /// Older scan id (COMPLETE).
+        from: Option<String>,
+        /// Newer scan id (COMPLETE).
+        to: Option<String>,
+    },
     /// Serve Pico findings to coding agents over MCP (stdio).
     Mcp,
 }
@@ -49,9 +57,10 @@ pub fn run() -> Result<(), PicoError> {
     match Cli::parse().command {
         Command::Init => run_init(),
         Command::Scan => run_scan(),
+        Command::History => run_history(),
         Command::Findings => run_findings(),
         Command::Finding { id } => run_finding(&id),
-        Command::Diff => run_diff(),
+        Command::Diff { from, to } => run_diff(from.as_deref(), to.as_deref()),
         Command::Mcp => crate::mcp::run(),
     }
 }
@@ -173,6 +182,13 @@ fn run_findings() -> Result<(), PicoError> {
     Ok(())
 }
 
+/// Renders `pico history`.
+fn run_history() -> Result<(), PicoError> {
+    let history = HistoryService::list(&workspace()?)?;
+    print!("{}", render::render_scan_history(&history));
+    Ok(())
+}
+
 /// Renders `pico finding <id>`.
 fn run_finding(id: &str) -> Result<(), PicoError> {
     if id.is_empty() {
@@ -183,9 +199,19 @@ fn run_finding(id: &str) -> Result<(), PicoError> {
     Ok(())
 }
 
-/// Renders `pico diff`.
-fn run_diff() -> Result<(), PicoError> {
-    let result = DiffService::latest(&workspace()?)?;
+/// Renders `pico diff` or `pico diff <from> <to>`.
+fn run_diff(from: Option<&str>, to: Option<&str>) -> Result<(), PicoError> {
+    let result = match (from, to) {
+        (Some(from_id), Some(to_id)) => {
+            DiffService::compare(&workspace()?, from_id, to_id)?
+        }
+        (None, None) => DiffService::latest(&workspace()?)?,
+        _ => {
+            return Err(PicoError::usage(
+                "diff requires either zero or two scan ids: pico diff  OR  pico diff <from> <to>",
+            ));
+        }
+    };
     print!("{}", render::render_finding_diff(&result));
     Ok(())
 }

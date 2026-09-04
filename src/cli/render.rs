@@ -6,7 +6,8 @@
 
 use crate::application::{
     findings_list_guidance, findings_list_state, DiffFinding, FindingDetail, FindingDiff,
-    FindingDiffResult, FindingList, FindingSummary, FindingsListState, Freshness, ScanResult,
+    FindingDiffResult, FindingList, FindingSummary, FindingsListState, Freshness, ScanHistory,
+    ScanResult,
 };
 use crate::findings::diagnostics::ScanDiagnostics;
 use crate::shared::terminal_safe;
@@ -596,6 +597,43 @@ pub fn render_finding_diff(result: &FindingDiffResult) -> String {
     }
 }
 
+/// Renders `pico history`.
+pub fn render_scan_history(history: &ScanHistory) -> String {
+    let mut out = String::from("Pico Scan History\n\n");
+    if history.scans.is_empty() {
+        out.push_str("No scans exist in this workspace.\nRun `pico scan` to create the first scan.\n");
+        return out;
+    }
+    out.push_str(&format!(
+        "{:<42} {:<10} {:<10} {}\n",
+        "ID", "STATUS", "FINDINGS", "COMPLETED"
+    ));
+    for scan in &history.scans {
+        let completed = scan
+            .completed_at
+            .as_deref()
+            .unwrap_or("—");
+        out.push_str(&format!(
+            "{:<42} {:<10} {:<10} {}\n",
+            terminal_safe(&scan.id),
+            terminal_safe(&scan.status),
+            scan.finding_count,
+            terminal_safe(completed)
+        ));
+    }
+    out.push('\n');
+    let newest_complete = history.scans.iter().rev().find(|s| s.status == "COMPLETE");
+    if let Some(scan) = newest_complete {
+        out.push_str(&format!(
+            "Newest COMPLETE: {}\n",
+            terminal_safe(&scan.id)
+        ));
+    } else {
+        out.push_str("No COMPLETE scan exists.\n");
+    }
+    out
+}
+
 fn render_ready_diff(diff: &FindingDiff) -> String {
     let mut out = String::from("Pico diff\n\n");
     out.push_str(&format!(
@@ -608,7 +646,14 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
         terminal_safe(&diff.to.id),
         terminal_safe(&diff.to.status)
     ));
-    out.push_str("Compared: LAST TWO COMPLETE SCANS\n");
+    match diff.compared_via {
+        crate::application::ComparedVia::LatestTwo => {
+            out.push_str("Compared: LAST TWO COMPLETE SCANS\n");
+        }
+        crate::application::ComparedVia::ExplicitPair => {
+            out.push_str("Compared: EXPLICIT PAIR\n");
+        }
+    }
     out.push_str(match diff.freshness {
         Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
         Freshness::NewerIncomplete => "Freshness: NEWER INCOMPLETE ATTEMPT\n",

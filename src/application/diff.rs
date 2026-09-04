@@ -34,9 +34,19 @@ pub struct FindingDiff {
     pub newest_attempt: Option<ScanBrief>,
     pub freshness: Freshness,
     pub freshness_warning: Option<String>,
+    pub compared_via: ComparedVia,
     pub unchanged: Vec<DiffFinding>,
     pub appeared: Vec<DiffFinding>,
     pub disappeared: Vec<DiffFinding>,
+}
+
+/// How the comparison pair was selected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum ComparedVia {
+    /// Last two COMPLETE scans (implicit).
+    LatestTwo,
+    /// Explicit scan ids from the user.
+    ExplicitPair,
 }
 
 /// Outcome of `pico diff` when two COMPLETE scans may not exist yet.
@@ -54,6 +64,50 @@ pub enum FindingDiffResult {
 pub struct DiffService;
 
 impl DiffService {
+    /// Diff Findings between two explicit COMPLETE scans by id.
+    pub fn compare(
+        workspace: &Path,
+        from_id: &str,
+        to_id: &str,
+    ) -> Result<FindingDiffResult, PicoError> {
+        if from_id == to_id {
+            return Err(PicoError::usage("cannot diff a scan with itself"));
+        }
+        with_read_snapshot(workspace, |conn| {
+            let scans = ScanRepo::new(conn);
+            let from_scan = scans
+                .get(from_id)?
+                .ok_or_else(|| PicoError::usage(format!("scan {from_id} not found")))?;
+            let to_scan = scans
+                .get(to_id)?
+                .ok_or_else(|| PicoError::usage(format!("scan {to_id} not found")))?;
+            if from_scan.status != crate::domain::ScanStatus::Complete {
+                return Err(PicoError::usage(format!(
+                    "scan {from_id} is {}; diff requires COMPLETE",
+                    from_scan.status.as_str()
+                )));
+            }
+            if to_scan.status != crate::domain::ScanStatus::Complete {
+                return Err(PicoError::usage(format!(
+                    "scan {to_id} is {}; diff requires COMPLETE",
+                    to_scan.status.as_str()
+                )));
+            }
+            let from_findings = findings_by_fingerprint(conn, &from_scan.id)?;
+            let to_findings = findings_by_fingerprint(conn, &to_scan.id)?;
+            Ok(FindingDiffResult::Ready(compare(
+                scan_brief(&from_scan),
+                scan_brief(&to_scan),
+                None,
+                Freshness::LatestComplete,
+                None,
+                ComparedVia::ExplicitPair,
+                from_findings,
+                to_findings,
+            )))
+        })
+    }
+
     /// Diff Findings from the last two COMPLETE scans in `workspace`.
     pub fn latest(workspace: &Path) -> Result<FindingDiffResult, PicoError> {
         with_read_snapshot(workspace, |conn| {
@@ -77,6 +131,7 @@ impl DiffService {
                         newest_attempt.as_ref().map(scan_brief),
                         freshness,
                         freshness_warning,
+                        ComparedVia::LatestTwo,
                         from_findings,
                         to_findings,
                     )))
@@ -137,6 +192,7 @@ fn compare(
     newest_attempt: Option<ScanBrief>,
     freshness: Freshness,
     freshness_warning: Option<String>,
+    compared_via: ComparedVia,
     from_findings: BTreeMap<String, DiffFinding>,
     to_findings: BTreeMap<String, DiffFinding>,
 ) -> FindingDiff {
@@ -164,6 +220,7 @@ fn compare(
         newest_attempt,
         freshness,
         freshness_warning,
+        compared_via,
         unchanged,
         appeared,
         disappeared,

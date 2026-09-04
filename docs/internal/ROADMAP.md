@@ -513,8 +513,11 @@ Runtime and continuous defenses require a trustworthy baseline and change model.
 
 **Implementation start (Sprint 024):** finding-set memory only — `pico diff`
 over the last two COMPLETE scans, joined on S015 fingerprints. Collection
-failure is never disappearance. This is not v0.4 complete. Authoritative
-slice scope: `docs/internal/sprints/SPRINT-024-support-note.md`.
+failure is never disappearance. Sprint 025 adds `pico history` (scan
+catalog) and `pico diff <from> <to>` (explicit pair comparison). This is
+not v0.4 complete. Authoritative slice scope:
+`docs/internal/sprints/SPRINT-024-support-note.md` and
+`docs/internal/sprints/SPRINT-025.md`.
 
 ---
 
@@ -984,7 +987,7 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
-v0.4  Security memory              IN PROGRESS (SPRINT-024 finding-set diff)
+v0.4  Security memory              IN PROGRESS (SPRINT-024 finding-set diff; SPRINT-025 history + explicit diff)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and

@@ -303,6 +303,18 @@ impl<'a> FindingRepo<'a> {
         result
     }
 
+    pub fn count_for_scan(&self, scan_id: &str) -> Result<u64, PicoError> {
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM findings WHERE scan_id = ?1",
+                [scan_id],
+                |r| r.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(n as u64)
+    }
+
     pub fn insert_path(&self, path: &FindingPathRecord) -> Result<(), PicoError> {
         path.validate()?;
         self.conn
