@@ -314,7 +314,7 @@ pub fn project(input: ProjectionInput<'_>) -> Result<SecurityGraph, ProjectionEr
     })
 }
 
-fn parse_resource_snapshot(observation: &Observation) -> Result<Resource, ProjectionError> {
+pub fn parse_resource_snapshot(observation: &Observation) -> Result<Resource, ProjectionError> {
     let value = observation
         .metadata
         .as_ref()
@@ -358,7 +358,9 @@ fn parse_resource_snapshot(observation: &Observation) -> Result<Resource, Projec
     })
 }
 
-fn parse_relationship_snapshot(observation: &Observation) -> Result<Relationship, ProjectionError> {
+pub fn parse_relationship_snapshot(
+    observation: &Observation,
+) -> Result<Relationship, ProjectionError> {
     let value = observation
         .metadata
         .as_ref()
@@ -409,7 +411,7 @@ fn parse_relationship_snapshot(observation: &Observation) -> Result<Relationship
     })
 }
 
-fn validate_safe_metadata(value: Option<&Value>) -> Result<(), ProjectionError> {
+pub fn validate_safe_metadata(value: Option<&Value>) -> Result<(), ProjectionError> {
     let Some(value) = value else {
         return Ok(());
     };

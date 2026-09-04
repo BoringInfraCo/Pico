@@ -9,6 +9,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::application::graph_diff::{compare_graph, GraphDiff};
 use crate::application::{Freshness, ScanBrief};
 use crate::domain::Scan;
 use crate::persistence::{
@@ -38,6 +39,7 @@ pub struct FindingDiff {
     pub unchanged: Vec<DiffFinding>,
     pub appeared: Vec<DiffFinding>,
     pub disappeared: Vec<DiffFinding>,
+    pub graph: GraphDiff,
 }
 
 /// How the comparison pair was selected.
@@ -51,6 +53,7 @@ pub enum ComparedVia {
 
 /// Outcome of `pico diff` when two COMPLETE scans may not exist yet.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum FindingDiffResult {
     NoCompleteScan,
     NeedPrevious {
@@ -95,6 +98,8 @@ impl DiffService {
             }
             let from_findings = findings_by_fingerprint(conn, &from_scan.id)?;
             let to_findings = findings_by_fingerprint(conn, &to_scan.id)?;
+            let complete = scans.list_complete()?;
+            let graph = compare_graph(conn, &from_scan, &to_scan, &complete)?;
             Ok(FindingDiffResult::Ready(compare(
                 scan_brief(&from_scan),
                 scan_brief(&to_scan),
@@ -104,6 +109,7 @@ impl DiffService {
                 ComparedVia::ExplicitPair,
                 from_findings,
                 to_findings,
+                graph,
             )))
         })
     }
@@ -125,6 +131,7 @@ impl DiffService {
                         freshness_context(to, newest_attempt.as_ref());
                     let from_findings = findings_by_fingerprint(conn, &from.id)?;
                     let to_findings = findings_by_fingerprint(conn, &to.id)?;
+                    let graph = compare_graph(conn, from, to, &complete)?;
                     Ok(FindingDiffResult::Ready(compare(
                         scan_brief(from),
                         scan_brief(to),
@@ -134,6 +141,7 @@ impl DiffService {
                         ComparedVia::LatestTwo,
                         from_findings,
                         to_findings,
+                        graph,
                     )))
                 }
             }
@@ -186,6 +194,7 @@ fn findings_by_fingerprint(
     Ok(by_fingerprint)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compare(
     from: ScanBrief,
     to: ScanBrief,
@@ -195,6 +204,7 @@ fn compare(
     compared_via: ComparedVia,
     from_findings: BTreeMap<String, DiffFinding>,
     to_findings: BTreeMap<String, DiffFinding>,
+    graph: GraphDiff,
 ) -> FindingDiff {
     let mut unchanged = Vec::new();
     let mut appeared = Vec::new();
@@ -224,6 +234,7 @@ fn compare(
         unchanged,
         appeared,
         disappeared,
+        graph,
     }
 }
 

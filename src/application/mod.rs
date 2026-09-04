@@ -6,6 +6,7 @@
 
 pub mod diff;
 pub mod findings;
+pub mod graph_diff;
 pub mod history;
 pub mod init;
 pub mod scan;
@@ -17,6 +18,7 @@ pub use findings::{
     FindingsListState, Freshness, GitHubCredentialView, PathStep, ReasonView, RemediationView,
     ResourceView, ScanBrief,
 };
+pub use graph_diff::{GraphDelta, GraphDiff, GraphSubject, GraphSubjectDiff};
 pub use history::{HistoryService, ScanHistory, ScanSummary};
 pub use init::{InitResult, InitService};
 pub use scan::{AgentBashPosture, ScanResult, ScanService};

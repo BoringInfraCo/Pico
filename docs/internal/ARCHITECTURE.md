@@ -5997,9 +5997,12 @@ pico agents
 pico status
 ```
 
-`pico diff` (Sprint 024) is finding-set memory only: last two COMPLETE scans,
-joined on finding fingerprints. It is not the full v0.4 history/diff product.
-See `docs/internal/sprints/SPRINT-024-support-note.md`.
+`pico diff` (S024–S026) compares Findings by fingerprint and, after that
+block, resources/relationships by observation-snapshot canonical_key.
+`pico history` (S025) lists scans. Explicit `pico diff <from> <to>` is
+COMPLETE-only. This is not the full v0.4 product (no causal explanation,
+retention, or MCP diff). See `docs/internal/sprints/SPRINT-024-support-note.md`
+and `docs/internal/sprints/SPRINT-026.md`.
 
 Potential future commands:
 
@@ -6009,8 +6012,6 @@ pico graph
 pico resources
 
 pico explain
-
-pico history
 
 pico providers
 
@@ -7359,18 +7360,25 @@ still exactly one active finding under the golden fixture, with
 §2), read-only allowlisted probes, secret transience, and provider-aware
 adapters.
 
-## 28.5 Started v0.4 — finding-set memory (S024)
+## 28.5 Started v0.4 — finding-set memory, history, graph memory (S024–S026)
 
-v0.4 (ROADMAP §8) is **in progress**. The first slice is finding-set memory,
-not the whole phase.
+v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
 
-- `pico diff` compares Findings from the last two COMPLETE scans by S015
-  fingerprint (`unchanged` / `appeared` / `disappeared`).
-- Incomplete attempts are S019 freshness, never disappearance.
-- No new schema, no MCP diff tool, no resource first-seen, no causal
-  explanation, no retention.
+- `pico diff` compares Findings from COMPLETE scans by S015 fingerprint
+  (`unchanged` / `appeared` / `disappeared`). Incomplete attempts are S019
+  freshness, never disappearance (S024).
+- `pico history` lists scans; `pico diff <from> <to>` compares an explicit
+  COMPLETE pair. Explicit pairs omit freshness lines (S025).
+- Graph memory (S026): the same COMPLETE pair also compares resources and
+  relationships from observation snapshots by `canonical_key` (`first_seen` /
+  `reappeared` / `changed` / `disappeared`). Stable-row timestamps are not
+  product first-seen / last-seen. PARTIAL is never graph disappearance.
+- No new schema, no MCP diff/history tool, no causal explanation, no
+  retention.
 - Authoritative slice scope:
-  `docs/internal/sprints/SPRINT-024-support-note.md`.
+  `docs/internal/sprints/SPRINT-024-support-note.md`,
+  `docs/internal/sprints/SPRINT-025.md`,
+  `docs/internal/sprints/SPRINT-026.md`.
 
 ---
 

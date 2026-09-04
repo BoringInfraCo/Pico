@@ -1,6 +1,6 @@
 # Pico — Sprint 026: Graph Memory over COMPLETE Observation Sets (v0.4 slice 3)
 
-**Status:** IN PROGRESS
+**Status:** DONE
 
 **Sprint:** 026
 **Phase:** v0.4 — Security Memory and Change Detection
@@ -303,19 +303,42 @@ amend previous commits. Do not claim v0.4 complete.
 
 ```text
 completion date and verified baseline
-  Date: TBD
-  Baseline: f044a0e
-  Verified by: TBD
+  Date: 2026-09-04
+  Baseline: f044a0e (post-S025 freshness fix); spec 0524e7a
+  Verified by: cargo test --lib (150 passed); sprint026_cli_test (12);
+               sprint024_cli_test (7+1 regression); sprint025_cli_test (9);
+               cargo clippy --all-targets -- -D warnings
 
 commits
-  authored: docs(sprints): define Sprint 026 …
-  impl:     feat(cli) graph memory on pico diff
+  authored: 0524e7a docs(sprints): define Sprint 026 graph memory …
+  impl:     feat(cli): add graph memory to pico diff
 
 repository state
-  TBD
+  A  src/application/graph_diff.rs
+  M  src/application/diff.rs          (FindingDiff.graph; DiffService wires compare_graph)
+  M  src/application/mod.rs
+  M  src/graph/mod.rs / projection.rs (export snapshot parsers)
+  M  src/cli/render.rs                (Resources / Relationships after Findings)
+  A  tests/integration/sprint026_cli_test.rs
+  M  tests/integration.rs
+  A  docs/internal/sprints/SPRINT-026-support-note.md
+  M  docs/internal/sprints/SPRINT-026.md
+  M  docs/internal/ARCHITECTURE.md    (§28.5 S025+S026)
 
 new fixtures (R1–R13)
-  TBD
+  R1 unchanged_complete_scans_have_empty_graph_diff
+  R2 bash_deny_changes_can_execute_not_disappearing_bash
+  R3 worker_identity_churn_is_disappeared_and_first_seen
+  R4 partial_attempt_does_not_fabricate_graph_disappearance
+  R5 reappeared_requires_older_complete_history
+  R6 authority_tier_change_is_changed_same_key
+  R7 github_kind_flip_is_not_changed
+  R8 mixed_agents_do_not_collapse_bash_edges
+  R9 credential_fingerprint_rotation_is_identity_churn
+  R10 graph_empty_states_are_scoped
+  R11 secret_sweep_never_leaks_in_graph_diff
+  R12 findings_section_byte_contract_from_s024_s025
+  R13 MCP N/A
 
 MCP N/A justification
   MCP tools remain list_findings / get_finding. GraphDiff is
@@ -323,10 +346,11 @@ MCP N/A justification
   comparison engine.
 
 determinism + secret-sweep
-  TBD
+  R1/R4/R8/R12 PASS; R11 PASS (SECRET_SENTINEL / synthetic-token / ghp_ absent)
 
 roadmap note (v0.4 in progress; v0.3 independent gate still open)
-  TBD
+  ROADMAP §18: v0.4 IN PROGRESS (S024+S025+S026); independent comprehension
+  still PENDING
 ```
 
 ---
@@ -335,14 +359,14 @@ roadmap note (v0.4 in progress; v0.3 independent gate still open)
 
 ```text
 Sprint: SPRINT-026 — Graph Memory over COMPLETE Observation Sets
-Status: IN PROGRESS
+Status: DONE
 Baseline: f044a0e
 
 Graph:
-  observation-set compare by canonical_key: TBD
-  first seen / reappeared / changed / disappeared: TBD
-  PARTIAL is not disappearance: TBD
-  Findings section byte-stable: TBD
+  observation-set compare by canonical_key: PASS
+  first seen / reappeared / changed / disappeared: PASS
+  PARTIAL is not disappearance: PASS
+  Findings section byte-stable: PASS
   MCP: N/A
 
 Golden path: intact

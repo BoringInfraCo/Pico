@@ -202,9 +202,7 @@ fn run_finding(id: &str) -> Result<(), PicoError> {
 /// Renders `pico diff` or `pico diff <from> <to>`.
 fn run_diff(from: Option<&str>, to: Option<&str>) -> Result<(), PicoError> {
     let result = match (from, to) {
-        (Some(from_id), Some(to_id)) => {
-            DiffService::compare(&workspace()?, from_id, to_id)?
-        }
+        (Some(from_id), Some(to_id)) => DiffService::compare(&workspace()?, from_id, to_id)?,
         (None, None) => DiffService::latest(&workspace()?)?,
         _ => {
             return Err(PicoError::usage(

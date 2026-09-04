@@ -65,3 +65,5 @@ mod sprint023_cli_test;
 mod sprint024_cli_test;
 #[path = "integration/sprint025_cli_test.rs"]
 mod sprint025_cli_test;
+#[path = "integration/sprint026_cli_test.rs"]
+mod sprint026_cli_test;

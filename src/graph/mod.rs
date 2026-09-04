@@ -11,7 +11,10 @@ pub mod traversal;
 pub use model::{
     EdgeUsability, GraphEdge, GraphEvidenceIndex, GraphNode, SecurityGraph, SecurityRole,
 };
-pub use projection::{project, ProjectionError, ProjectionInput, SUPPORTED_RELATIONSHIP_KINDS};
+pub use projection::{
+    parse_relationship_snapshot, parse_resource_snapshot, project, validate_safe_metadata,
+    ProjectionError, ProjectionInput, SUPPORTED_RELATIONSHIP_KINDS,
+};
 pub use traversal::{
     bounded_reachability, BoundedReachabilityResult, TraversalCompletion, TraversalDirection,
     TraversalLimits, TraversalPolicy,

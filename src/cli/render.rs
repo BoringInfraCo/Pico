@@ -6,8 +6,8 @@
 
 use crate::application::{
     findings_list_guidance, findings_list_state, DiffFinding, FindingDetail, FindingDiff,
-    FindingDiffResult, FindingList, FindingSummary, FindingsListState, Freshness, ScanHistory,
-    ScanResult,
+    FindingDiffResult, FindingList, FindingSummary, FindingsListState, Freshness, GraphSubject,
+    GraphSubjectDiff, ScanHistory, ScanResult,
 };
 use crate::findings::diagnostics::ScanDiagnostics;
 use crate::shared::terminal_safe;
@@ -601,7 +601,9 @@ pub fn render_finding_diff(result: &FindingDiffResult) -> String {
 pub fn render_scan_history(history: &ScanHistory) -> String {
     let mut out = String::from("Pico Scan History\n\n");
     if history.scans.is_empty() {
-        out.push_str("No scans exist in this workspace.\nRun `pico scan` to create the first scan.\n");
+        out.push_str(
+            "No scans exist in this workspace.\nRun `pico scan` to create the first scan.\n",
+        );
         return out;
     }
     out.push_str(&format!(
@@ -609,10 +611,7 @@ pub fn render_scan_history(history: &ScanHistory) -> String {
         "ID", "STATUS", "FINDINGS", "COMPLETED"
     ));
     for scan in &history.scans {
-        let completed = scan
-            .completed_at
-            .as_deref()
-            .unwrap_or("—");
+        let completed = scan.completed_at.as_deref().unwrap_or("—");
         out.push_str(&format!(
             "{:<42} {:<10} {:<10} {}\n",
             terminal_safe(&scan.id),
@@ -624,10 +623,7 @@ pub fn render_scan_history(history: &ScanHistory) -> String {
     out.push('\n');
     let newest_complete = history.scans.iter().rev().find(|s| s.status == "COMPLETE");
     if let Some(scan) = newest_complete {
-        out.push_str(&format!(
-            "Newest COMPLETE: {}\n",
-            terminal_safe(&scan.id)
-        ));
+        out.push_str(&format!("Newest COMPLETE: {}\n", terminal_safe(&scan.id)));
     } else {
         out.push_str("No COMPLETE scan exists.\n");
     }
@@ -690,7 +686,74 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
             out.push_str("This is not an all-clear.\n");
         }
     }
+    out.push('\n');
+    out.push_str(&render_graph_subject_diff(
+        "Resources",
+        &diff.graph.resources,
+    ));
+    out.push('\n');
+    out.push_str(&render_graph_subject_diff(
+        "Relationships",
+        &diff.graph.relationships,
+    ));
     out
+}
+
+fn render_graph_subject_diff(title: &str, diff: &GraphSubjectDiff) -> String {
+    let mut out = String::new();
+    out.push_str(title);
+    out.push('\n');
+    out.push_str(&format!("  Unchanged: {}\n", diff.unchanged.len()));
+    out.push_str(&format!("  First seen: {}\n", diff.first_seen.len()));
+    out.push_str(&format!("  Reappeared: {}\n", diff.reappeared.len()));
+    out.push_str(&format!("  Changed: {}\n", diff.changed.len()));
+    out.push_str(&format!("  Disappeared: {}\n", diff.disappeared.len()));
+    push_graph_bucket(&mut out, "First seen", &diff.first_seen);
+    push_graph_bucket(&mut out, "Reappeared", &diff.reappeared);
+    push_graph_bucket(&mut out, "Changed", &diff.changed);
+    push_graph_bucket(&mut out, "Disappeared", &diff.disappeared);
+    out
+}
+
+fn push_graph_bucket(out: &mut String, title: &str, entries: &[GraphSubject]) {
+    if entries.is_empty() {
+        return;
+    }
+    out.push('\n');
+    out.push_str(title);
+    out.push('\n');
+    for entry in entries {
+        if let Some(provider) = &entry.provider {
+            out.push_str(&format!(
+                "  {} · {} · {}\n",
+                terminal_safe(&entry.kind),
+                terminal_safe(provider),
+                terminal_safe(&entry.canonical_key)
+            ));
+        } else {
+            out.push_str(&format!(
+                "  {} · {}\n",
+                terminal_safe(&entry.kind),
+                terminal_safe(&entry.canonical_key)
+            ));
+        }
+        out.push_str(&format!(
+            "  First seen: {}\n",
+            terminal_safe(&entry.first_seen_scan_id)
+        ));
+        out.push_str(&format!(
+            "  Last seen: {}\n",
+            terminal_safe(&entry.last_seen_scan_id)
+        ));
+        for delta in &entry.deltas {
+            out.push_str(&format!(
+                "  {}: {} → {}\n",
+                terminal_safe(&delta.field),
+                terminal_safe(&delta.from),
+                terminal_safe(&delta.to)
+            ));
+        }
+    }
 }
 
 fn push_diff_finding(out: &mut String, finding: &DiffFinding) {

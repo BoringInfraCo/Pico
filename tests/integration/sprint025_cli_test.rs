@@ -112,11 +112,7 @@ fn diff_latest(workspace: &std::path::Path) -> FindingDiffResult {
     DiffService::latest(workspace).unwrap()
 }
 
-fn diff_explicit(
-    workspace: &std::path::Path,
-    from: &str,
-    to: &str,
-) -> FindingDiffResult {
+fn diff_explicit(workspace: &std::path::Path, from: &str, to: &str) -> FindingDiffResult {
     DiffService::compare(workspace, from, to).unwrap()
 }
 
@@ -182,7 +178,11 @@ fn explicit_diff_matches_latest_for_same_pair() {
     let second = scan_named(workspace.path(), home.path(), "checkout");
 
     let latest = ready(diff_latest(workspace.path()));
-    let explicit = ready(diff_explicit(workspace.path(), &first.scan_id, &second.scan_id));
+    let explicit = ready(diff_explicit(
+        workspace.path(),
+        &first.scan_id,
+        &second.scan_id,
+    ));
 
     assert_eq!(latest.from.id, explicit.from.id);
     assert_eq!(latest.to.id, explicit.to.id);
@@ -214,7 +214,10 @@ fn explicit_diff_nonexistent_scan_is_error() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let msg = format!("{err}");
-    assert!(msg.contains("not found"), "error should mention not found: {msg}");
+    assert!(
+        msg.contains("not found"),
+        "error should mention not found: {msg}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +234,9 @@ fn explicit_diff_partial_scan_is_error() {
 
     let first = DiffService::latest(workspace.path()).unwrap();
     let newest_complete = match &first {
-        FindingDiffResult::NeedPrevious { newest_complete, .. } => newest_complete.id.clone(),
+        FindingDiffResult::NeedPrevious {
+            newest_complete, ..
+        } => newest_complete.id.clone(),
         _ => panic!("expected NeedPrevious"),
     };
 
@@ -239,7 +244,10 @@ fn explicit_diff_partial_scan_is_error() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let msg = format!("{err}");
-    assert!(msg.contains("PARTIAL"), "error should mention status: {msg}");
+    assert!(
+        msg.contains("PARTIAL"),
+        "error should mention status: {msg}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -255,10 +263,7 @@ fn explicit_diff_same_scan_is_error() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     let msg = format!("{err}");
-    assert!(
-        msg.contains("itself"),
-        "error should mention itself: {msg}"
-    );
+    assert!(msg.contains("itself"), "error should mention itself: {msg}");
 }
 
 // ---------------------------------------------------------------------------
@@ -271,8 +276,16 @@ fn explicit_diff_deterministic_across_runs() {
     let first = scan_named(workspace.path(), home.path(), "checkout");
     let second = scan_named(workspace.path(), home.path(), "checkout");
 
-    let a = ready(diff_explicit(workspace.path(), &first.scan_id, &second.scan_id));
-    let b = ready(diff_explicit(workspace.path(), &first.scan_id, &second.scan_id));
+    let a = ready(diff_explicit(
+        workspace.path(),
+        &first.scan_id,
+        &second.scan_id,
+    ));
+    let b = ready(diff_explicit(
+        workspace.path(),
+        &first.scan_id,
+        &second.scan_id,
+    ));
     assert_eq!(a.unchanged, b.unchanged);
     assert_eq!(a.appeared, b.appeared);
     assert_eq!(a.disappeared, b.disappeared);
@@ -293,7 +306,11 @@ fn secret_sweep_never_leaks_in_history_or_explicit_diff() {
     assert!(!history_rendered.contains(SECRET_SENTINEL));
     assert!(!history_rendered.contains("synthetic-token"));
 
-    let explicit = ready(diff_explicit(workspace.path(), &first.scan_id, &second.scan_id));
+    let explicit = ready(diff_explicit(
+        workspace.path(),
+        &first.scan_id,
+        &second.scan_id,
+    ));
     let diff_rendered = render_finding_diff(&FindingDiffResult::Ready(explicit));
     assert!(!diff_rendered.contains(SECRET_SENTINEL));
     assert!(!diff_rendered.contains("synthetic-token"));
