@@ -191,6 +191,16 @@ fn explicit_diff_matches_latest_for_same_pair() {
     assert_eq!(latest.disappeared, explicit.disappeared);
     assert_eq!(explicit.compared_via, ComparedVia::ExplicitPair);
     assert_eq!(latest.compared_via, ComparedVia::LatestTwo);
+
+    let latest_rendered = render_finding_diff(&FindingDiffResult::Ready(latest));
+    let explicit_rendered = render_finding_diff(&FindingDiffResult::Ready(explicit));
+    assert!(latest_rendered.contains("Compared: LAST TWO COMPLETE SCANS"));
+    assert!(latest_rendered.contains("Freshness:"));
+    assert!(explicit_rendered.contains("Compared: EXPLICIT PAIR"));
+    assert!(
+        !explicit_rendered.contains("Freshness:"),
+        "explicit pair must not claim latest-complete freshness:\n{explicit_rendered}"
+    );
 }
 
 // ---------------------------------------------------------------------------

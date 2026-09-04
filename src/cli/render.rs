@@ -649,20 +649,20 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
     match diff.compared_via {
         crate::application::ComparedVia::LatestTwo => {
             out.push_str("Compared: LAST TWO COMPLETE SCANS\n");
+            out.push_str(match diff.freshness {
+                Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
+                Freshness::NewerIncomplete => "Freshness: NEWER INCOMPLETE ATTEMPT\n",
+            });
+            if let Some(warning) = &diff.freshness_warning {
+                out.push('\n');
+                for line in warning.split('\n') {
+                    out.push_str(&terminal_safe(line));
+                    out.push('\n');
+                }
+            }
         }
         crate::application::ComparedVia::ExplicitPair => {
             out.push_str("Compared: EXPLICIT PAIR\n");
-        }
-    }
-    out.push_str(match diff.freshness {
-        Freshness::LatestComplete => "Freshness: LATEST COMPLETE\n",
-        Freshness::NewerIncomplete => "Freshness: NEWER INCOMPLETE ATTEMPT\n",
-    });
-    if let Some(warning) = &diff.freshness_warning {
-        out.push('\n');
-        for line in warning.split('\n') {
-            out.push_str(&terminal_safe(line));
-            out.push('\n');
         }
     }
     out.push_str("\nFindings\n");
