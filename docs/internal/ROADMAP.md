@@ -524,6 +524,13 @@ cannot masquerade as ordinary lifecycle or environment changes. Sprint 030
 adds local retention, pruning, and database-health controls that delete
 whole coherent scan units beyond a bounded window and never fabricate
 disappearance. This is not v0.4 complete.
+
+**Post-S030 review and proposed closeout:**
+[v0.4 closeout plan](sprints/V0.4-CLOSEOUT-PLAN.md) records two reproduced retention/
+diagnostic defects and a concurrency gap to correct before expansion, then
+sequences attribution, stable JSON output, MCP history/diff, and independent
+comprehension. Proposed S031–S035 are planning scope, not completed work.
+
 Authoritative slice scope:
 `docs/internal/sprints/SPRINT-024-support-note.md`,
 `docs/internal/sprints/SPRINT-025.md`,
