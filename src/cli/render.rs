@@ -12,6 +12,7 @@ use crate::application::{
 };
 use crate::application::{
     ComparedVia, ComparisonContractVersions, DiffNotComparable, DiffNotComparableReason, Freshness,
+    HealthReport, PruneReport, RetentionCounts, UnitCounts,
 };
 use crate::findings::diagnostics::ScanDiagnostics;
 use crate::shared::terminal_safe;
@@ -749,6 +750,159 @@ pub fn render_scan_history(history: &ScanHistory) -> String {
     } else {
         out.push_str("No COMPLETE scan exists.\n");
     }
+    out
+}
+
+/// Renders `pico prune` (SPRINT-030.md §5.4).
+///
+/// Deterministic and terminal-safe: every persisted scan id and status passes
+/// through `terminal_safe`; counts are plain integers; plural nouns are always
+/// used (no singular/plural shaping). The pruned-scan lines follow the
+/// service's deletion order (COMPLETE units oldest-first, then incomplete
+/// attempts oldest-first). A below-window no-op is an explicit success with
+/// its own retained-state block, and the health line distinguishes the two
+/// paths (`Health after prune:` vs `Health:`). A failing post-prune health
+/// check still renders the full report (the CLI returns the corresponding
+/// database error separately; that path is unreachable through the current
+/// service but remains specified). No claim of space reclaimed, no claim that
+/// pruning improved security, and no environment-change attribution.
+pub fn render_prune_report(report: &PruneReport) -> String {
+    let mut out = String::new();
+    out.push_str("Pico prune\n\n");
+    out.push_str(&format!("Policy: keep {} COMPLETE scans\n", report.keep));
+    if report.nothing_pruned {
+        out.push_str("Nothing pruned: history is within the window.\n");
+        out.push_str(&retained_state_line(&report.retained));
+        out.push_str(&health_line("Health", report.post_health_ok));
+        return out;
+    }
+    out.push_str(&format!("Pruned: {} scans\n", report.pruned.len()));
+    for unit in &report.pruned {
+        out.push_str(&format!(
+            "  {} ({}): {}\n",
+            terminal_safe(&unit.scan_id),
+            terminal_safe(&unit.status),
+            unit_counts_line(&unit.counts)
+        ));
+    }
+    out.push_str(&format!("Totals: {}\n", unit_counts_line(&report.totals.0)));
+    out.push_str(&retained_state_line(&report.retained));
+    out.push_str(&health_line("Health after prune", report.post_health_ok));
+    out
+}
+
+/// The seven-count deletion summary shared by the per-scan lines and totals.
+fn unit_counts_line(counts: &UnitCounts) -> String {
+    format!(
+        "{} observations, {} evidence, {} findings, {} attack paths, \
+         {} analyses, {} diagnostics, {} relationship evidence links",
+        counts.observations,
+        counts.evidence,
+        counts.findings,
+        counts.attack_paths,
+        counts.scan_analyses,
+        counts.scan_diagnostics,
+        counts.relationship_evidence,
+    )
+}
+
+/// The retained-state summary line after a prune.
+fn retained_state_line(counts: &RetentionCounts) -> String {
+    format!(
+        "Retained: {} COMPLETE, {} PARTIAL, {} FAILED, {} RUNNING\n",
+        counts.complete, counts.partial, counts.failed, counts.running
+    )
+}
+
+/// The trailing health line: `ok` or the fail-closed `FAILED` marker.
+fn health_line(label: &str, ok: bool) -> String {
+    format!("{label}: {}\n", if ok { "ok" } else { "FAILED" })
+}
+
+/// Renders `pico doctor` (SPRINT-030.md §5.3/§5.4).
+///
+/// Deterministic and terminal-safe: every persisted string (dangling-reference
+/// table, column, id, referenced table, retained scan ids) passes through
+/// `terminal_safe`; integers and booleans render as plain words. The renderer
+/// is total: every field of the health report is renderable, including an
+/// unsupported schema version, failing integrity/foreign-key checks (frozen as
+/// `FAILED`), a capped dangling-reference list with a summary remainder line,
+/// and a retention window with no COMPLETE scans (`none` placeholders). The
+/// PRAGMA detail strings (`integrity_check` rows, `foreign_key_check` rows)
+/// are deliberately not echoed — the boolean outcome is enough to stay
+/// deterministic and secret-free. The report states observed facts only: it
+/// never claims repair, cleanup, space reclamation, or any environment
+/// change. `Result: ok` vs `Result: FAIL` is the single success marker; the
+/// CLI returns the fail-closed error separately so a failing doctor still
+/// renders the full report before the process exits FAILURE.
+pub fn render_doctor_report(report: &HealthReport) -> String {
+    let mut out = String::from("Pico doctor\n\n");
+    out.push_str(&format!(
+        "Schema version: {} ({})\n",
+        report.schema_version,
+        if report.schema_ok {
+            "supported"
+        } else {
+            "unsupported"
+        }
+    ));
+    out.push_str(&format!(
+        "Integrity: {}\n",
+        if report.integrity_ok { "ok" } else { "FAILED" }
+    ));
+    out.push_str(&format!(
+        "Foreign keys: {}\n",
+        if report.foreign_keys_ok {
+            "ok"
+        } else {
+            "FAILED"
+        }
+    ));
+    if report.dangling_json_refs.is_empty() {
+        out.push_str("Dangling references: none\n");
+    } else {
+        out.push_str(&format!(
+            "Dangling references: {}\n",
+            report.dangling_json_refs.len()
+        ));
+        for dangling in &report.dangling_json_refs {
+            out.push_str(&format!(
+                "  {}/{}: {} (unresolved in {})\n",
+                terminal_safe(&dangling.table),
+                terminal_safe(&dangling.column),
+                terminal_safe(&dangling.id),
+                terminal_safe(&dangling.referenced_table)
+            ));
+        }
+        if report.dangling_more > 0 {
+            out.push_str(&format!("  ... and {} more\n", report.dangling_more));
+        }
+    }
+    out.push_str(&format!("Orphan scan rows: {}\n", report.orphan_scan_rows));
+    out.push_str(&format!("Summary rows: {}\n", report.summary_rows));
+    out.push_str(&format!(
+        "Scans: {} COMPLETE, {} PARTIAL, {} FAILED, {} RUNNING\n",
+        report.counts.complete, report.counts.partial, report.counts.failed, report.counts.running
+    ));
+    out.push_str(&format!(
+        "Retention window: keep {} COMPLETE scans; oldest retained {}; newest {}\n",
+        report.window_keep,
+        report
+            .oldest_retained_complete
+            .as_deref()
+            .map(terminal_safe)
+            .unwrap_or_else(|| "none".to_string()),
+        report
+            .newest_complete
+            .as_deref()
+            .map(terminal_safe)
+            .unwrap_or_else(|| "none".to_string()),
+    ));
+    out.push_str(if report.ok {
+        "Result: ok\n"
+    } else {
+        "Result: FAIL\n"
+    });
     out
 }
 

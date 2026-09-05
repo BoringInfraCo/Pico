@@ -1,6 +1,6 @@
 # Pico — Sprint 030: Retention, Pruning, and Database Health (v0.4 slice 7)
 
-**Status:** PROPOSED — awaiting review
+**Status:** DONE
 
 **Sprint:** 030
 **Phase:** v0.4 — Security Memory and Change Detection
@@ -364,20 +364,27 @@ Implementation conventional. Do not amend. Do not claim v0.4 complete.
 # 8. Completion Evidence (filled at execution)
 
 ```text
-Date:
-Baseline: 1f7824b (post-Sprint-029 implementation); spec: <commit>
-Verified by:
+Date: 2026-09-04
+Baseline: 1f7824b (post-Sprint-029 implementation); spec: 4fc6b06
+Verified by: three staged review checkpoints (engine → prune CLI → doctor),
+full cargo test --all-targets after each stage
 
 fixtures (R1–R9) — tests/integration/sprint030_cli_test.rs
-  R1
-  R2
-  R3
-  R4
-  R5
-  R6
-  R7
-  R8
-  R9
+  R1  below_window_prune_is_a_no_op
+  R2  window_exceeded_prunes_oldest_units_idempotently
+  R3  running_scan_blocks_prune
+  R4  pruned_units_leave_no_residual_rows
+  R5  pruned_history_is_explicit_not_fabricated
+  R6  doctor_reports_ok_without_writing
+  R7  doctor_reports_injected_inconsistency_fail_closed
+  R8  keep_flag_is_validated_before_any_deletion
+  R9  pruning_removes_secrets_and_reports_stay_clean
+  R10 doctor_requires_initialized_state + full-suite regression run
+  (plus 28 engine/service unit tests: 20 in-module in
+  src/application/retention.rs and 8 in
+  tests/persistence/sprint030_retention_test.rs, covering policy windows,
+  tie-breaks, deletion order, rollback-on-inconsistency, refusal rules,
+  dangling/orphan detection, and doctor no-write)
 
 schema evidence:
   SUPPORTED_SCHEMA_VERSION = 6
@@ -385,18 +392,23 @@ schema evidence:
 
 MCP evidence:
   descriptors: list_findings, get_finding (unchanged)
-  golden payloads: unchanged
+  golden payloads: unchanged (git diff --stat -- src/mcp/ empty)
 
 security/read-only evidence:
-  doctor/no-op content digest before/after:
-  pruned-scan secret sweep after deletion:
-  prune output terminal-safe sweep:
+  doctor/no-op content digest before/after: byte-identical (R1, R6;
+  sha256 over sqlite_master rows, user_version, and full table row
+  content); retained-row digest byte-identical across real prunes
+  (R2, R4)
+  pruned-scan secret sweep after deletion: sentinel absent from all 16
+  tables after prune (R9); retained sentinel intentionally remains
+  prune/doctor output terminal-safe sweep: no control bytes (R7, R9)
 
 gates:
-  cargo fmt --all -- --check
-  cargo clippy --all-targets -- -D warnings
-  cargo test --all-targets
-  git diff --check
+  cargo fmt --all -- --check            PASS
+  cargo clippy --all-targets -- -D warnings PASS
+  cargo test --all-targets              PASS (520: 222 lib, 30 domain,
+                                        218 integration, 50 persistence)
+  git diff --check                      PASS
 ```
 
 ---

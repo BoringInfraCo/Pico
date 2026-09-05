@@ -6021,8 +6021,10 @@ resources/relationships by observation-snapshot canonical_key.
 COMPLETE-only. Since S028 the diff classifies finding lifecycle; since S029
 the diff carries comparison-contract provenance and returns an explicit
 non-comparable result instead of comparing across differing or unsupported
-contract tuples (schema stays v6). This is not the full v0.4 product (no
-retention or MCP diff). See `docs/internal/sprints/SPRINT-024-support-note.md`
+contract tuples (schema stays v6). Since S030, `pico prune` applies bounded
+whole-unit retention (`pico prune [--keep N]`) and `pico doctor` reports
+database health read-only. This is not the full v0.4 product (no MCP diff).
+See `docs/internal/sprints/SPRINT-024-support-note.md`
 and `docs/internal/sprints/SPRINT-027.md`.
 
 Potential future commands:
@@ -7381,7 +7383,7 @@ still exactly one active finding under the golden fixture, with
 §2), read-only allowlisted probes, secret transience, and provider-aware
 adapters.
 
-## 28.5 Started v0.4 — finding-set memory, history, graph memory, lifecycle, contract guard (S024–S029)
+## 28.5 Started v0.4 — finding-set memory, history, graph memory, lifecycle, contract guard, retention (S024–S030)
 
 v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
 
@@ -7405,7 +7407,7 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   adds `findings.family_fingerprint` with the partial unique index
   `idx_findings_scan_family` and the non-empty insert trigger
   `findings_family_nonempty_insert`; legacy rows backfill to `''`.
-- No MCP diff/history tool, no retention.
+- No MCP diff/history tool.
 - Comparison contract guard (S029, schema stays v6): `pico diff` loads and
   validates a composite comparison tuple
   (`comparison_contract_version + graph_snapshot_version + analysis_version +
@@ -7421,13 +7423,29 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   before Finding loading, graph projection, and Cause attachment, and is
   byte-deterministic and read-only (schema-and-table content digest
   unchanged).
+- Retention and database health (S030, schema stays v6): `pico prune`
+  deletes whole coherent scan units beyond a bounded retention window
+  (default keep 10 COMPLETE scans; `--keep N` with `N >= 2`) — never partial
+  rows, never a RUNNING scan (prune refuses), never `resources`/
+  `relationships`. Incomplete attempts older than the newest COMPLETE scan
+  are prunable precisely because they can no longer produce a freshness
+  warning. Deletion is one transaction in a frozen FK-safe order
+  (diagnostics → analysis summary → findings → attack paths → observations
+  → unit-scoped relationship_evidence rows → evidence → scan row), is
+  idempotent, reports exactly what was removed, and re-verifies health
+  after deletion. `pico doctor` reports schema version, `integrity_check`,
+  `foreign_key_check`, dangling JSON reference detection, orphan scan rows,
+  and retention state read-only and fail-closed (non-zero exit when any
+  check fails; it never repairs). Pruning never fabricates disappearance,
+  remediation, or an all-clear.
 - Authoritative slice scope:
   `docs/internal/sprints/SPRINT-024-support-note.md`,
   `docs/internal/sprints/SPRINT-025.md`,
   `docs/internal/sprints/SPRINT-026.md`,
   `docs/internal/sprints/SPRINT-027.md`,
   `docs/internal/sprints/SPRINT-028.md`,
-  `docs/internal/sprints/SPRINT-029.md`.
+  `docs/internal/sprints/SPRINT-029.md`,
+  `docs/internal/sprints/SPRINT-030.md`.
 
 ---
 

@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::application::{
-    finding_navigation_ids, DiffService, FindingQueryService, HistoryService, InitService,
-    ScanService,
+    finding_navigation_ids, DiffService, DoctorService, FindingQueryService, HistoryService,
+    InitService, PruneService, ScanService,
 };
 use crate::shared::{PicoError, PICO_VERSION};
 
@@ -48,6 +48,14 @@ enum Command {
         /// Newer scan id (COMPLETE).
         to: Option<String>,
     },
+    /// Prune local scan history beyond the retention window.
+    Prune {
+        /// Number of COMPLETE scans to retain (>= 2, default 10).
+        #[arg(long)]
+        keep: Option<usize>,
+    },
+    /// Report local database health (read-only).
+    Doctor,
     /// Serve Pico findings to coding agents over MCP (stdio).
     Mcp,
 }
@@ -61,6 +69,8 @@ pub fn run() -> Result<(), PicoError> {
         Command::Findings => run_findings(),
         Command::Finding { id } => run_finding(&id),
         Command::Diff { from, to } => run_diff(from.as_deref(), to.as_deref()),
+        Command::Prune { keep } => run_prune(keep),
+        Command::Doctor => run_doctor(),
         Command::Mcp => crate::mcp::run(),
     }
 }
@@ -211,6 +221,30 @@ fn run_diff(from: Option<&str>, to: Option<&str>) -> Result<(), PicoError> {
         }
     };
     print!("{}", render::render_finding_diff(&result));
+    Ok(())
+}
+
+/// Renders `pico prune` (SPRINT-030.md §5.4). Service-level failures (keep
+/// validation, RUNNING refusal, health-gate aborts) propagate as errors so
+/// the process exits with FAILURE; a below-window no-op is a success with an
+/// explicit report.
+fn run_prune(keep: Option<usize>) -> Result<(), PicoError> {
+    let report = PruneService::run(&workspace()?, keep)?;
+    print!("{}", render::render_prune_report(&report));
+    Ok(())
+}
+
+/// Renders `pico doctor` (SPRINT-030.md §5.3/§5.4). The full health report is
+/// printed to stdout even when a check fails; the fail-closed database error
+/// is then returned so the process still exits with FAILURE for scripts.
+fn run_doctor() -> Result<(), PicoError> {
+    let report = DoctorService::run(&workspace()?)?;
+    print!("{}", render::render_doctor_report(&report));
+    if !report.ok {
+        return Err(PicoError::database(
+            "pico doctor: database health check failed",
+        ));
+    }
     Ok(())
 }
 

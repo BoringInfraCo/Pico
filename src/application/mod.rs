@@ -11,6 +11,7 @@ pub mod findings;
 pub mod graph_diff;
 pub mod history;
 pub mod init;
+pub mod retention;
 pub mod scan;
 
 pub use cause::FindingCause;
@@ -32,4 +33,9 @@ pub use findings::{
 pub use graph_diff::{GraphDelta, GraphDiff, GraphSubject, GraphSubjectDiff};
 pub use history::{HistoryService, ScanHistory, ScanSummary};
 pub use init::{InitResult, InitService};
+pub use retention::{
+    plan_retention, DanglingRef, DoctorService, HealthReport, PruneReport, PruneService,
+    PruneTotals, PrunedUnitReport, RetentionCounts, RetentionPlan, RetentionWindow, UnitCounts,
+    KEEP_COMPLETE_DEFAULT, MIN_KEEP_COMPLETE,
+};
 pub use scan::{AgentBashPosture, ScanResult, ScanService};

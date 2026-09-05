@@ -15,3 +15,5 @@ mod findings_test;
 mod repos_test;
 #[path = "persistence/sprint029_analysis_test.rs"]
 mod sprint029_analysis_test;
+#[path = "persistence/sprint030_retention_test.rs"]
+mod sprint030_retention_test;
