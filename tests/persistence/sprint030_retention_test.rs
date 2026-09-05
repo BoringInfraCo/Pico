@@ -624,13 +624,19 @@ fn doctor_service_reports_injected_dangling_reference() {
     assert!(!report.ok, "an injected inconsistency must fail closed");
     assert_eq!(report.dangling_json_refs.len(), 1);
     assert_eq!(report.dangling_more, 0);
+    // SPRINT-031 §5.2 shape: redacted diagnostics carry the stable reason
+    // code, the referenced table, and a bounded structural location with the
+    // per-cell unresolved count — never the unresolved id itself.
     assert_eq!(
         report.dangling_json_refs[0],
         DanglingRef {
             table: "finding_reasons".to_string(),
             column: "evidence_ids".to_string(),
-            id: "evidence_nonexistent".to_string(),
             referenced_table: "evidence".to_string(),
+            category: "unresolved".to_string(),
+            finding_id: "finding_scan_one".to_string(),
+            position: 1,
+            unresolved_count: 1,
         }
     );
 }

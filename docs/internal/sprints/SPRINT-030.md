@@ -426,3 +426,23 @@ When Sprint 030 is implemented, report:
   comprehension gate);
 - `Sprint 030: DONE` only if every checkpoint passes;
 - `v0.4: not complete` and the remaining blockers.
+
+---
+
+# 10. Corrective Follow-up Addendum (Sprint 031)
+
+Post-S030 sign-off review (V0.4-CLOSEOUT-PLAN.md) reproduced two P1 defects
+and one P2 gap in this slice's delivery at `4c0c49f`: post-health
+validation ran after the deletion committed; doctor diagnostics echoed raw
+malformed JSON and unresolved id contents; and the RUNNING refusal raced
+concurrent writers. Sprint 031
+(`docs/internal/sprints/SPRINT-031.md`) corrects all three: one immediate
+write transaction covers the whole prune decision and mutation (schema
+validated without migrating, post-health validated before commit,
+rollback leaves every row unchanged), and diagnostics now report bounded
+structural locations with stable reason codes (`unresolved` /
+`unparseable`) and never echo contents. Failing regressions were added
+first and proven to fail on `4c0c49f`; S030's byte-frozen doctor renders
+(R6/R7) were re-pinned to the clarified window line and redacted dangling
+shape. S030's policy semantics (keep-10, `--keep >= 2`, whole-unit order,
+no-op success, global identity retention) are unchanged.

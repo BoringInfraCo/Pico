@@ -1015,7 +1015,9 @@ fn doctor_reports_ok_without_writing() {
     assert_eq!(report.oldest_retained_complete.as_deref(), Some("scan_01"));
     assert_eq!(report.newest_complete.as_deref(), Some("scan_08"));
 
-    // The frozen healthy copy, byte for byte.
+    // The frozen healthy copy, byte for byte (re-pinned to the SPRINT-031
+    // §5.3 window line, which separates the policy window from the scans
+    // actually present).
     let rendered = render_doctor_report(&report);
     assert_eq!(
         rendered,
@@ -1027,7 +1029,7 @@ fn doctor_reports_ok_without_writing() {
          Orphan scan rows: 0\n\
          Summary rows: 0\n\
          Scans: 8 COMPLETE, 1 PARTIAL, 0 FAILED, 0 RUNNING\n\
-         Retention window: keep 10 COMPLETE scans; oldest retained scan_01; newest scan_08\n\
+         Retention window: policy keep 10 COMPLETE scans; workspace has 8 COMPLETE scans; oldest retained scan_01; newest scan_08\n\
          Result: ok\n"
     );
     assert_terminal_safe(&rendered);
@@ -1069,9 +1071,14 @@ fn doctor_reports_injected_inconsistency_fail_closed() {
     assert_eq!(report.dangling_json_refs.len(), 1);
     assert_eq!(report.dangling_json_refs[0].table, "finding_reasons");
     assert_eq!(report.dangling_json_refs[0].column, "evidence_ids");
-    assert_eq!(report.dangling_json_refs[0].id, "evidence_nonexistent");
+    assert_eq!(report.dangling_json_refs[0].category, "unresolved");
     assert_eq!(report.dangling_json_refs[0].referenced_table, "evidence");
+    assert_eq!(report.dangling_json_refs[0].finding_id, "finding_scan_01");
+    assert_eq!(report.dangling_json_refs[0].position, 1);
+    assert_eq!(report.dangling_json_refs[0].unresolved_count, 1);
 
+    // The frozen redacted copy, byte for byte (re-pinned to the SPRINT-031
+    // §5.2 shape: the unresolved id contents are counted, never echoed).
     let rendered = render_doctor_report(&report);
     assert_eq!(
         rendered,
@@ -1080,17 +1087,17 @@ fn doctor_reports_injected_inconsistency_fail_closed() {
          Integrity: ok\n\
          Foreign keys: ok\n\
          Dangling references: 1\n\
-         \x20\x20finding_reasons/evidence_ids: evidence_nonexistent (unresolved in evidence)\n\
+         \x20\x20finding_reasons/evidence_ids: 1 unresolved evidence id(s) at finding_id=finding_scan_01 position=1\n\
          Orphan scan rows: 0\n\
          Summary rows: 0\n\
          Scans: 1 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING\n\
-         Retention window: keep 10 COMPLETE scans; oldest retained scan_01; newest scan_01\n\
+         Retention window: policy keep 10 COMPLETE scans; workspace has 1 COMPLETE scans; oldest retained scan_01; newest scan_01\n\
          Result: FAIL\n"
     );
     assert_terminal_safe(&rendered);
     assert!(
-        rendered.contains("evidence_nonexistent (unresolved in evidence)"),
-        "the dangling id must render as plain terminal-safe text"
+        !rendered.contains("evidence_nonexistent"),
+        "the unresolved id must never render (redacted diagnostics)"
     );
 
     assert_eq!(
@@ -1123,6 +1130,8 @@ fn doctor_reports_injected_inconsistency_fail_closed() {
     assert!(!report.foreign_keys_ok);
     assert!(report.dangling_json_refs.is_empty());
 
+    // The frozen redacted copy, byte for byte (FK case: the FAILED marker is
+    // unchanged; only the §5.3 window line moved).
     let rendered = render_doctor_report(&report);
     assert_eq!(
         rendered,
@@ -1134,7 +1143,7 @@ fn doctor_reports_injected_inconsistency_fail_closed() {
          Orphan scan rows: 0\n\
          Summary rows: 0\n\
          Scans: 1 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING\n\
-         Retention window: keep 10 COMPLETE scans; oldest retained scan_01; newest scan_01\n\
+         Retention window: policy keep 10 COMPLETE scans; workspace has 1 COMPLETE scans; oldest retained scan_01; newest scan_01\n\
          Result: FAIL\n"
     );
     assert_terminal_safe(&rendered);

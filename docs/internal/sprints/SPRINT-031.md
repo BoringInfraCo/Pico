@@ -1,7 +1,6 @@
 # Pico — Sprint 031: Retention Correctness Follow-up (v0.4 slice 8)
 
-**Status:** APPROVED — corrective slice authorized by the v0.4 closeout plan
-(§1, §3); no separate approval round.
+**Status:** DONE
 
 **Sprint:** 031
 **Phase:** v0.4 — Security Memory and Change Detection (closeout)
@@ -287,22 +286,26 @@ Implementation conventional. Do not amend. Do not claim v0.4 complete.
 # 8. Completion Evidence (filled at execution)
 
 ```text
-Date:
-Baseline: 4c0c49f (post-Sprint-030); plan: <closeout commit>; spec: <commit>
-Verified by:
+Date: 2026-09-04
+Baseline: 4c0c49f (post-Sprint-030); plan: 47ae405; spec: 9062baf
+Verified by: staged review (failing regressions → transaction restructure →
+redaction → renderer/S030 re-pins), full cargo test --all-targets after
+each stage
 
 fixtures (R1–R8) — tests/integration/sprint031_cli_test.rs
-  R1
-  R2
-  R3
-  R4
-  R5
-  R6
-  R7
-  R8
+  R1  post_health_failure_rolls_back_and_deletes_nothing
+  R2  doctor_redacts_malformed_json_sentinel
+  R3  doctor_redacts_unresolved_id_contents
+  R4  prune_rejects_unsupported_schema_without_migrating
+  R5  immediate_transaction_excludes_concurrent_writer
+  R6  prune_noop_and_refusal_stay_zero_write + prune_repeat_stays_idempotent
+  R7  prune_and_doctor_output_stay_secret_safe
+  R8  full-suite regression run (S024–S030 green, re-pinned S030 R6/R7)
 
 stage-A proof (fails on 4c0c49f):
-  R1 R2 R3 R4 failing at baseline: recorded before fixes
+  R1 R2 R3 R4 failing at baseline: recorded before fixes (digest mismatch;
+  sentinel echoed verbatim; per-id items instead of per-cell counts;
+  v5 database migrated then no-op'd instead of refusing)
 
 schema evidence:
   SUPPORTED_SCHEMA_VERSION = 6
@@ -310,18 +313,22 @@ schema evidence:
 
 MCP evidence:
   descriptors: list_findings, get_finding (unchanged)
-  golden payloads: unchanged
+  golden payloads: unchanged (git diff --stat -- src/mcp/ empty)
 
 security/read-only evidence:
-  rollback digest on failed post-health:
-  sentinel sweep over prune/doctor output:
-  unsupported-schema zero-write proof:
+  rollback digest on failed post-health: whole-DB content digest
+  byte-identical (R1); pruned unit fully intact after rollback
+  sentinel sweep over prune/doctor output: clean (R7); doctor dangling
+  lines carry no raw JSON text or unresolved id contents (R2, R3)
+  unsupported-schema zero-write proof: user_version stays 5, no row
+  changes (R4)
 
 gates:
-  cargo fmt --all -- --check
-  cargo clippy --all-targets -- -D warnings
-  cargo test --all-targets
-  git diff --check
+  cargo fmt --all -- --check            PASS
+  cargo clippy --all-targets -- -D warnings PASS
+  cargo test --all-targets              PASS (528: 222 lib, 30 domain,
+                                        226 integration, 50 persistence)
+  git diff --check                      PASS
 ```
 
 ---

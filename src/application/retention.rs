@@ -23,7 +23,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde::Serialize;
 
 use crate::domain::{Scan, ScanStatus};
@@ -42,7 +42,9 @@ pub const KEEP_COMPLETE_DEFAULT: usize = 10;
 /// (S024) meaningful under any accepted flag value.
 pub const MIN_KEEP_COMPLETE: usize = 2;
 
-/// Cap on individually reported dangling JSON references; the remainder is
+/// Cap on individually STORED dangling JSON-reference diagnostics
+/// (SPRINT-031.md §5.2): the scan stops storing at the cap but keeps
+/// scanning and counting problem locations; the remainder beyond the cap is
 /// summarized by `HealthReport::dangling_more`.
 const DANGLING_REPORT_CAP: usize = 20;
 
@@ -144,11 +146,12 @@ pub fn plan_retention(window: RetentionWindow, all_scans: &[Scan]) -> RetentionP
     }
 }
 
-/// Row counts deleted for one scan unit. Counts are taken at deletion time
-/// and cover exactly the seven tables the engine deletes from; the cascaded
-/// link tables (`finding_paths`, `finding_evidence`, `finding_reasons`,
-/// `finding_remediations`, `attack_path_edges`, `attack_path_evidence`) and
-/// the `scans` row itself are not part of the count shape.
+/// Row counts deleted for one scan unit (SPRINT-031.md §5.4). Counts are
+/// taken at deletion time and cover exactly the seven directly deleted
+/// tables — observations, evidence, findings, attack_paths, scan_analyses,
+/// scan_diagnostics, relationship_evidence. Rows removed only by cascade
+/// (the six link tables) and the `scans` row itself are neither counted nor
+/// claimed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct UnitCounts {
     pub observations: u64,
@@ -186,7 +189,9 @@ pub struct PrunedUnitReport {
 /// which reflects SQLite's `changes()` for exactly that statement. This
 /// choice is applied consistently to every counted table: each count is
 /// bound to the statement that produced it, never stale, and never a
-/// separate read.
+/// separate read. Counts cover exactly the seven directly deleted tables;
+/// cascade-deleted link-table rows and the `scans` row itself are not
+/// counted and not claimed (SPRINT-031.md §5.4).
 ///
 /// Global identity surfaces are never touched beyond the unit-scoped
 /// `relationship_evidence` membership delete: `resources` and
@@ -242,19 +247,27 @@ pub(crate) fn delete_scan_units(
     Ok(reports)
 }
 
-/// One unresolvable JSON id reference (SPRINT-030.md §5.3). All persisted
-/// text here passes through `terminal_safe` only at render time.
+/// One unresolvable JSON id reference CELL (SPRINT-031.md §5.2). The DTO
+/// carries structural locations and stable reason codes only: no raw JSON
+/// text and no unresolved id contents ever travel in it, so no renderer can
+/// echo them. One item per problem (row, column) cell, never per id.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DanglingRef {
     /// `finding_reasons` or `finding_remediations`.
     pub table: String,
     /// The JSON id column, in schema order within its table.
     pub column: String,
-    /// The unresolved id (or the raw stored text for unparseable columns).
-    pub id: String,
-    /// `resources` | `relationships` | `attack_paths` | `evidence`, or
-    /// `unparseable` when the column text is not a JSON array of strings.
+    /// The referenced target table; `-` when the cell text is unparseable.
     pub referenced_table: String,
+    /// Stable reason code: `unresolved` or `unparseable`.
+    pub category: String,
+    /// Structural row location; the only persisted value a renderer echoes
+    /// (through `terminal_safe`).
+    pub finding_id: String,
+    /// Structural row position within the finding.
+    pub position: u32,
+    /// Distinct unresolved ids in this cell; 0 when unparseable.
+    pub unresolved_count: u64,
 }
 
 /// Retention counts over all scans.
@@ -275,9 +288,14 @@ pub struct HealthReport {
     pub integrity_ok: bool,
     pub foreign_keys_ok: bool,
     /// Deterministic: `finding_reasons` before `finding_remediations`,
-    /// columns in schema order, capped at the first 20 items.
+    /// rows by `(finding_id, position)`, columns in schema order; the first
+    /// at most [`DANGLING_REPORT_CAP`] problem locations.
     pub dangling_json_refs: Vec<DanglingRef>,
-    /// Dangling references beyond the reported cap.
+    /// Total problem locations, uncapped: collection keeps counting after
+    /// the stored list is full (SPRINT-031.md §5.2).
+    pub dangling_total: u64,
+    /// Problem locations beyond the reported cap (`dangling_total` minus
+    /// the stored count).
     pub dangling_more: u64,
     /// Scan-scoped rows whose `scan_id` has no `scans` row (six tables).
     pub orphan_scan_rows: u64,
@@ -308,10 +326,16 @@ const REMEDIATION_JSON_COLUMNS: &[(&str, &str)] = &[
     ("target_relationship_ids", "relationships"),
 ];
 
-/// `referenced_table` reported for a JSON column whose text cannot be parsed
-/// as an array of string ids. The raw stored text is carried in `id` so the
-/// report stays honest; renderers escape it via `terminal_safe` later.
-const UNPARSEABLE: &str = "unparseable";
+/// Stable reason codes (SPRINT-031.md §5.2): a parseable array with ids
+/// missing from the target set is `unresolved`; text that does not parse as
+/// a JSON array of string ids is `unparseable`.
+const CATEGORY_UNRESOLVED: &str = "unresolved";
+const CATEGORY_UNPARSEABLE: &str = "unparseable";
+
+/// `referenced_table` reported for a cell whose text cannot be parsed as an
+/// array of string ids: the target is unknown and the raw text is never
+/// carried.
+const NO_REFERENCED_TABLE: &str = "-";
 
 /// Total count of scan-scoped rows whose `scan_id` has no `scans` row,
 /// summed across the six scan-scoped tables.
@@ -368,10 +392,8 @@ pub(crate) fn check_health(
         }
     }
 
-    let all_dangling = detect_dangling_json_refs(conn)?;
-    let dangling_more = all_dangling.len().saturating_sub(DANGLING_REPORT_CAP) as u64;
-    let dangling_json_refs: Vec<DanglingRef> =
-        all_dangling.into_iter().take(DANGLING_REPORT_CAP).collect();
+    let (dangling_json_refs, dangling_total) = detect_dangling_json_refs(conn)?;
+    let dangling_more = dangling_total.saturating_sub(dangling_json_refs.len() as u64);
 
     let orphan_scan_rows: i64 = conn
         .query_row(ORPHAN_SCAN_ROWS_SQL, [], |row| row.get(0))
@@ -398,8 +420,7 @@ pub(crate) fn check_health(
     let ok = schema_ok
         && integrity_ok
         && foreign_keys_ok
-        && dangling_json_refs.is_empty()
-        && dangling_more == 0
+        && dangling_total == 0
         && orphan_scan_rows == 0
         && summary_rows == 0;
 
@@ -409,6 +430,7 @@ pub(crate) fn check_health(
         integrity_ok,
         foreign_keys_ok,
         dangling_json_refs,
+        dangling_total,
         dangling_more,
         orphan_scan_rows: orphan_scan_rows as u64,
         summary_rows: summary_rows as u64,
@@ -420,24 +442,35 @@ pub(crate) fn check_health(
     })
 }
 
-/// Detect unresolvable ids in the frozen JSON id columns. Rows are scanned
-/// `finding_reasons` first, then `finding_remediations`, each ordered by
-/// `(finding_id, position)`; columns are checked in schema order; ids are
-/// reported in stored order. A column whose text does not parse as a JSON
-/// array of strings yields one item with `referenced_table = "unparseable"`
-/// carrying the raw text — never a crash, never a silent skip.
-fn detect_dangling_json_refs(conn: &Connection) -> Result<Vec<DanglingRef>, PicoError> {
+/// Detect unresolvable ids in the frozen JSON id columns (SPRINT-031.md
+/// §5.2). Rows are scanned `finding_reasons` first, then
+/// `finding_remediations`, each ordered by `(finding_id, position)`; columns
+/// are checked in schema order. One diagnostic item is produced per problem
+/// CELL, never per id: a cell whose text does not parse as a JSON array of
+/// strings yields one `unparseable` item; a parseable array with ids missing
+/// from the target set yields one `unresolved` item carrying the per-cell
+/// distinct-unresolved-id count. Never a crash, never a silent skip.
+///
+/// Returns the at-most-cap stored diagnostics plus the uncapped total
+/// problem-location count. Storage stops at [`DANGLING_REPORT_CAP`] while
+/// counting continues, so the report stays exact beyond the cap.
+///
+/// Note: the reference-target id sets still load in full — this bounds the
+/// diagnostic SHAPE, not total database memory use.
+fn detect_dangling_json_refs(conn: &Connection) -> Result<(Vec<DanglingRef>, u64), PicoError> {
     let mut existence: HashMap<&'static str, HashSet<String>> = HashMap::new();
     for table in ["resources", "relationships", "attack_paths", "evidence"] {
         existence.insert(table, load_id_set(conn, table)?);
     }
     let mut dangling = Vec::new();
+    let mut total: u64 = 0;
     scan_table_json_refs(
         conn,
         "finding_reasons",
         REASON_JSON_COLUMNS,
         &existence,
         &mut dangling,
+        &mut total,
     )?;
     scan_table_json_refs(
         conn,
@@ -445,17 +478,20 @@ fn detect_dangling_json_refs(conn: &Connection) -> Result<Vec<DanglingRef>, Pico
         REMEDIATION_JSON_COLUMNS,
         &existence,
         &mut dangling,
+        &mut total,
     )?;
-    Ok(dangling)
+    Ok((dangling, total))
 }
 
-/// Scan one table's JSON id columns against the referenced id sets.
+/// Scan one table's JSON id columns against the referenced id sets, storing
+/// at most [`DANGLING_REPORT_CAP`] problem cells and counting every one.
 fn scan_table_json_refs(
     conn: &Connection,
     table: &'static str,
     columns: &'static [(&'static str, &'static str)],
     existence: &HashMap<&'static str, HashSet<String>>,
     dangling: &mut Vec<DanglingRef>,
+    total: &mut u64,
 ) -> Result<(), PicoError> {
     let column_list = columns
         .iter()
@@ -464,33 +500,52 @@ fn scan_table_json_refs(
         .join(", ");
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT finding_id, {column_list} FROM {table} ORDER BY finding_id, position"
+            "SELECT finding_id, position, {column_list} FROM {table}
+             ORDER BY finding_id, position"
         ))
         .map_err(db_err)?;
     let mut rows = stmt.query([]).map_err(db_err)?;
     while let Some(row) = rows.next().map_err(db_err)? {
+        let finding_id: String = row.get(0).map_err(db_err)?;
+        let position: u32 = row.get(1).map_err(db_err)?;
         for (index, (column, referenced)) in columns.iter().enumerate() {
-            let text: String = row.get(index + 1).map_err(db_err)?;
-            match serde_json::from_str::<Vec<String>>(&text) {
-                Ok(ids) => {
-                    let known = &existence[*referenced];
-                    for id in ids {
-                        if !known.contains(&id) {
-                            dangling.push(DanglingRef {
-                                table: table.to_string(),
-                                column: (*column).to_string(),
-                                id,
-                                referenced_table: (*referenced).to_string(),
-                            });
+            let text: String = row.get(index + 2).map_err(db_err)?;
+            let (category, referenced_table, unresolved_count) =
+                match serde_json::from_str::<Vec<String>>(&text) {
+                    Ok(ids) => {
+                        let known = &existence[*referenced];
+                        let unresolved_count = ids
+                            .iter()
+                            .filter(|id| !known.contains(id.as_str()))
+                            .map(|id| id.as_str())
+                            .collect::<HashSet<&str>>()
+                            .len() as u64;
+                        if unresolved_count == 0 {
+                            continue;
                         }
+                        (
+                            CATEGORY_UNRESOLVED.to_string(),
+                            (*referenced).to_string(),
+                            unresolved_count,
+                        )
                     }
-                }
-                Err(_) => dangling.push(DanglingRef {
+                    Err(_) => (
+                        CATEGORY_UNPARSEABLE.to_string(),
+                        NO_REFERENCED_TABLE.to_string(),
+                        0,
+                    ),
+                };
+            *total += 1;
+            if dangling.len() < DANGLING_REPORT_CAP {
+                dangling.push(DanglingRef {
                     table: table.to_string(),
                     column: (*column).to_string(),
-                    id: text,
-                    referenced_table: UNPARSEABLE.to_string(),
-                }),
+                    referenced_table,
+                    category,
+                    finding_id: finding_id.clone(),
+                    position,
+                    unresolved_count,
+                });
             }
         }
     }
@@ -532,29 +587,52 @@ pub struct PruneReport {
     pub nothing_pruned: bool,
 }
 
-/// `pico prune` application service (SPRINT-030.md §5.4). CLI wiring and
-/// rendering are later tasks.
+/// `pico prune` application service (SPRINT-030.md §5.4, corrected by
+/// SPRINT-031.md §5.1). CLI wiring and rendering are later tasks.
 pub struct PruneService;
 
 impl PruneService {
-    /// Apply the retention policy: refuse while any scan is RUNNING, refuse
-    /// on a failing pre-health check, otherwise delete whole scan units
-    /// beyond the window in one all-or-nothing transaction and re-verify
-    /// database health afterwards.
+    /// Apply the retention policy inside ONE immediate write transaction
+    /// (SPRINT-031.md §5.1): validate the window, open the existing state
+    /// without migrating (an unsupported schema fails closed), then inside a
+    /// single `BEGIN IMMEDIATE` snapshot — load the scans, refuse while any
+    /// scan is RUNNING, plan the retention window, gate on a pre-deletion
+    /// health check, delete whole scan units beyond the window in the frozen
+    /// order, and re-verify database health BEFORE committing. Any failure
+    /// rolls back and changes nothing. Unit counts cover exactly the seven
+    /// directly deleted tables; cascade-deleted link rows and the `scans`
+    /// row are not counted or claimed. The report is built entirely from the
+    /// transaction's snapshot.
     pub fn run(workspace: &Path, keep: Option<usize>) -> Result<PruneReport, PicoError> {
         // 1. Validate the window before ANY database work.
         let window = RetentionWindow::resolve(keep)?;
 
-        // 2. Open the existing state with the scan-command pattern.
-        let mut db = Database::open_existing(&workspace.join(".pico").join("pico.db"))?;
-        db.migrate()?;
+        // 2. Open the existing state with the scan-command pattern. Prune
+        //    never migrates: an unsupported schema fails closed below.
+        let db = Database::open_existing(&workspace.join(".pico").join("pico.db"))?;
         let conn = db.connection();
 
-        let scans = ScanRepo::new(conn).list()?;
+        // 3. Fail closed on an unsupported schema, without migrating (the
+        //    remedy stays "run `pico init` to upgrade").
+        require_schema_version(conn)?;
 
-        // 3. Fail closed while any scan is RUNNING: a live scan may still
-        //    write, so prune refuses instead of racing it. Nothing deleted,
-        //    and the refusal happens before any health check.
+        // 4. One immediate write transaction covers the entire decision and
+        //    mutation: BEGIN IMMEDIATE excludes concurrent writers for the
+        //    whole operation, so the RUNNING refusal, the plan, the health
+        //    gates, and the deletion all see one snapshot and no scan can
+        //    start in between. (`Transaction::new_unchecked` is rusqlite's
+        //    `&Connection` constructor for exactly the transaction
+        //    `transaction_with_behavior` builds; the database handle only
+        //    yields a shared connection, and no transaction is open yet.)
+        let tx =
+            Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(db_err)?;
+
+        // 5a. Load all scans inside the transaction snapshot.
+        let scans = ScanRepo::new(&tx).list()?;
+
+        // 5b. Fail closed while any scan is RUNNING: a live scan may still
+        //     write, so prune refuses instead of racing it. Nothing deleted,
+        //     and the refusal happens before any health check.
         if let Some(running) = scans
             .iter()
             .filter(|scan| scan.status == ScanStatus::Running)
@@ -564,31 +642,29 @@ impl PruneService {
                     .then_with(|| a.id.cmp(&b.id))
             })
         {
-            let id = &running.id;
+            let id = running.id.clone();
+            let _ = tx.rollback();
             return Err(PicoError::usage(format!(
                 "cannot prune while scan {id} is RUNNING"
             )));
         }
 
-        // 4. Plan the retention window over all scans.
+        // 5c. Plan the retention window over the snapshot.
         let plan = plan_retention(window, &scans);
 
-        // 5. Pre-health gate: any failing check aborts before any deletion.
-        let pre_health = check_health(conn, window)?;
+        // 5d. Pre-health gate: any failing check aborts before any deletion.
+        let pre_health = check_health(&tx, window)?;
         if !pre_health.ok {
+            let _ = tx.rollback();
             return Err(PicoError::database(
                 "refusing to prune: database health check failed",
             ));
         }
 
-        // 6. Below-window workspace: a no-op is a success, never an error.
+        // 5e. Below-window workspace: a no-op is a success, never an error.
+        //     The transaction performed only reads, so it rolls back.
         if plan.prune_complete.is_empty() && plan.prune_incomplete.is_empty() {
-            let post_health = check_health(conn, window)?;
-            if !post_health.ok {
-                return Err(PicoError::database(
-                    "database health check failed after prune",
-                ));
-            }
+            let _ = tx.rollback();
             return Ok(PruneReport {
                 keep: window.keep,
                 pruned: Vec::new(),
@@ -600,9 +676,7 @@ impl PruneService {
             });
         }
 
-        // 7. One transaction, all-or-nothing: delete the planned units in the
-        //    frozen order, commit, then re-verify health on the committed
-        //    state.
+        // 5f. Delete the planned units in the frozen order, all-or-nothing.
         let by_id: HashMap<&str, &Scan> =
             scans.iter().map(|scan| (scan.id.as_str(), scan)).collect();
         let prune_order: Vec<Scan> = plan
@@ -618,9 +692,6 @@ impl PruneService {
             })
             .collect();
 
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| PicoError::database(e.to_string()))?;
         let pruned = match delete_scan_units(&tx, &prune_order) {
             Ok(reports) => reports,
             Err(error) => {
@@ -628,17 +699,21 @@ impl PruneService {
                 return Err(error);
             }
         };
-        tx.commit()
-            .map_err(|e| PicoError::database(e.to_string()))?;
 
-        let post_health = check_health(conn, window)?;
+        // 5g. THE FIX (SPRINT-031 §1 P1): validate health on the
+        //     transaction's post-deletion state BEFORE committing; a failing
+        //     gate rolls back and deletes nothing.
+        let post_health = check_health(&tx, window)?;
         if !post_health.ok {
+            let _ = tx.rollback();
             return Err(PicoError::database(
                 "database health check failed after prune",
             ));
         }
 
-        // 8. Report.
+        tx.commit().map_err(db_err)?;
+
+        // 6. Report, built from the same snapshot the transaction read.
         let mut totals = UnitCounts::default();
         for report in &pruned {
             totals.observations += report.counts.observations;
@@ -1460,19 +1535,23 @@ mod tests {
         .unwrap();
         assert!(!report.ok);
         assert_eq!(report.dangling_more, 0);
+        assert_eq!(report.dangling_total, 1);
         assert_eq!(
             report.dangling_json_refs,
             vec![DanglingRef {
                 table: "finding_reasons".to_string(),
                 column: "evidence_ids".to_string(),
-                id: "evidence_nonexistent".to_string(),
                 referenced_table: "evidence".to_string(),
+                category: CATEGORY_UNRESOLVED.to_string(),
+                finding_id: "finding_scan_one".to_string(),
+                position: 1,
+                unresolved_count: 1,
             }]
         );
     }
 
     #[test]
-    fn health_reports_unparseable_json_honestly() {
+    fn health_reports_unparseable_json_without_contents() {
         let (_dir, db) = test_db();
         seed_unit(&db, "scan_one", ts(1), Some(ts(1)), ScanStatus::Complete);
         db.connection()
@@ -1493,15 +1572,22 @@ mod tests {
         )
         .unwrap();
         assert!(!report.ok);
+        // The unparseable cell reports one bounded location with the
+        // `unparseable` reason code — never the raw stored text.
         assert_eq!(
             report.dangling_json_refs,
             vec![DanglingRef {
                 table: "finding_reasons".to_string(),
                 column: "evidence_ids".to_string(),
-                id: "not json".to_string(),
-                referenced_table: "unparseable".to_string(),
+                referenced_table: NO_REFERENCED_TABLE.to_string(),
+                category: CATEGORY_UNPARSEABLE.to_string(),
+                finding_id: "finding_scan_one".to_string(),
+                position: 2,
+                unresolved_count: 0,
             }]
         );
+        assert_eq!(report.dangling_total, 1);
+        assert_eq!(report.dangling_more, 0);
     }
 
     #[test]
@@ -1532,17 +1618,21 @@ mod tests {
         .unwrap();
         assert!(!report.ok);
         assert_eq!(report.dangling_json_refs.len(), DANGLING_REPORT_CAP);
+        assert_eq!(report.dangling_total, 25);
         assert_eq!(report.dangling_more, 5);
         assert_eq!(
             report.dangling_json_refs[0],
             DanglingRef {
                 table: "finding_reasons".to_string(),
                 column: "evidence_ids".to_string(),
-                id: "evidence_missing_01".to_string(),
                 referenced_table: "evidence".to_string(),
+                category: CATEGORY_UNRESOLVED.to_string(),
+                finding_id: "finding_scan_one".to_string(),
+                position: 1,
+                unresolved_count: 1,
             }
         );
-        assert_eq!(report.dangling_json_refs[19].id, "evidence_missing_20");
+        assert_eq!(report.dangling_json_refs[19].position, 20);
     }
 
     #[test]

@@ -525,11 +525,13 @@ adds local retention, pruning, and database-health controls that delete
 whole coherent scan units beyond a bounded window and never fabricate
 disappearance. This is not v0.4 complete.
 
-**Post-S030 review and proposed closeout:**
-[v0.4 closeout plan](sprints/V0.4-CLOSEOUT-PLAN.md) records two reproduced retention/
-diagnostic defects and a concurrency gap to correct before expansion, then
-sequences attribution, stable JSON output, MCP history/diff, and independent
-comprehension. Proposed S031–S035 are planning scope, not completed work.
+**Post-S030 review and closeout:**
+[v0.4 closeout plan](sprints/V0.4-CLOSEOUT-PLAN.md) recorded two reproduced
+retention/diagnostic defects and a concurrency gap. Sprint 031 corrected
+them (fail-closed prune transaction, redacted diagnostics, immediate
+write-transaction concurrency). The plan sequences attribution (S032),
+stable JSON output (S033), MCP history/diff (S034), and independent
+comprehension (S035). S032–S035 remain planning scope, not completed work.
 
 Authoritative slice scope:
 `docs/internal/sprints/SPRINT-024-support-note.md`,
@@ -1008,7 +1010,7 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
-v0.4  Security memory              IN PROGRESS (S024–S030 DONE)
+v0.4  Security memory              IN PROGRESS (S024–S031 DONE; closeout S032–S035 planned)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and

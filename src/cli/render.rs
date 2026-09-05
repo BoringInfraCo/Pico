@@ -819,15 +819,20 @@ fn health_line(label: &str, ok: bool) -> String {
     format!("{label}: {}\n", if ok { "ok" } else { "FAILED" })
 }
 
-/// Renders `pico doctor` (SPRINT-030.md §5.3/§5.4).
+/// Renders `pico doctor` (SPRINT-030.md §5.3/§5.4, corrected by
+/// SPRINT-031.md §5.2/§5.3).
 ///
-/// Deterministic and terminal-safe: every persisted string (dangling-reference
-/// table, column, id, referenced table, retained scan ids) passes through
-/// `terminal_safe`; integers and booleans render as plain words. The renderer
-/// is total: every field of the health report is renderable, including an
-/// unsupported schema version, failing integrity/foreign-key checks (frozen as
-/// `FAILED`), a capped dangling-reference list with a summary remainder line,
-/// and a retention window with no COMPLETE scans (`none` placeholders). The
+/// Deterministic and terminal-safe: the only persisted value rendered (the
+/// dangling-reference structural `finding_id`, retained scan ids) passes
+/// through `terminal_safe`; integers and booleans render as plain words.
+/// Dangling diagnostics carry stable reason codes and bounded structural
+/// locations only — no field of the report holds raw JSON text or unresolved
+/// id contents, so the output can never echo them. The renderer is total:
+/// every field of the health report is renderable, including an unsupported
+/// schema version, failing integrity/foreign-key checks (frozen as `FAILED`),
+/// a capped dangling-location list with a summary remainder line, and a
+/// retention window with no COMPLETE scans (`none` placeholders). The window
+/// line separates the policy window from the scans actually present. The
 /// PRAGMA detail strings (`integrity_check` rows, `foreign_key_check` rows)
 /// are deliberately not echoed — the boolean outcome is enough to stay
 /// deterministic and secret-free. The report states observed facts only: it
@@ -858,21 +863,33 @@ pub fn render_doctor_report(report: &HealthReport) -> String {
             "FAILED"
         }
     ));
-    if report.dangling_json_refs.is_empty() {
+    if report.dangling_total == 0 {
         out.push_str("Dangling references: none\n");
     } else {
-        out.push_str(&format!(
-            "Dangling references: {}\n",
-            report.dangling_json_refs.len()
-        ));
+        out.push_str(&format!("Dangling references: {}\n", report.dangling_total));
         for dangling in &report.dangling_json_refs {
-            out.push_str(&format!(
-                "  {}/{}: {} (unresolved in {})\n",
-                terminal_safe(&dangling.table),
-                terminal_safe(&dangling.column),
-                terminal_safe(&dangling.id),
-                terminal_safe(&dangling.referenced_table)
-            ));
+            // Only the structural `finding_id` is a persisted value; table,
+            // column, and referenced table are frozen constants, and the
+            // count and position are integers — no id contents anywhere.
+            let location = format!(
+                "at finding_id={} position={}",
+                terminal_safe(&dangling.finding_id),
+                dangling.position
+            );
+            match dangling.category.as_str() {
+                "unparseable" => out.push_str(&format!(
+                    "  {}/{}: unparseable JSON {}\n",
+                    dangling.table, dangling.column, location
+                )),
+                _ => out.push_str(&format!(
+                    "  {}/{}: {} unresolved {} id(s) {}\n",
+                    dangling.table,
+                    dangling.column,
+                    dangling.unresolved_count,
+                    dangling.referenced_table,
+                    location
+                )),
+            }
         }
         if report.dangling_more > 0 {
             out.push_str(&format!("  ... and {} more\n", report.dangling_more));
@@ -885,8 +902,10 @@ pub fn render_doctor_report(report: &HealthReport) -> String {
         report.counts.complete, report.counts.partial, report.counts.failed, report.counts.running
     ));
     out.push_str(&format!(
-        "Retention window: keep {} COMPLETE scans; oldest retained {}; newest {}\n",
+        "Retention window: policy keep {} COMPLETE scans; workspace has {} \
+         COMPLETE scans; oldest retained {}; newest {}\n",
         report.window_keep,
+        report.counts.complete,
         report
             .oldest_retained_complete
             .as_deref()
