@@ -1,7 +1,7 @@
 # Pico — Product Roadmap
 
 **File:** `ROADMAP.md`  
-**Status:** Implemented through v0.3 (advancement records §§20–22); v0.4 started (SPRINT-024); v0.3 exit review pending  
+**Status:** Implemented through v0.3 (advancement records §§20–22); v0.4 in progress (S024–S033 done, S034 code-done, S035 PARTIAL/HOLD); v0.3 exit review pending
 **Date:** August 18, 2026  
 **Stage:** Post-architecture, implementation in progress (v0.1–v0.3 shipped; v0.4 in progress; see §§20–22)  
 **Depends on:** `PRODUCT_DEFINITION.md`, `TECHNICAL.md`, `ARCHITECTURE.md`
@@ -461,7 +461,7 @@ The central claim is:
 
 ## Scope
 
-- Compare coherent completed or partial scan snapshots.
+- Compare coherent COMPLETE scan snapshots only; incomplete attempts (PARTIAL/FAILED/RUNNING) are freshness context, never diff operands.
 - Track first seen, last seen, changed, disappeared, and reappeared resources and relationships.
 - Detect security-significant changes in influence, capability, credential reachability, authority, scope, boundaries, attack paths, findings, severity, and confidence.
 - Distinguish real change from collection failure, stale evidence, out-of-scope discovery, and identity churn.
@@ -489,14 +489,14 @@ The central claim is:
 
 ## Exit criteria
 
-- Unchanged environments produce no security-significant diff.
-- Permission, approval, credential scope, resource scope, MCP availability, and authority changes produce expected deterministic diffs.
-- Pico identifies when an active path first appeared and the smallest observed security-significant cause.
-- Collection failure or reduced scan scope is never presented as remediation or disappearance.
-- Finding lifecycle transitions remain stable across repeated scans and tool upgrades, or migrations explicitly account for analysis-version changes.
+- Unchanged environments produce no security-significant diff (timestamps or evidence row identity alone do not invent an environment change).
+- Permission, approval, credential scope, resource scope, MCP availability, and authority changes produce expected deterministic diffs with S032 attribution (observed environment / evidence / mixed / unattributed) and S029 comparison-contract gating.
+- Pico identifies when an active path first appeared (relative to the retained COMPLETE window only) and the smallest observed security-significant cause; ambiguous multi-change cases never invent a unique cause.
+- Collection failure or reduced scan scope is never presented as remediation or disappearance (unconfirmed absence stays `not_observed` with `disappearance_confirmed` unset; no remediation claim).
+- Finding lifecycle transitions (weakened / strengthened / uncertain via family fingerprint) remain stable across repeated scans and tool upgrades, or migrations explicitly account for analysis-version changes; contract changes return explicit `NotComparable`, never ordinary lifecycle movement.
 - Local history remains usable under a defined retention window without exposing secrets.
 - Developers can distinguish "the environment changed" from "Pico's evidence changed" and "Pico's analysis version changed."
-- Machine-readable diffs are stable enough for later automation without exposing SQLite internals as an API.
+- Machine-readable diffs (schema v1: `ready` / `insufficient_history` / `not_comparable` / `error`, never empty-arrays-as-all-clear) are stable enough for later automation without exposing SQLite internals as an API.
 
 ## What must be learned before advancing
 
@@ -523,15 +523,25 @@ comparison-contract guard so graph, analysis, or Finding contract changes
 cannot masquerade as ordinary lifecycle or environment changes. Sprint 030
 adds local retention, pruning, and database-health controls that delete
 whole coherent scan units beyond a bounded window and never fabricate
-disappearance. This is not v0.4 complete.
+disappearance. Sprint 031 corrects S030 retention/diagnostic defects
+(fail-closed prune inside one immediate transaction, redacted doctor
+diagnostics, no-migrate schema refusal). Sprint 032 adds conservative
+observed-change attribution (environment / evidence / mixed / unattributed
+with coverage v1 and separate side provenance; S029 still gates first).
+Sprint 033 adds stable `pico diff [<from> <to>] --json` and
+`pico history --json` (public schema v1). Sprint 034 adds read-only MCP
+`list_history` and `diff_scans` over the same public payloads. Sprint 035
+is controlled evidence plus the independent comprehension gate (PARTIAL/HOLD).
+This is not v0.4 complete.
 
 **Post-S030 review and closeout:**
 [v0.4 closeout plan](sprints/V0.4-CLOSEOUT-PLAN.md) recorded two reproduced
 retention/diagnostic defects and a concurrency gap. Sprint 031 corrected
 them (fail-closed prune transaction, redacted diagnostics, immediate
-write-transaction concurrency). The plan sequences attribution (S032),
-stable JSON output (S033), MCP history/diff (S034), and independent
-comprehension (S035). S032–S035 remain planning scope, not completed work.
+write-transaction concurrency). Attribution delivered per SPRINT-032:3,
+stable JSON output delivered per SPRINT-033:3, MCP history/diff code-done
+per SPRINT-034:3, and evidence/comprehension PARTIAL/HOLD per
+SPRINT-035:3. No ADVANCE claimed; the independent gate remains open.
 
 Authoritative slice scope:
 `docs/internal/sprints/SPRINT-024-support-note.md`,
@@ -539,8 +549,13 @@ Authoritative slice scope:
 `docs/internal/sprints/SPRINT-026.md`,
 `docs/internal/sprints/SPRINT-027.md`,
 `docs/internal/sprints/SPRINT-028.md`,
-`docs/internal/sprints/SPRINT-029.md`, and
-`docs/internal/sprints/SPRINT-030.md`.
+`docs/internal/sprints/SPRINT-029.md`,
+`docs/internal/sprints/SPRINT-030.md`,
+`docs/internal/sprints/SPRINT-031.md`,
+`docs/internal/sprints/SPRINT-032.md`,
+`docs/internal/sprints/SPRINT-033.md`,
+`docs/internal/sprints/SPRINT-034.md`, and
+`docs/internal/sprints/SPRINT-035.md`.
 
 ---
 
@@ -1010,7 +1025,7 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
-v0.4  Security memory              IN PROGRESS (S024–S031 DONE; closeout S032–S035 planned)
+v0.4  Security memory              IN PROGRESS (S024–S033 DONE; S034 code-done; S035 PARTIAL/HOLD)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and

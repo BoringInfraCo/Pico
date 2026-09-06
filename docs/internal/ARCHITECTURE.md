@@ -6241,7 +6241,20 @@ This view embodies Pico's evidence-first product philosophy.
 
 ## 23.6 Machine-readable output
 
-Core commands should eventually support structured output.
+`pico diff [<from> <to>] --json` and `pico history --json` (S033) emit exactly
+one versioned JSON document plus a newline per invocation (public schema v1:
+`docs/public/output-v1.schema.json`, consumer contract
+`docs/public/JSON-OUTPUT.md`). Envelope fields are `schema_version: 1`,
+`command`, and `status` (`ready` / `insufficient_history` /
+`not_comparable` / `error`); explicit-pair freshness is `not_assessed`,
+latest reads retain `latest_complete` / `newer_incomplete_attempt`, and
+first-seen/reappearance is relative to retained COMPLETE history only.
+Unconfirmed absence is `not_observed`, never an all-clear. The projection
+uses allowlisted fields and shared output DTOs separate from
+application/persistence types; raw metadata, snapshots, credential contents,
+and database exception text are excluded.
+
+Other core commands may eventually support structured output.
 
 Preferred:
 
@@ -6249,7 +6262,7 @@ Preferred:
 --json
 ```
 
-The JSON representation should expose stable application-level DTOs rather than dumping SQLite rows.
+For those future commands, the JSON representation should expose stable application-level DTOs rather than dumping SQLite rows.
 
 This enables:
 
@@ -6328,35 +6341,29 @@ The MCP server does not implement separate security reasoning.
 
 ## 24.2 Initial MCP capability
 
-V0 should expose the minimum capabilities required for agent-native use.
-
-Candidate tools:
+V0 exposes exactly four read-only tools (S034, over the S033 public
+projection with the fixed server workspace; clients cannot supply paths or
+SQL):
 
 ```text
-scan
-
 list_findings
 
 get_finding
 
-get_security_context
+list_history
+
+diff_scans
 ```
 
-However, we should be conservative about exposing a tool that automatically initiates broad scans.
-
-A safer initial surface may be:
-
-```text
-get_status
-
-list_findings
-
-get_finding
-
-scan
-```
-
-with clear read-only semantics.
+Both new tools advertise `readOnlyHint`. `list_history` accepts omitted
+arguments or an empty object; `diff_scans` accepts omitted arguments/an empty
+object for latest-two comparison, or exactly two nonblank string keys `from`
+and `to`. Query limitations (`insufficient_history` / `NotComparable`) are
+successful typed results, never an all-clear. The pre-v0.4 candidate surface
+(`scan`, `get_security_context`, `get_status`) was not shipped; no scan
+trigger, prune/doctor write operation, or arbitrary database query is exposed.
+Original `list_findings` / `get_finding` descriptors and payloads stay
+compatible.
 
 ---
 
@@ -7455,6 +7462,16 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   legacy coverage do not establish disappearance. Evidence IDs and supported
   fields remain separate for each side. Collection scope records are safe
   versioned scan metadata; SQLite stays v6. S029 still gates comparisons first.
+  Coverage v1 labels each bounded local candidate location
+  `inspected` / `incomplete` / `not_attempted` (missing home is explicitly
+  `not_attempted`); provider enumeration stays `unknown` and never proves
+  exhaustive collection. Legacy or malformed coverage stays `unknown`;
+  COMPLETE never upgrades it. Mixed-strict rule: OpenCode `allow→ask` and
+  `ask→deny` are `mixed` (paired field observation plus knowledge change;
+  the deny step also stops conditional provider collection, so no
+  remediation is claimed), while the supported isolated Claude `allow→deny`
+  is `observed_environment_change`; a deny with stopped provider collection
+  stays `mixed` with aggregate separate-side provenance.
 - Public output (S033): diff/history `--json` project explicit public DTOs
   through `src/output.rs`, with public schema version 1 independent of SQLite
   and comparison versions. Empty history, insufficient history, non-comparable
