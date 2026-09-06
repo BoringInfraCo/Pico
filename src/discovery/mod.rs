@@ -5,6 +5,7 @@
 
 pub mod agents;
 pub mod cloudflare;
+pub mod coverage;
 pub mod github;
 pub mod mcp;
 
@@ -185,6 +186,7 @@ pub struct ObservedCredential {
 /// Results from the bounded set of discovery adapters enabled by this release.
 #[derive(Debug, Default)]
 pub struct DiscoveryResult {
+    pub coverage: Vec<coverage::CoverageEntry>,
     pub actors: Vec<ObservedActor>,
     pub bash_capabilities: Vec<ObservedBashCapability>,
     pub mcp_servers: Vec<ObservedMcpServer>,
@@ -229,6 +231,7 @@ pub fn discover_with_environment(
 /// adapter contributes `credentials` and `cloudflare`, so those fields are
 /// preserved from the OpenCode result untouched.
 fn merge_results(mut opencode: DiscoveryResult, claude: DiscoveryResult) -> DiscoveryResult {
+    opencode.coverage.extend(claude.coverage);
     opencode.actors.extend(claude.actors);
     opencode.bash_capabilities.extend(claude.bash_capabilities);
     opencode.mcp_servers.extend(claude.mcp_servers);

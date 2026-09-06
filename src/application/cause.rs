@@ -28,11 +28,11 @@ pub struct FindingCause {
     pub evidence_source_types: Vec<String>,
 }
 
-struct FindingKeys {
+pub(crate) struct FindingKeys {
     source: Option<String>,
     actor: Option<String>,
     sink: Option<String>,
-    keys: BTreeSet<String>,
+    pub(crate) keys: BTreeSet<String>,
 }
 
 /// Attach a primary cause to appeared and disappeared Findings.
@@ -84,7 +84,10 @@ pub fn attach_causes(
     Ok(())
 }
 
-fn load_finding_keys(conn: &Connection, finding_id: &str) -> Result<FindingKeys, PicoError> {
+pub(crate) fn load_finding_keys(
+    conn: &Connection,
+    finding_id: &str,
+) -> Result<FindingKeys, PicoError> {
     let finding_repo = FindingRepo::new(conn);
     let paths_repo = AttackPathRepo::new(conn);
     let resources = ResourceRepo::new(conn);
@@ -356,7 +359,7 @@ fn evidence_types(conn: &Connection, scan_id: &str, key: &str) -> Result<Vec<Str
     }
     let mut types = Vec::new();
     for item in EvidenceRepo::new(conn).get_for_scan(scan_id)? {
-        if item.subject == key || item.subject.contains(key) {
+        if item.subject == key {
             types.push(item.source_type);
         }
     }

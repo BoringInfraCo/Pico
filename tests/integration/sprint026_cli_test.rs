@@ -495,7 +495,7 @@ fn findings_section_byte_contract_from_s024_s025() {
     let findings = findings_section(&rendered);
     assert!(findings.contains("Unchanged: 1"));
     assert!(findings.contains("Appeared:  0"));
-    assert!(findings.contains("Disappeared: 0"));
+    assert!(findings.contains("Not observed: 0"));
     assert!(findings.contains("No security-significant finding change."));
     assert!(!findings.contains("This is not an all-clear."));
     assert!(!findings.contains("Resources"));

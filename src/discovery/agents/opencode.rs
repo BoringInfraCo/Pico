@@ -87,6 +87,13 @@ pub fn discover_with_environment(
     environment_reachability: EnvironmentReachability,
 ) -> Result<DiscoveryResult, PicoError> {
     let mut result = DiscoveryResult::default();
+    if home.is_none() {
+        result
+            .coverage
+            .push(crate::discovery::coverage::CoverageEntry::omitted_home(
+                "opencode",
+            ));
+    }
     let mut candidates = Vec::new();
     if let Some(home) = home {
         candidates.extend(user_candidates(home));
@@ -97,6 +104,11 @@ pub fn discover_with_environment(
     let mut locators = Vec::new();
 
     for (path, locator) in candidates {
+        result
+            .coverage
+            .push(crate::discovery::coverage::CoverageEntry::candidate(
+                "opencode", &locator, &path,
+            ));
         if !path.is_file() {
             continue;
         }
@@ -110,7 +122,12 @@ pub fn discover_with_environment(
                     source_locator: locator,
                 });
             }
-            Err(problem) => result.problems.push(format!("{locator}: {problem}")),
+            Err(problem) => {
+                if let Some(entry) = result.coverage.last_mut() {
+                    entry.state = crate::discovery::coverage::CoverageState::Incomplete;
+                }
+                result.problems.push(format!("{locator}: {problem}"));
+            }
         }
     }
 

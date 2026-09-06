@@ -71,6 +71,7 @@ pub struct FindingDiff {
     pub strengthened: Vec<FindingLifecycleChange>,
     pub uncertain: Vec<FindingLifecycleChange>,
     pub graph: GraphDiff,
+    pub attribution: crate::application::ComparisonAttribution,
 }
 
 /// How the comparison pair was selected.
@@ -206,6 +207,9 @@ impl DiffService {
                         &mut diff.disappeared,
                         &diff.graph,
                     )?;
+                    crate::application::attribution::attach_attribution(
+                        conn, &from_scan, &to_scan, &mut diff,
+                    )?;
                     Ok(FindingDiffResult::Ready(diff))
                 }
             }
@@ -272,6 +276,9 @@ impl DiffService {
                                 &mut diff.appeared,
                                 &mut diff.disappeared,
                                 &diff.graph,
+                            )?;
+                            crate::application::attribution::attach_attribution(
+                                conn, from, to, &mut diff,
                             )?;
                             Ok(FindingDiffResult::Ready(diff))
                         }
@@ -562,6 +569,7 @@ fn compare(
         strengthened,
         uncertain,
         graph,
+        attribution: Default::default(),
     }
 }
 

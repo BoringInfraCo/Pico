@@ -155,7 +155,7 @@ fn lifecycle_section<'a>(rendered: &'a str, heading: &str) -> &'a str {
     let rest = &rendered[start..];
     let end = [
         "\nAppeared\n",
-        "\nDisappeared\n",
+        "\nNot observed\n",
         "\nWeakened\n",
         "\nStrengthened\n",
         "\nUncertain\n",
@@ -389,7 +389,7 @@ fn counts_contract() {
     let findings = findings_section(&rendered);
     assert!(findings.contains("Unchanged: 1"));
     assert!(findings.contains("Appeared:  0"));
-    assert!(findings.contains("Disappeared: 0"));
+    assert!(findings.contains("Not observed: 0"));
     assert!(findings.contains("Weakened: 0"));
     assert!(findings.contains("Strengthened: 0"));
     assert!(findings.contains("Uncertain: 0"));

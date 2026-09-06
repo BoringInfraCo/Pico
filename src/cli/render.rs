@@ -977,7 +977,7 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
     out.push_str("\nFindings\n");
     out.push_str(&format!("  Unchanged: {}\n", diff.unchanged.len()));
     out.push_str(&format!("  Appeared:  {}\n", diff.appeared.len()));
-    out.push_str(&format!("  Disappeared: {}\n", diff.disappeared.len()));
+    out.push_str(&format!("  Not observed: {}\n", diff.disappeared.len()));
     out.push_str(&format!("  Weakened: {}\n", diff.weakened.len()));
     out.push_str(&format!("  Strengthened: {}\n", diff.strengthened.len()));
     out.push_str(&format!("  Uncertain: {}\n", diff.uncertain.len()));
@@ -989,7 +989,7 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
         }
     }
     if !diff.disappeared.is_empty() {
-        out.push_str("\nDisappeared\n");
+        out.push_str("\nNot observed\n");
         for finding in &diff.disappeared {
             push_diff_finding(&mut out, finding);
         }
@@ -1035,6 +1035,41 @@ fn render_ready_diff(diff: &FindingDiff) -> String {
         "Relationships",
         &diff.graph.relationships,
     ));
+    if !diff.disappeared.is_empty()
+        || !diff.graph.resources.disappeared.is_empty()
+        || !diff.graph.relationships.disappeared.is_empty()
+    {
+        out.push_str("\nNot observed means not observed in the newer scan; remediation is not established.\n");
+    }
+    if !diff.attribution.graph_changes.is_empty() || !diff.attribution.finding_changes.is_empty() {
+        out.push_str("\nObserved-change attribution\n");
+        for change in diff
+            .attribution
+            .graph_changes
+            .iter()
+            .chain(&diff.attribution.finding_changes)
+        {
+            let class = match change.classification {
+                crate::application::AttributionClass::ObservedEnvironmentChange => {
+                    "observed environment change"
+                }
+                crate::application::AttributionClass::EvidenceChange => "evidence change",
+                crate::application::AttributionClass::Mixed => "mixed",
+                crate::application::AttributionClass::Unattributed => "unattributed",
+            };
+            out.push_str(&format!(
+                "  {}: {} ({})\n",
+                terminal_safe(&change.key),
+                class,
+                terminal_safe(&change.reasons.join(", "))
+            ));
+            for (label, side) in [("Before", &change.before), ("After", &change.after)] {
+                out.push_str(&format!("    {label}: coverage {:?}; sources [{}]; supported fields [{}]; evidence [{}]\n",
+                    side.coverage, terminal_safe(&side.source_types.join(", ")),
+                    terminal_safe(&side.supported_fields.join(", ")), terminal_safe(&side.evidence_ids.join(", "))));
+            }
+        }
+    }
     out
 }
 
@@ -1046,11 +1081,11 @@ fn render_graph_subject_diff(title: &str, diff: &GraphSubjectDiff) -> String {
     out.push_str(&format!("  First seen: {}\n", diff.first_seen.len()));
     out.push_str(&format!("  Reappeared: {}\n", diff.reappeared.len()));
     out.push_str(&format!("  Changed: {}\n", diff.changed.len()));
-    out.push_str(&format!("  Disappeared: {}\n", diff.disappeared.len()));
+    out.push_str(&format!("  Not observed: {}\n", diff.disappeared.len()));
     push_graph_bucket(&mut out, "First seen", &diff.first_seen);
     push_graph_bucket(&mut out, "Reappeared", &diff.reappeared);
     push_graph_bucket(&mut out, "Changed", &diff.changed);
-    push_graph_bucket(&mut out, "Disappeared", &diff.disappeared);
+    push_graph_bucket(&mut out, "Not observed", &diff.disappeared);
     out
 }
 

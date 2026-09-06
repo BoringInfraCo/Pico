@@ -4,7 +4,9 @@
 //! coordinate domain and persistence. See SPRINT-001.md §6 (Interface
 //! separation).
 
+pub mod attribution;
 pub mod cause;
+pub use attribution::{AttributionClass, ChangeAttribution, ComparisonAttribution, SideEvidence};
 pub mod compare_contract;
 pub mod diff;
 pub mod findings;

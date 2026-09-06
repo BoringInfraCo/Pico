@@ -222,6 +222,17 @@ impl ScanService {
         if github_result.is_some() {
             discovered.github = github_result;
         }
+        if let Some(serde_json::Value::Object(metadata)) = &mut scan.metadata {
+            metadata.insert(
+                "coverage".into(),
+                serde_json::json!({
+                    "version": 1,
+                    "entries": discovered.coverage,
+                    "provider_enumeration": "unknown",
+                    "credential_enumeration": "unknown"
+                }),
+            );
+        }
         let resource_repo = ResourceRepo::new(db.connection());
         let evidence_repo = EvidenceRepo::new(db.connection());
         let observation_repo = ObservationRepo::new(db.connection());
@@ -416,6 +427,7 @@ impl ScanService {
                     "supported GitHub MCP server configured but disabled"
                 },
                 serde_json::json!({
+                    "enabled": surface.server.enabled,
                     "transport": surface.server.transport.as_str(),
                     "identity": surface.server.safe_identity,
                     "endpoint": surface.server.safe_endpoint,

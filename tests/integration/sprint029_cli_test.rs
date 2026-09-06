@@ -247,7 +247,7 @@ fn assert_no_comparison_claims(rendered: &str) {
         "Cause: ",
         "  Unchanged:",
         "  Appeared:",
-        "  Disappeared:",
+        "  Not observed:",
         "  Weakened:",
         "  Strengthened:",
         "  Uncertain:",
@@ -356,7 +356,7 @@ fn current_contract_pair_is_comparable() {
          \nFindings\n\
          \x20 Unchanged: 0\n\
          \x20 Appeared:  0\n\
-         \x20 Disappeared: 0\n\
+         \x20 Not observed: 0\n\
          \x20 Weakened: 1\n\
          \x20 Strengthened: 0\n\
          \x20 Uncertain: 0\n",

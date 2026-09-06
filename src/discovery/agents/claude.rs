@@ -36,6 +36,13 @@ const MCP_CONFIG_NAME: &str = ".mcp.json";
 /// Discover a configured Claude Code actor from exact documented locations.
 pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult, PicoError> {
     let mut result = DiscoveryResult::default();
+    if home.is_none() {
+        result
+            .coverage
+            .push(crate::discovery::coverage::CoverageEntry::omitted_home(
+                "claude",
+            ));
+    }
 
     let mut candidates = Vec::new();
     if let Some(home) = home {
@@ -46,6 +53,11 @@ pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult
     let mut settings = Value::Object(Default::default());
     let mut settings_locators = Vec::new();
     for (path, locator) in candidates {
+        result
+            .coverage
+            .push(crate::discovery::coverage::CoverageEntry::candidate(
+                "claude", &locator, &path,
+            ));
         if !path.is_file() {
             continue;
         }
@@ -59,13 +71,23 @@ pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult
                     source_locator: locator,
                 });
             }
-            Err(problem) => result.problems.push(format!("{locator}: {problem}")),
+            Err(problem) => {
+                if let Some(entry) = result.coverage.last_mut() {
+                    entry.state = crate::discovery::coverage::CoverageState::Incomplete;
+                }
+                result.problems.push(format!("{locator}: {problem}"));
+            }
         }
     }
 
     let mut mcp_config = Value::Object(Default::default());
     let mut mcp_locator = None;
     for (path, locator) in mcp_candidates(workspace) {
+        result
+            .coverage
+            .push(crate::discovery::coverage::CoverageEntry::candidate(
+                "claude", &locator, &path,
+            ));
         if !path.is_file() {
             continue;
         }
@@ -74,7 +96,12 @@ pub fn discover(workspace: &Path, home: Option<&Path>) -> Result<DiscoveryResult
                 merge_json(&mut mcp_config, config);
                 mcp_locator = Some(locator);
             }
-            Err(problem) => result.problems.push(format!("{locator}: {problem}")),
+            Err(problem) => {
+                if let Some(entry) = result.coverage.last_mut() {
+                    entry.state = crate::discovery::coverage::CoverageState::Incomplete;
+                }
+                result.problems.push(format!("{locator}: {problem}"));
+            }
         }
     }
 

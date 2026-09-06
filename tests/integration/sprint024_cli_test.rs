@@ -191,7 +191,7 @@ fn complete_scan_without_finding_reports_disappeared() {
     assert_eq!(comparison.appeared.len(), 0);
     assert_eq!(comparison.disappeared.len(), 1);
     let rendered = render_finding_diff(&FindingDiffResult::Ready(comparison));
-    assert!(rendered.contains("Disappeared"));
+    assert!(rendered.contains("Not observed"));
     assert!(!rendered.contains("No security-significant finding change."));
 }
 

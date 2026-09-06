@@ -62,6 +62,17 @@ pub struct GraphDelta {
     pub field: String,
     pub from: String,
     pub to: String,
+    pub before: TypedValue,
+    pub after: TypedValue,
+}
+
+/// Typed snapshot field; missing and JSON null carry different meanings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", content = "value", rename_all = "snake_case")]
+pub enum TypedValue {
+    Missing,
+    Null,
+    Value(Value),
 }
 
 /// Lifecycle buckets for one subject type.
@@ -391,26 +402,43 @@ fn relationship_deltas(from: &Relationship, to: &Relationship) -> Vec<GraphDelta
 
 fn metadata_deltas(deltas: &mut Vec<GraphDelta>, from: Option<&Value>, to: Option<&Value>) {
     for field in METADATA_KEYS {
-        let left = field_text(from, field);
-        let right = field_text(to, field);
-        match (left, right) {
-            (None, None) => {}
-            (Some(from_value), Some(to_value)) if from_value == to_value => {}
-            (from_value, to_value) => deltas.push(GraphDelta {
+        let before = typed_field(from, field);
+        let after = typed_field(to, field);
+        if before != after {
+            deltas.push(GraphDelta {
                 field: (*field).to_string(),
-                from: from_value.unwrap_or_else(|| "—".to_string()),
-                to: to_value.unwrap_or_else(|| "—".to_string()),
-            }),
+                from: typed_text(&before),
+                to: typed_text(&after),
+                before,
+                after,
+            });
         }
     }
 }
 
-fn field_text(metadata: Option<&Value>, field: &str) -> Option<String> {
-    let value = metadata?.get(field)?;
-    if value.is_null() {
-        return None;
+pub(crate) fn typed_field(metadata: Option<&Value>, field: &str) -> TypedValue {
+    match metadata.and_then(|value| value.get(field)) {
+        None => TypedValue::Missing,
+        Some(Value::Null) => TypedValue::Null,
+        Some(value) => {
+            let mut value = value.clone();
+            if matches!(field, "granted_permissions" | "unknown_reasons") {
+                if let Value::Array(values) = &mut value {
+                    values.sort_by_key(Value::to_string);
+                    values.dedup();
+                }
+            }
+            TypedValue::Value(value)
+        }
     }
-    Some(value_text(value))
+}
+
+fn typed_text(value: &TypedValue) -> String {
+    match value {
+        TypedValue::Missing => "—".to_string(),
+        TypedValue::Null => "null".to_string(),
+        TypedValue::Value(value) => value_text(value),
+    }
 }
 
 fn value_text(value: &Value) -> String {
@@ -428,6 +456,8 @@ fn push_delta(deltas: &mut Vec<GraphDelta>, field: &str, from: &str, to: &str) {
             field: field.to_string(),
             from: from.to_string(),
             to: to.to_string(),
+            before: TypedValue::Value(Value::String(from.to_string())),
+            after: TypedValue::Value(Value::String(to.to_string())),
         });
     }
 }
@@ -441,5 +471,42 @@ fn sort_subjects(diff: &mut GraphSubjectDiff) {
         &mut diff.disappeared,
     ] {
         bucket.sort_by(|left, right| left.canonical_key.cmp(&right.canonical_key));
+    }
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn missing_null_and_present_values_remain_distinct() {
+        let mut deltas = vec![];
+        metadata_deltas(
+            &mut deltas,
+            Some(&json!({})),
+            Some(&json!({"enabled": null})),
+        );
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].before, TypedValue::Missing);
+        assert_eq!(deltas[0].after, TypedValue::Null);
+        let mut deltas = vec![];
+        metadata_deltas(
+            &mut deltas,
+            Some(&json!({"enabled": "true"})),
+            Some(&json!({"enabled": true})),
+        );
+        assert_eq!(deltas.len(), 1);
+    }
+    #[test]
+    fn set_order_and_duplicates_do_not_create_deltas() {
+        let mut deltas = vec![];
+        metadata_deltas(
+            &mut deltas,
+            Some(&json!({"granted_permissions": ["read", "write"], "unknown_reasons": ["a", "b"]})),
+            Some(
+                &json!({"granted_permissions": ["write", "read", "read"], "unknown_reasons": ["b", "a"]}),
+            ),
+        );
+        assert!(deltas.is_empty());
     }
 }

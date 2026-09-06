@@ -239,7 +239,7 @@ fn findings_counts_contract_with_optional_cause_lines() {
     let findings = findings_section(&rendered);
     assert!(findings.contains("Unchanged: 1"));
     assert!(findings.contains("Appeared:  0"));
-    assert!(findings.contains("Disappeared: 0"));
+    assert!(findings.contains("Not observed: 0"));
     assert!(findings.contains("No security-significant finding change."));
     assert!(!findings.contains("Cause:"));
 }
