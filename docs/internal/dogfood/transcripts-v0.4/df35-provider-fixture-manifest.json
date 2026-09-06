@@ -1,9 +1,9 @@
 {
   "fixture": "tests/sprint035_dogfood.rs::synthetic_provider_finding_packet_and_boundary_transition",
   "observation_mode": "real OpenCode/GitHub MCP config discovery with SYNTHETIC Cloudflare provider result injection; no network calls or production infrastructure",
-  "baseline_scan": "scan_18d29464b6fcea28_0",
-  "repeat_scan": "scan_18d29464ba1184f8_47",
-  "denied_scan": "scan_18d29464db994a48_78",
+  "baseline_scan": "scan_18d29a351b02e150_3",
+  "repeat_scan": "scan_18d29a3528693560_125",
+  "denied_scan": "scan_18d29a353de8fa38_222",
   "finding_count_before": 1,
   "finding_count_after": 0,
   "independent_comprehension": "NOT RUN",

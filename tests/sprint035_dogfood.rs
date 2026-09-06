@@ -570,19 +570,36 @@ fn supported_local_variants_and_coverage_limits() {
     configuration(path, "ask");
     scan(path, home.path(), "isolated-ask", ScanStatus::Complete);
     let ask = diff(path, "isolated-ask");
-    assert!(ask["attribution"]["graph_changes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|c| c["classification"] == "observed_environment_change"));
+    // Strict S032: allow->ask crosses DERIVED->UNKNOWN (ApprovalGated UNKNOWN is
+    // knowledge, not environment), so the strict contract yields Mixed with both
+    // paired_field_observation and knowledge_changed reasons present.
+    let ask_changes = ask["attribution"]["graph_changes"].as_array().unwrap();
+    assert!(ask_changes.iter().any(|c| c["classification"] == "mixed"
+        && c["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("paired_field_observation"))
+        && c["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("knowledge_changed"))));
     configuration(path, "deny");
     scan(path, home.path(), "isolated-deny", ScanStatus::Complete);
     let deny = diff(path, "isolated-deny");
-    assert!(deny["attribution"]["graph_changes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|c| c["classification"] == "observed_environment_change"));
+    // Strict S032: ask->deny compares latest-two so UNKNOWN->BLOCKED is knowledge
+    // per strict S032 (same DERIVED->UNKNOWN-state reasoning as allow->ask), so the
+    // strict contract yields Mixed with both paired_field_observation and
+    // knowledge_changed reasons present.
+    let deny_changes = deny["attribution"]["graph_changes"].as_array().unwrap();
+    assert!(deny_changes.iter().any(|c| c["classification"] == "mixed"
+        && c["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("paired_field_observation"))
+        && c["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("knowledge_changed"))));
 
     fs::create_dir_all(path.join(".claude")).unwrap();
     fs::write(
@@ -726,9 +743,12 @@ fn synthetic_provider_scope_authority_and_rating_variants() {
     let latest = run(provider(path, home.path(), "variant-worker"));
     assert_eq!(latest.finding_count, 1);
     let db = Database::open_existing(&path.join(".pico/pico.db")).unwrap();
+    // Seeded rating-only mutation: change severity AND fingerprint (keeping
+    // family_fingerprint unchanged) so Phase1 fingerprint== misses while Phase2
+    // family pairing matches; classify(Greater,Equal)=>Weakened stays Unattributed.
     db.connection()
         .execute(
-            "UPDATE findings SET severity = 'LOW' WHERE scan_id = ?1",
+            "UPDATE findings SET severity = 'LOW', fingerprint = fingerprint || '-seeded' WHERE scan_id = ?1",
             [&latest.scan_id],
         )
         .unwrap();

@@ -1,0 +1,5 @@
+Controlled offline ScanService run (empty home and environment; no provider injection)
+Scan: scan_18d29a351ae212e0_1
+Status: COMPLETE
+Findings: 0
+Effective Bash: ALLOW

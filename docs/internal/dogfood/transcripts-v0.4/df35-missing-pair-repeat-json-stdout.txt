@@ -1,0 +1,1 @@
+{"schema_version":1,"command":"diff","status":"error","error":{"code":"usage_error","message":"Invalid query arguments; diff requires two distinct retained COMPLETE scans in chronological order, or no IDs."}}

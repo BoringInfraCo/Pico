@@ -1,0 +1,8 @@
+Controlled offline ScanService run (empty home and environment; no provider injection)
+Scan: scan_18d29a353e21cd18_225
+Status: PARTIAL
+Findings: 0
+Incomplete evidence
+Provider opencode: FAILED
+  - project:opencode.json: invalid configuration: key must be a string at line 1 column 3
+Scan status: PARTIAL (opencode)

@@ -1,0 +1,7 @@
+{
+  "args": [
+    "diff",
+    "--json"
+  ],
+  "exit_code": 1
+}

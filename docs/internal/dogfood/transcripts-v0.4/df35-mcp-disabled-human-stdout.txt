@@ -1,0 +1,90 @@
+Pico diff
+
+From: scan_18d29a3548598de8_300 (COMPLETE)
+To:   scan_18d29a354b422ee8_330 (COMPLETE)
+Compared: LAST TWO COMPLETE SCANS
+Freshness: LATEST COMPLETE
+Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
+Pico versions: 0.1.0 → 0.1.0
+
+Findings
+  Unchanged: 0
+  Appeared:  0
+  Not observed: 0
+  Weakened: 0
+  Strengthened: 0
+  Uncertain: 0
+
+No security-significant finding change.
+This is not an all-clear.
+
+Resources
+  Unchanged: 3
+  First seen: 0
+  Reappeared: 0
+  Changed: 1
+  Not observed: 2
+
+Changed
+  mcp_server · github · mcp:github:official
+  First seen: scan_18d29a3548598de8_300
+  Last seen: scan_18d29a354b422ee8_330
+  enabled: true → false
+
+Not observed
+  mcp_tool · github · mcp:github:official:tool:issue_read
+  First seen: scan_18d29a3548598de8_300
+  Last seen: scan_18d29a3548598de8_300
+  external_source · github · source:github:public:issue-content
+  First seen: scan_18d29a3548598de8_300
+  Last seen: scan_18d29a3548598de8_300
+
+Relationships
+  Unchanged: 2
+  First seen: 0
+  Reappeared: 0
+  Changed: 1
+  Not observed: 3
+
+Changed
+  configured_with · agent:opencode|configured_with|mcp:github:official
+  First seen: scan_18d29a3548598de8_300
+  Last seen: scan_18d29a354b422ee8_330
+  state: DERIVED → BLOCKED
+  enabled: true → false
+
+Not observed
+  can_call · agent:opencode|can_call|mcp:github:official:tool:issue_read
+  First seen: scan_18d29a3548598de8_300
+  Last seen: scan_18d29a3548598de8_300
+  can_retrieve · mcp:github:official:tool:issue_read|can_retrieve|source:github:public:issue-content
+  First seen: scan_18d29a3548598de8_300
+  Last seen: scan_18d29a3548598de8_300
+  exposes · mcp:github:official|exposes|mcp:github:official:tool:issue_read
+  First seen: scan_18d29a3548598de8_300
+  Last seen: scan_18d29a3548598de8_300
+
+Not observed means not observed in the newer scan; remediation is not established.
+
+Observed-change attribution
+  agent:opencode|can_call|mcp:github:official:tool:issue_read: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [github_mcp_influence]; supported fields [permission, permission_pattern, runtime_mode]; evidence [ev_18d29a354a588680_323]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  agent:opencode|configured_with|mcp:github:official: observed environment change (field_support_unavailable, paired_field_observation)
+    Before: coverage Unknown; sources [github_mcp_influence]; supported fields [enabled, transport]; evidence [ev_18d29a354990ae58_314]
+    After: coverage Unknown; sources [github_mcp_influence]; supported fields [enabled, transport]; evidence [ev_18d29a354ce49830_354]
+  mcp:github:official: observed environment change (paired_field_observation)
+    Before: coverage Inspected; sources [opencode_mcp_config]; supported fields [enabled, transport]; evidence [ev_18d29a35496210c0_312]
+    After: coverage Inspected; sources [opencode_mcp_config]; supported fields [enabled, transport]; evidence [ev_18d29a354cc8b390_351]
+  mcp:github:official:tool:issue_read: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [other]; supported fields []; evidence [ev_18d29a354a193390_318]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  mcp:github:official:tool:issue_read|can_retrieve|source:github:public:issue-content: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [github_mcp_influence]; supported fields []; evidence [ev_18d29a354aaa53e8_328]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  mcp:github:official|exposes|mcp:github:official:tool:issue_read: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [github_mcp_influence]; supported fields []; evidence [ev_18d29a354a2f5788_320]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  source:github:public:issue-content: unattributed (absence_not_proven, observation_presence_only)
+    Before: coverage Unknown; sources []; supported fields []; evidence []
+    After: coverage Unknown; sources []; supported fields []; evidence []

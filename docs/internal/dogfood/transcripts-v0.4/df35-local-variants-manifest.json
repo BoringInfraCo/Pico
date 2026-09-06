@@ -1,0 +1,10 @@
+{
+  "mode": "Real offline local discovery with empty environment, explicit home then absent home; only final legacy coverage removal is seeded metadata mutation",
+  "variants": [
+    "isolated OpenCode allow/ask/deny",
+    "Claude allow/deny",
+    "MCP enabled/disabled",
+    "COMPLETE with reduced home scope",
+    "seeded missing coverage"
+  ]
+}

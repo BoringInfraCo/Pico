@@ -1,0 +1,44 @@
+Pico diff
+
+From: scan_18d29a35880728d8_639 (COMPLETE)
+To:   scan_18d29a358eb5bb18_673 (COMPLETE)
+Compared: LAST TWO COMPLETE SCANS
+Freshness: LATEST COMPLETE
+Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
+Pico versions: 0.1.0 → 0.1.0
+
+Findings
+  Unchanged: 0
+  Appeared:  0
+  Not observed: 0
+  Weakened: 1
+  Strengthened: 0
+  Uncertain: 0
+
+Weakened
+  LOW · HIGH confidence
+  External content can reach production mutation authority
+  Fingerprint: sha256:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd-seeded
+  ID: finding_scan_18d29a358eb5bb18_673:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd
+  From fingerprint: sha256:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd
+  From: CRITICAL · HIGH confidence
+  Cause: Severity CRITICAL → LOW
+
+Resources
+  Unchanged: 8
+  First seen: 0
+  Reappeared: 0
+  Changed: 0
+  Not observed: 0
+
+Relationships
+  Unchanged: 8
+  First seen: 0
+  Reappeared: 0
+  Changed: 0
+  Not observed: 0
+
+Observed-change attribution
+  sha256:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd-seeded: unattributed (no_supported_graph_cause)
+    Before: coverage Unknown; sources []; supported fields []; evidence []
+    After: coverage Unknown; sources []; supported fields []; evidence []

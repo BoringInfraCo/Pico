@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "id": 35,
+  "method": "tools/call",
+  "params": {
+    "name": "diff_scans",
+    "arguments": {
+      "from": "scan_18d29a351ae212e0_1",
+      "to": "scan_18d29a353e21cd18_225"
+    }
+  }
+}

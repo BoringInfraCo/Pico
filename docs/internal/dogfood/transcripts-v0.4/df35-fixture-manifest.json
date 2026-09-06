@@ -1,6 +1,6 @@
 {
   "fixture": "tests/sprint035_dogfood.rs::controlled_scan_history_diff_mcp_and_retention_sequence",
-  "binary_sha256": "5fb04776702bc36468471337a31f832c2e6adcee919186d8e5a1fac9735a264e",
+  "binary_sha256": "9d359c933ac4365a61eb206e89e187209ae8749927fa6d548d1dceb07083b118",
   "observation_mode": "real local discovery using ScanService fixture seam; empty home and environment; no network providers",
   "synthetic_mutation": "comparison_contract_version=999 on final scan after observation",
   "independent_comprehension": "NOT RUN",

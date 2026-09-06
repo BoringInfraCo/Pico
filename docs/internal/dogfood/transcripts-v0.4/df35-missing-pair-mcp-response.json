@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":35,"result":{"content":[{"type":"text","text":"{\n  \"schema_version\": 1,\n  \"command\": \"diff\",\n  \"status\": \"error\",\n  \"error\": {\n    \"code\": \"usage_error\",\n    \"message\": \"Invalid query arguments; diff requires two distinct retained COMPLETE scans in chronological order, or no IDs.\"\n  }\n}"}],"isError":true}}

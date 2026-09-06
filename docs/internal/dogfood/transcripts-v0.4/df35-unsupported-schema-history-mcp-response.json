@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":35,"result":{"content":[{"type":"text","text":"{\n  \"schema_version\": 1,\n  \"command\": \"history\",\n  \"status\": \"error\",\n  \"error\": {\n    \"code\": \"database_error\",\n    \"message\": \"Cannot read a supported, consistent Pico database.\"\n  }\n}"}],"isError":true}}

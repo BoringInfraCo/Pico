@@ -1,0 +1,12 @@
+{
+  "mode": "Synthetic normalized Cloudflare provider results, real local discovery, no live calls",
+  "variants": [
+    "account scope",
+    "authority scope",
+    "credential status",
+    "authority resolution",
+    "resource identity",
+    "multiple simultaneous changes"
+  ],
+  "seeded_mutation": "Final finding severity changed to LOW in persisted snapshot solely to exercise rating-only attribution; not observed environment change"
+}

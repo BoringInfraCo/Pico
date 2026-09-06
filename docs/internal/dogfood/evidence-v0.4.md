@@ -2,7 +2,7 @@
 
 **Technical packet: executed, partial scenario coverage. Independent comprehension: NOT RUN. Release: HOLD.**
 
-The two tests in `tests/sprint035_dogfood.rs` passed with opt-in transcript capture.
+The five tests in `tests/sprint035_dogfood.rs` passed with opt-in transcript capture.
 The [build record](transcripts-v0.4/build-evidence.json) identifies the base commit,
 uncommitted source file hashes, tracked patch digest, actual binary hash/version,
 platform, command, and result. The source manifest includes untracked implementation
@@ -35,14 +35,14 @@ Provider coverage remains unknown; the test rejects confirmed disappearance.
 | --- | --- |
 | E1 | Captured empty history/diff and one-scan insufficient history; PASS. |
 | E2 | Real local unchanged scan has no graph lifecycle/change deltas; synthetic provider finding remains unchanged; PASS for these fixtures. |
-| E3 | Captured OpenCode allow→deny and synthetic-provider boundary transition; PASS. Ask intermediate and equivalent Claude captures remain unexecuted. |
-| E4 | No credential/resource/MCP/authority variation capture sequence executed here; field regressions are separate S032 evidence. |
+| E3 | Real local: isolated OpenCode allow→ask is Mixed (paired_field_observation + knowledge_changed per strict S032 DERIVED→UNKNOWN) and ask→deny is Mixed (latest-two UNKNOWN→BLOCKED is knowledge per strict S032); Claude allow→deny is observed_environment_change; MCP enabled→disabled has non-empty graph changes; PASS. Synthetic provider finding stable then not observed under deny with no disappearance_confirmed; PASS synthetic. |
+| E4 | Synthetic provider variants (account scope, authority scope, credential status, authority resolution, resource identity, multiple simultaneous changes) each produce non-empty graph changes with no disappearance_confirmed; PASS synthetic. Real MCP enabled/disabled variation is captured in E3. |
 | E5 | Malformed configuration gives PARTIAL, latest COMPLETE pair stays selected with newer-incomplete freshness, recovery has no disappearance; PASS. Other access-loss modes not executed here. |
-| E6 | Synthetic provider coverage remains unknown and disappearance is not confirmed; reduced-scope/legacy complete captures remain unexecuted here. |
-| E7 | Synthetic finding stable then not observed under deny; multiple-change ambiguity and rating movement captures remain unexecuted. |
+| E6 | Real reduced-home-scope COMPLETE carries coverage_changed; seeded legacy missing coverage carries coverage_unavailable with no disappearance_confirmed; PASS. Synthetic provider coverage remains unknown with no confirmed disappearance; PASS synthetic. |
+| E7 | Synthetic rating-only seeded mutation (severity LOW plus fingerprint-seeded, family unchanged) yields one weakened finding with no observed_environment_change; multiple simultaneous changes captured with no disappearance_confirmed; PASS synthetic. |
 | E8 | Seeded comparison contract 999 produces not-comparable across human/JSON/MCP; PASS, not a real upgrade run. |
 | E9 | Keep-two prune, no-op repeat, retained and removed pair queries, history, and doctor; PASS. |
-| E10 | Pruned-ID error captured; remaining argument/schema/error cases belong to S033/S034 regression tests, not this capture sequence. |
+| E10 | Full error/argument matrix captured: reversed/missing/incomplete pairs, five invalid MCP args (-32602), parser error, unsupported-schema history/diff, DB bytes unchanged; pruned-ID error; PASS. |
 | E11 | Synthetic provider finding detail captured through CLI and existing MCP list/detail; PASS for fixture. Independent understanding not tested. |
 
 ## Retention and safety evidence

@@ -1,0 +1,8 @@
+{
+  "args": [
+    "diff",
+    "--bogus",
+    "--json"
+  ],
+  "exit_code": 2
+}

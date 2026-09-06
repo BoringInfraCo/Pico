@@ -7,5 +7,5 @@ Dangling references: none
 Orphan scan rows: 0
 Summary rows: 0
 Scans: 2 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING
-Retention window: policy keep 10 COMPLETE scans; workspace has 2 COMPLETE scans; oldest retained scan_18d294650c417788_116; newest scan_18d2946513cc92d0_123
+Retention window: policy keep 10 COMPLETE scans; workspace has 2 COMPLETE scans; oldest retained scan_18d29a357f36f6e8_629; newest scan_18d29a3587ac3f68_636
 Result: ok

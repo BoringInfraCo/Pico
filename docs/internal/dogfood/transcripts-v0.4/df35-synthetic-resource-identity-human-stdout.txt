@@ -1,0 +1,86 @@
+Pico diff
+
+From: scan_18d29a3568986048_488 (COMPLETE)
+To:   scan_18d29a356da67d40_519 (COMPLETE)
+Compared: LAST TWO COMPLETE SCANS
+Freshness: LATEST COMPLETE
+Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
+Pico versions: 0.1.0 → 0.1.0
+
+Findings
+  Unchanged: 0
+  Appeared:  1
+  Not observed: 1
+  Weakened: 0
+  Strengthened: 0
+  Uncertain: 0
+
+Appeared
+  CRITICAL · HIGH confidence
+  External content can reach production mutation authority
+  Fingerprint: sha256:ca233995bbfcc36a0e6ba37289e5a2dc025e02e64f26214943f0ed12302951d3
+  ID: finding_scan_18d29a356da67d40_519:ca233995bbfcc36a0e6ba37289e5a2dc025e02e64f26214943f0ed12302951d3
+  Cause: Sink identity changed: cloudflare:worker:account-1234567890123456:worker-tag-variant-worker → cloudflare:worker:account-1234567890123456:worker-tag-replacement-worker
+
+Not observed
+  CRITICAL · HIGH confidence
+  External content can reach production mutation authority
+  Fingerprint: sha256:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd
+  ID: finding_scan_18d29a3568986048_488:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd
+  Cause: Sink identity changed: cloudflare:worker:account-1234567890123456:worker-tag-variant-worker → cloudflare:worker:account-1234567890123456:worker-tag-replacement-worker
+
+Resources
+  Unchanged: 7
+  First seen: 1
+  Reappeared: 0
+  Changed: 0
+  Not observed: 1
+
+First seen
+  worker · cloudflare · cloudflare:worker:account-1234567890123456:worker-tag-replacement-worker
+  First seen: scan_18d29a356da67d40_519
+  Last seen: scan_18d29a356da67d40_519
+
+Not observed
+  worker · cloudflare · cloudflare:worker:account-1234567890123456:worker-tag-variant-worker
+  First seen: scan_18d29a351b024510_2
+  Last seen: scan_18d29a3568986048_488
+
+Relationships
+  Unchanged: 7
+  First seen: 1
+  Reappeared: 0
+  Changed: 0
+  Not observed: 1
+
+First seen
+  can_mutate · credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-replacement-worker
+  First seen: scan_18d29a356da67d40_519
+  Last seen: scan_18d29a356da67d40_519
+
+Not observed
+  can_mutate · credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-variant-worker
+  First seen: scan_18d29a351b024510_2
+  Last seen: scan_18d29a3568986048_488
+
+Not observed means not observed in the newer scan; remediation is not established.
+
+Observed-change attribution
+  cloudflare:worker:account-1234567890123456:worker-tag-replacement-worker: evidence change (observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources []; supported fields []; evidence []
+    After: coverage Unknown; sources [cloudflare_worker_inventory]; supported fields [identity_precision]; evidence [ev_18d29a356f7a4ef8_548]
+  cloudflare:worker:account-1234567890123456:worker-tag-variant-worker: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [cloudflare_worker_inventory]; supported fields [identity_precision]; evidence [ev_18d29a356befa968_516]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-replacement-worker: evidence change (observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources []; supported fields []; evidence []
+    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a356f8a6040_550]
+  credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-variant-worker: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a356c004750_517]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  sha256:ca233995bbfcc36a0e6ba37289e5a2dc025e02e64f26214943f0ed12302951d3: unattributed (multiple_possible_causes)
+    Before: coverage Unknown; sources []; supported fields []; evidence []
+    After: coverage Unknown; sources [cloudflare_authority_resolution, cloudflare_worker_inventory]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, identity_precision, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a356f7a4ef8_548, ev_18d29a356f8a6040_550]
+  sha256:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd: unattributed (multiple_possible_causes)
+    Before: coverage Unknown; sources [cloudflare_authority_resolution, cloudflare_worker_inventory]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, identity_precision, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a356befa968_516, ev_18d29a356c004750_517]
+    After: coverage Unknown; sources []; supported fields []; evidence []

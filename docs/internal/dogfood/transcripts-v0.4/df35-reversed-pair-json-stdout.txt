@@ -1,0 +1,1 @@
+{"schema_version":1,"command":"diff","status":"error","error":{"code":"database_error","message":"Cannot read a supported, consistent Pico database."}}

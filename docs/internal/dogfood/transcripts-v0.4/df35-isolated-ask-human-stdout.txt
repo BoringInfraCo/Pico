@@ -1,0 +1,46 @@
+Pico diff
+
+From: scan_18d29a351ae20728_0 (COMPLETE)
+To:   scan_18d29a351c0a6640_49 (COMPLETE)
+Compared: LAST TWO COMPLETE SCANS
+Freshness: LATEST COMPLETE
+Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
+Pico versions: 0.1.0 → 0.1.0
+
+Findings
+  Unchanged: 0
+  Appeared:  0
+  Not observed: 0
+  Weakened: 0
+  Strengthened: 0
+  Uncertain: 0
+
+No security-significant finding change.
+This is not an all-clear.
+
+Resources
+  Unchanged: 2
+  First seen: 0
+  Reappeared: 0
+  Changed: 0
+  Not observed: 0
+
+Relationships
+  Unchanged: 0
+  First seen: 0
+  Reappeared: 0
+  Changed: 1
+  Not observed: 0
+
+Changed
+  can_execute · agent:opencode|can_execute|shell:bash
+  First seen: scan_18d29a351ae20728_0
+  Last seen: scan_18d29a351c0a6640_49
+  state: DERIVED → UNKNOWN
+  effective_state: AUTO_ALLOW → APPROVAL_GATED
+  effective_permission: ALLOW → ASK
+
+Observed-change attribution
+  agent:opencode|can_execute|shell:bash: mixed (knowledge_changed, paired_field_observation)
+    Before: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29a351b8f90f0_24]
+    After: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29a351c6c4108_66]

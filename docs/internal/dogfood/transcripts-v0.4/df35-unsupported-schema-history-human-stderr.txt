@@ -1,0 +1,1 @@
+error: migration failure: unsupported schema version 999; this build requires schema version 6 (upgrade Pico or use a compatible build; database downgrade is unsupported)
