@@ -780,8 +780,8 @@ mod tests {
         let mut right = observation(&to, "exact:key", "permission_state", json!("WRITE"));
         let keys = BTreeSet::from(["exact:key".into()]);
         assert_eq!(
-            support_signature(&[left.clone()], &keys),
-            support_signature(&[right.clone()], &keys)
+            support_signature(std::slice::from_ref(&left), &keys),
+            support_signature(std::slice::from_ref(&right), &keys)
         );
         right.class = EvidenceClass::Inferred;
         assert_ne!(
