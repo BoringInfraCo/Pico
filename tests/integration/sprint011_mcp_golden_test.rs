@@ -318,7 +318,7 @@ fn golden_session_serves_list_and_detail_matching_the_query_service() {
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 4); // S034 adds two read-only queries.
     assert_eq!(tools[0]["name"], "list_findings");
     assert_eq!(tools[1]["name"], "get_finding");
     for tool in &tools {

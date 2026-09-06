@@ -100,7 +100,7 @@ fn golden_stdio_session_completes_initialize_tools_list_and_list_findings() {
     assert_eq!(session[1]["result"], json!({}));
 
     let tools = session[2]["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 4); // S034 adds two read-only queries.
     assert_eq!(tools[0]["name"], "list_findings");
     assert_eq!(tools[1]["name"], "get_finding");
     for tool in tools {

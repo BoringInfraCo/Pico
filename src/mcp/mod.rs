@@ -1,8 +1,8 @@
 //! Minimal read-only MCP server over stdio (SPRINT-011.md §5-§7).
 //!
 //! Owns framing, envelope validation, method routing, and panic
-//! containment only. Every tool call flows into FindingQueryService; no
-//! scan, provider, network, or write surface is reachable from here.
+//! containment only. Tools call the finding, history, and diff application
+//! services; no scan, provider, network, or write surface is reachable here.
 
 pub mod protocol;
 pub mod tools;
@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_exactly_two_read_only_tools_in_stable_order() {
+    fn tools_list_exposes_four_read_only_tools_in_stable_order() {
         let workspace = initialized_workspace();
         let frame = response_of(
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
@@ -287,9 +287,11 @@ mod tests {
         )
         .unwrap();
         let tools = frame["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 4);
         assert_eq!(tools[0]["name"], "list_findings");
         assert_eq!(tools[1]["name"], "get_finding");
+        assert_eq!(tools[2]["name"], "list_history");
+        assert_eq!(tools[3]["name"], "diff_scans");
         for tool in tools {
             assert_eq!(tool["annotations"]["readOnlyHint"], true);
             assert!(tool["description"].is_string());

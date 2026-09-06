@@ -1,5 +1,5 @@
-//! The MCP tool surface: the two read-only descriptors and dispatch into
-//! `FindingQueryService` (SPRINT-011.md §7-§13).
+//! Read-only finding, history, and diff tools. Finding tools preserve the
+//! S011 contract; history/diff share the S033 public output projection.
 //!
 //! Owns only protocol shaping. Persisted strings pass through
 //! `terminal_safe` inside MCP-owned mirror structs before serialization;
@@ -11,14 +11,16 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::application::{
-    findings_list_guidance, findings_list_state, Currentness, FindingDetail, FindingList,
-    FindingQueryService, FindingsListState, Freshness, ScanBrief,
+    findings_list_guidance, findings_list_state, Currentness, DiffService, FindingDetail,
+    FindingList, FindingQueryService, FindingsListState, Freshness, HistoryService, ScanBrief,
 };
 use crate::mcp::protocol::{APPLICATION_ERROR, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::shared::{terminal_safe, PicoError};
 
 const LIST_FINDINGS: &str = "list_findings";
 const GET_FINDING: &str = "get_finding";
+const LIST_HISTORY: &str = "list_history";
+const DIFF_SCANS: &str = "diff_scans";
 
 /// A tool-dispatch failure mapped onto a JSON-RPC error code.
 pub struct ToolError {
@@ -33,7 +35,7 @@ fn tool_error(code: i64, message: impl Into<String>) -> ToolError {
     }
 }
 
-/// Returns the two tool descriptors in stable order, both readOnlyHint.
+/// Returns descriptors in stable order; the original two stay byte-compatible.
 pub fn descriptors() -> Vec<Value> {
     vec![
         json!({
@@ -58,6 +60,33 @@ pub fn descriptors() -> Vec<Value> {
             },
             "annotations": { "readOnlyHint": true },
         }),
+        json!({
+            "name": LIST_HISTORY,
+            "description": "List retained scan history in this workspace. History is limited to retained observations.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
+        json!({
+            "name": DIFF_SCANS,
+            "description": "Compare retained COMPLETE scans, with attribution and comparison limitations. Omit both IDs for the latest two, or provide an older from and newer to ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "string", "minLength": 1 },
+                    "to": { "type": "string", "minLength": 1 },
+                },
+                "additionalProperties": false,
+                "oneOf": [
+                    { "maxProperties": 0 },
+                    { "required": ["from", "to"] },
+                ],
+            },
+            "annotations": { "readOnlyHint": true },
+        }),
     ]
 }
 
@@ -74,8 +103,62 @@ pub fn call(params: &Value, workspace: &Path) -> Result<Value, ToolError> {
     match name {
         LIST_FINDINGS => list_findings(workspace),
         GET_FINDING => get_finding(arguments.get("id"), workspace),
+        LIST_HISTORY => history_query(params.get("arguments"), workspace),
+        DIFF_SCANS => diff_query(params.get("arguments"), workspace),
         other => Err(tool_error(INVALID_PARAMS, format!("unknown tool: {other}"))),
     }
+}
+
+fn query_arguments(arguments: Option<&Value>) -> Result<Map<String, Value>, ToolError> {
+    match arguments {
+        None => Ok(Map::new()),
+        Some(Value::Object(map)) => Ok(map.clone()),
+        _ => Err(tool_error(INVALID_PARAMS, "arguments must be an object")),
+    }
+}
+
+fn history_query(arguments: Option<&Value>, workspace: &Path) -> Result<Value, ToolError> {
+    if !query_arguments(arguments)?.is_empty() {
+        return Err(tool_error(
+            INVALID_PARAMS,
+            "list_history accepts no arguments",
+        ));
+    }
+    match HistoryService::list(workspace) {
+        Ok(history) => text_content(&crate::output::history(&history)),
+        Err(error) => query_failure("history", &error),
+    }
+}
+
+fn diff_query(arguments: Option<&Value>, workspace: &Path) -> Result<Value, ToolError> {
+    let arguments = query_arguments(arguments)?;
+    let result = if arguments.is_empty() {
+        DiffService::latest(workspace)
+    } else {
+        let pair = arguments
+            .get("from")
+            .and_then(Value::as_str)
+            .zip(arguments.get("to").and_then(Value::as_str));
+        let Some((from, to)) = pair.filter(|(from, to)| {
+            arguments.len() == 2 && !from.trim().is_empty() && !to.trim().is_empty()
+        }) else {
+            return Err(tool_error(
+                INVALID_PARAMS,
+                "diff_scans requires either no arguments or both non-empty from and to IDs",
+            ));
+        };
+        DiffService::compare(workspace, from, to)
+    };
+    match result {
+        Ok(diff) => text_content(&crate::output::diff(&diff)),
+        Err(error) => query_failure("diff", &error),
+    }
+}
+
+fn query_failure(command: &str, error: &PicoError) -> Result<Value, ToolError> {
+    let mut result = text_content(&crate::output::error(command, error))?;
+    result["isError"] = Value::Bool(true);
+    Ok(result)
 }
 
 fn list_findings(workspace: &Path) -> Result<Value, ToolError> {
