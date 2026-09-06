@@ -1,7 +1,7 @@
 Pico diff
 
-From: scan_18d29a353bad5e30_192 (COMPLETE)
-To:   scan_18d29a353fe896e0_246 (COMPLETE)
+From: scan_18d29aba103ed8e8_192 (COMPLETE)
+To:   scan_18d29aba1537e358_232 (COMPLETE)
 Compared: LAST TWO COMPLETE SCANS
 Freshness: LATEST COMPLETE
 Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
@@ -33,11 +33,11 @@ Relationships
 
 Changed
   can_mutate · credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-variant-worker
-  First seen: scan_18d29a351b024510_2
-  Last seen: scan_18d29a353fe896e0_246
+  First seen: scan_18d29ab9ef8033e0_2
+  Last seen: scan_18d29aba1537e358_232
   account_scope_state: IN_SCOPE → OUT_OF_SCOPE
 
 Observed-change attribution
   credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-variant-worker: observed environment change (paired_field_observation)
-    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a353de05360_221]
-    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a3543c14500_298]
+    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29aba12701898_221]
+    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29aba17f94960_293]

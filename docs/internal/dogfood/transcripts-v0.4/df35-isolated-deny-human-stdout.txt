@@ -1,7 +1,7 @@
 Pico diff
 
-From: scan_18d29a351c0a6640_49 (COMPLETE)
-To:   scan_18d29a353b3e0e18_186 (COMPLETE)
+From: scan_18d29ab9f0dbb4d0_74 (COMPLETE)
+To:   scan_18d29aba0f2206d8_186 (COMPLETE)
 Compared: LAST TWO COMPLETE SCANS
 Freshness: LATEST COMPLETE
 Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
@@ -34,13 +34,13 @@ Relationships
 
 Changed
   can_execute · agent:opencode|can_execute|shell:bash
-  First seen: scan_18d29a351ae20728_0
-  Last seen: scan_18d29a353b3e0e18_186
+  First seen: scan_18d29ab9ef71fb40_0
+  Last seen: scan_18d29aba0f2206d8_186
   state: UNKNOWN → BLOCKED
   effective_state: APPROVAL_GATED → DENIED
   effective_permission: ASK → DENY
 
 Observed-change attribution
   agent:opencode|can_execute|shell:bash: mixed (knowledge_changed, paired_field_observation)
-    Before: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29a351c6c4108_66]
-    After: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29a353b7d8430_189]
+    Before: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29ab9f13eb0a8_95]
+    After: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29aba0f8be850_189]

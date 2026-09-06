@@ -1,6 +1,6 @@
 {
   "method": "SHA-256 of closed rollback-journal SQLite main file before/after all queries",
-  "before": "70b07a6398159b5d40fb15abd862b64ab04027ffead925582ffd433e3d49365c",
-  "after": "70b07a6398159b5d40fb15abd862b64ab04027ffead925582ffd433e3d49365c",
+  "before": "c6813913f517406767885728433e83401359d8b7c7414b6bfee9e4cab0732e45",
+  "after": "c6813913f517406767885728433e83401359d8b7c7414b6bfee9e4cab0732e45",
   "equal": true
 }

@@ -1,8 +1,8 @@
 {
   "args": [
     "diff",
-    "scan_18d29a351ae212e0_1",
-    "scan_18d29a353e21cd18_225",
+    "scan_18d29ab9ef722638_1",
+    "scan_18d29aba134421d8_223",
     "--json"
   ],
   "exit_code": 1

@@ -1,7 +1,7 @@
 Pico diff
 
-From: scan_18d29a35798dcaa0_561 (COMPLETE)
-To:   scan_18d29a357cec18a0_598 (COMPLETE)
+From: scan_18d29aba4a48be00_567 (COMPLETE)
+To:   scan_18d29aba4da13000_598 (COMPLETE)
 Compared: LAST TWO COMPLETE SCANS
 Freshness: LATEST COMPLETE
 Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
@@ -19,7 +19,7 @@ Not observed
   CRITICAL · HIGH confidence
   External content can reach production mutation authority
   Fingerprint: sha256:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd
-  ID: finding_scan_18d29a35798dcaa0_561:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd
+  ID: finding_scan_18d29aba4a48be00_567:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd
   Cause: Worker mutation authority EXACT → UNKNOWN
 
 Resources
@@ -38,25 +38,25 @@ Relationships
 
 Changed
   can_mutate · credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-variant-worker
-  First seen: scan_18d29a351b024510_2
-  Last seen: scan_18d29a357cec18a0_598
+  First seen: scan_18d29ab9ef8033e0_2
+  Last seen: scan_18d29aba4da13000_598
   authority_resolution: EXACT → UNKNOWN
   credential_status: ACTIVE → INACTIVE
   account_scope_state: IN_SCOPE → OUT_OF_SCOPE
   scoped_to · credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|scoped_to|cloudflare:account:account-1234567890123456
-  First seen: scan_18d29a351b024510_2
-  Last seen: scan_18d29a357cec18a0_598
+  First seen: scan_18d29ab9ef8033e0_2
+  Last seen: scan_18d29aba4da13000_598
   credential_status: ACTIVE → INACTIVE
 
 Not observed means not observed in the newer scan; remediation is not established.
 
 Observed-change attribution
   credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-variant-worker: mixed (knowledge_changed, paired_field_observation)
-    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a357b63ced8_591]
-    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a357e92d360_627]
+    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29aba4c1c0318_596]
+    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29aba4f9080c8_633]
   credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|scoped_to|cloudflare:account:account-1234567890123456: evidence change (knowledge_changed)
-    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [authority_resolution, credential_status]; evidence [ev_18d29a357b2f1aa8_586]
-    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [authority_resolution, credential_status]; evidence [ev_18d29a357e60ceb0_623]
+    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [authority_resolution, credential_status]; evidence [ev_18d29aba4be6aec0_592]
+    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [authority_resolution, credential_status]; evidence [ev_18d29aba4f5540d0_629]
   sha256:f76e2542af99597bb6c29fa13c6097adc39fc1243868bbd37d16977bea3733cd: mixed (knowledge_changed, paired_field_observation, finding_absence_not_remediation)
-    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a357b63ced8_591]
-    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29a357e92d360_627]
+    Before: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29aba4c1c0318_596]
+    After: coverage Unknown; sources [cloudflare_authority_resolution]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29aba4f9080c8_633]

@@ -2,9 +2,9 @@ Pico prune
 
 Policy: keep 2 COMPLETE scans
 Pruned: 3 scans
-  scan_18d29a357794e0d0_552 (COMPLETE): 3 observations, 2 evidence, 0 findings, 0 attack paths, 1 analyses, 1 diagnostics, 1 relationship evidence links
-  scan_18d29a357b5f1bb8_590 (COMPLETE): 3 observations, 2 evidence, 0 findings, 0 attack paths, 1 analyses, 1 diagnostics, 1 relationship evidence links
-  scan_18d29a3583a23c60_635 (PARTIAL): 0 observations, 0 evidence, 0 findings, 0 attack paths, 1 analyses, 1 diagnostics, 0 relationship evidence links
+  scan_18d29aba447758d8_552 (COMPLETE): 3 observations, 2 evidence, 0 findings, 0 attack paths, 1 analyses, 1 diagnostics, 1 relationship evidence links
+  scan_18d29aba488207c0_561 (COMPLETE): 3 observations, 2 evidence, 0 findings, 0 attack paths, 1 analyses, 1 diagnostics, 1 relationship evidence links
+  scan_18d29aba560ac468_635 (PARTIAL): 0 observations, 0 evidence, 0 findings, 0 attack paths, 1 analyses, 1 diagnostics, 0 relationship evidence links
 Totals: 6 observations, 4 evidence, 0 findings, 0 attack paths, 3 analyses, 3 diagnostics, 2 relationship evidence links
 Retained: 2 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING
 Health after prune: ok

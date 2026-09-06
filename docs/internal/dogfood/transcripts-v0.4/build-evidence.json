@@ -1,7 +1,7 @@
 {
-  "captured_at_utc": "2026-09-06T02:27:36.732691+00:00",
-  "base_commit": "21d1c492490511f41319dc5138419a24da0a268d",
-  "dirty_tree": true,
+  "captured_at_utc": "2026-09-06T02:36:10.005172+00:00",
+  "base_commit": "d3c0d833dafed639dafb7c999fc67624e47f6acf",
+  "dirty_tree": false,
   "source_manifest": {
     "docs/public/JSON-OUTPUT.md": "ce71027690c1f278d08eff25c4016c788eeeaa1fd41b62bbbc12682b35f5a147",
     "docs/public/output-v1.schema.json": "4fe98ff4e7488eae424456c55bfa45cd33f3baed0c45b2e1b8e55e1a63d8b443",
@@ -31,7 +31,7 @@
     "tests/sprint035_dogfood.rs": "6b0b3057ba6a4efd1907d42c5b1ac2d2531fcaaa9bb4306de655819ce567cdca"
   },
   "source_manifest_sha256": "df45a93c808139162f8eb9c50054f69246ed4da4adbb16f82c6de1d460e0a7cf",
-  "tracked_patch_sha256": "30f34be194953c5e94f8bc1ab64b458044f577bc87ec89d66d7a96ed22ddde85",
+  "tracked_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "binary_sha256": "9d359c933ac4365a61eb206e89e187209ae8749927fa6d548d1dceb07083b118",
   "version": "pico 0.1.0",
   "platform": "macOS-26.6.2-arm64-arm-64bit",

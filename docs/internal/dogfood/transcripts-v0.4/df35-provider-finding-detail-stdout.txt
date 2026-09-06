@@ -2,15 +2,15 @@ CRITICAL · HIGH confidence
 External content can reach production mutation authority
 
 Finding
-ID: finding_scan_18d29a3528693560_125:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7
+ID: finding_scan_18d29ab9f37c38e0_125:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7
 Fingerprint: sha256:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7
 Grouped paths: 1
 Version: 1
 Class: UNTRUSTED_TO_PRODUCTION
 Status: OPEN
-Scan: scan_18d29a3528693560_125
+Scan: scan_18d29ab9f37c38e0_125
 Scan status: COMPLETE
-Created: 2026-09-06T02:25:55.196566+00:00
+Created: 2026-09-06T02:35:25.504193+00:00
 Currentness: LATEST_COMPLETE
 
 What Pico found
@@ -37,26 +37,26 @@ Influence strength: AGENT_INJECTABLE
 Capability: EXECUTE
 Authority resolution: EXACT
 Sink impact: PRODUCTION
-Source: res_18d29a351d2878a0_82
-Actor: res_18d29a351b5a8ab8_8
-Sink: res_18d29a352463aae0_117
+Source: res_18d29ab9f0c89e18_67
+Actor: res_18d29ab9efb597d8_9
+Sink: res_18d29ab9f1b144b0_113
 Effective Bash capability: AUTO_ALLOW
 Bash interrupting boundary: none
   0 INFLUENCE REVERSE → Public GitHub issue content issue_read (can_retrieve)
-  Supporting evidence: ev_18d29a352a916c90_159
-    - ev_18d29a352a916c90_159 locator=project:opencode.json captured=2026-09-06T02:25:55.157634+00:00 freshness=FRESH
+  Supporting evidence: ev_18d29ab9f4913af0_158
+    - ev_18d29ab9f4913af0_158 locator=project:opencode.json captured=2026-09-06T02:35:25.482295+00:00 freshness=FRESH
   1 INFLUENCE REVERSE → issue_read OpenCode (can_call)
-  Supporting evidence: ev_18d29a3529fa1660_153
-    - ev_18d29a3529fa1660_153 locator=project:opencode.json captured=2026-09-06T02:25:55.147712+00:00 freshness=FRESH
+  Supporting evidence: ev_18d29ab9f4641458_153
+    - ev_18d29ab9f4641458_153 locator=project:opencode.json captured=2026-09-06T02:35:25.479337+00:00 freshness=FRESH
   2 AUTHORITY FORWARD → OpenCode Bash (can_execute)
-  Supporting evidence: ev_18d29a3528d72db8_131
-    - ev_18d29a3528d72db8_131 locator=project:opencode.json captured=2026-09-06T02:25:55.128650+00:00 freshness=FRESH
+  Supporting evidence: ev_18d29ab9f3cabe70_130
+    - ev_18d29ab9f3cabe70_130 locator=project:opencode.json captured=2026-09-06T02:35:25.469288+00:00 freshness=FRESH
   3 AUTHORITY FORWARD → Bash Cloudflare API Token (can_access)
-  Supporting evidence: ev_18d29a352af1a560_168
-    - ev_18d29a352af1a560_168 locator=<redacted source locator> captured=2026-09-06T02:25:55.163934+00:00 freshness=FRESH
+  Supporting evidence: ev_18d29ab9f4cf74a0_167
+    - ev_18d29ab9f4cf74a0_167 locator=<redacted source locator> captured=2026-09-06T02:35:25.486373+00:00 freshness=FRESH
   4 AUTHORITY FORWARD → Cloudflare API Token production-fixture (can_mutate)
-  Supporting evidence: ev_18d29a352bdf8000_184
-    - ev_18d29a352bdf8000_184 locator=<redacted source locator> captured=2026-09-06T02:25:55.179522+00:00 freshness=FRESH
+  Supporting evidence: ev_18d29ab9f5405328_182
+    - ev_18d29ab9f5405328_182 locator=<redacted source locator> captured=2026-09-06T02:35:25.493771+00:00 freshness=FRESH
   Recorded boundaries: none
 GitHub MCP influence:
   GitHub MCP issue_read: github:public:issue-content | trust=PUBLIC_EXTERNAL | influence=AGENT_INJECTABLE
@@ -72,65 +72,65 @@ Persisted PUBLIC_EXTERNAL source trust on an otherwise eligible active productio
 Persisted CONFIRMED/DERIVED security-critical Relationships with non-INFERRED same-scan supporting and production Evidence and exact or scoped authority.
 
 Weakest evidence
-Weakest evidence: ev_18d29a3528d72db8_131 on edge rel_18d29a351b88bed8_23 captured 2026-09-06T02:25:55.128650+00:00 (freshness FRESH)
+Weakest evidence: ev_18d29ab9f3cabe70_130 on edge rel_18d29ab9eff51d90_25 captured 2026-09-06T02:35:25.469288+00:00 (freshness FRESH)
 Evidence
-Evidence: ev_18d29a3528d72db8_131
+Evidence: ev_18d29ab9f3cabe70_130
   Class: DERIVED
   Source type: opencode_effective_permission
   Source: project:opencode.json
   Subject: agent:opencode|can_execute|shell:bash
   Observation: effective Bash permission: ALLOW; scope: UNRESTRICTED; runtime mode: UNKNOWN
-  Captured: 2026-09-06T02:25:55.128650+00:00
+  Captured: 2026-09-06T02:35:25.469288+00:00
   Freshness: FRESH
   Sensitivity: INTERNAL
   Support roles: SINK_CLASSIFICATION
-Evidence: ev_18d29a3529fa1660_153
+Evidence: ev_18d29ab9f4641458_153
   Class: DERIVED
   Source type: github_mcp_influence
   Source: project:opencode.json
   Subject: agent:opencode|can_call|mcp:github:official:tool:issue_read
   Observation: OpenCode MCP permission for issue_read is ASK
-  Captured: 2026-09-06T02:25:55.147712+00:00
+  Captured: 2026-09-06T02:35:25.479337+00:00
   Freshness: FRESH
   Sensitivity: INTERNAL
   Support roles: SINK_CLASSIFICATION
-Evidence: ev_18d29a352a916c90_159
+Evidence: ev_18d29ab9f4913af0_158
   Class: DERIVED
   Source type: github_mcp_influence
   Source: project:opencode.json
   Subject: mcp:github:official:tool:issue_read|can_retrieve|source:github:public:issue-content
   Observation: issue_read can retrieve externally controlled GitHub content
-  Captured: 2026-09-06T02:25:55.157634+00:00
+  Captured: 2026-09-06T02:35:25.482295+00:00
   Freshness: FRESH
   Sensitivity: INTERNAL
   Support roles: SINK_CLASSIFICATION
-Evidence: ev_18d29a352af1a560_168
+Evidence: ev_18d29ab9f4cf74a0_167
   Class: DERIVED
   Source type: cloudflare_credential_reachability
   Source: <redacted source locator>
   Subject: shell:bash|can_access|credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f
   Observation: Bash credential reachability is REACHABLE
-  Captured: 2026-09-06T02:25:55.163934+00:00
+  Captured: 2026-09-06T02:35:25.486373+00:00
   Freshness: FRESH
   Sensitivity: INTERNAL
   Support roles: SINK_CLASSIFICATION
-Evidence: ev_18d29a352bc81000_182
+Evidence: ev_18d29ab9f5318de8_180
   Class: DIRECT
   Source type: cloudflare_worker_inventory
   Source: <redacted source locator>
   Subject: cloudflare:worker:account-1234567890123456:worker-tag-production-fixture
   Observation: Cloudflare Worker observed through the bounded Worker inventory operation
-  Captured: 2026-09-06T02:25:55.177990+00:00
+  Captured: 2026-09-06T02:35:25.492802+00:00
   Freshness: FRESH
   Sensitivity: INTERNAL
   Support roles: SINK_CLASSIFICATION
-Evidence: ev_18d29a352bdf8000_184
+Evidence: ev_18d29ab9f5405328_182
   Class: DERIVED
   Source type: cloudflare_authority_resolution
   Source: <redacted source locator>
   Subject: credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-production-fixture
   Observation: Cloudflare read-only policy and scope evidence resolved Worker mutation authority
-  Captured: 2026-09-06T02:25:55.179522+00:00
+  Captured: 2026-09-06T02:35:25.493771+00:00
   Freshness: FRESH
   Sensitivity: INTERNAL
   Support roles: SINK_CLASSIFICATION
@@ -147,24 +147,24 @@ Recommended cuts
    Description: Ensure the Actor cannot self-approve execution of the shell capability.
    Security effect: Interrupt autonomous execution before authority becomes reachable.
    Cut phase: AUTHORITY
-   Target resources: OpenCode (res_18d29a351b5a8ab8_8), Bash (res_18d29a351b7e4728_19)
-   Target relationships: rel_18d29a351b88bed8_23
+   Target resources: OpenCode (res_18d29ab9efb597d8_9), Bash (res_18d29ab9efe56238_21)
+   Target relationships: rel_18d29ab9eff51d90_25
    Target relationship (human-readable):
      - OpenCode -> Bash (can_execute)
 2. Remove the credential from the Actor-reachable execution environment. (REMOVE_AGENT_CREDENTIAL_REACHABILITY)
    Description: Prevent autonomous execution from reaching the authority-bearing credential.
    Security effect: Break the authority segment before credential use.
    Cut phase: AUTHORITY
-   Target resources: Bash (res_18d29a351b7e4728_19), Cloudflare API Token (res_18d29a351d7a3280_93)
-   Target relationships: rel_18d29a351d9bf320_97
+   Target resources: Bash (res_18d29ab9efe56238_21), Cloudflare API Token (res_18d29ab9f0f2b770_79)
+   Target relationships: rel_18d29ab9f115f6e0_89
    Target relationship (human-readable):
      - Bash -> Cloudflare API Token (can_access)
 3. Restrict the exact external retrieval capability for the privileged Actor. (RESTRICT_EXTERNAL_RETRIEVAL)
    Description: Require an explicit boundary before externally controlled content is retrieved by the Actor.
    Security effect: Break the influence segment before content reaches the Actor.
    Cut phase: INFLUENCE
-   Target resources: OpenCode (res_18d29a351b5a8ab8_8), issue_read (res_18d29a351c142270_51), Public GitHub issue content (res_18d29a351d2878a0_82)
-   Target relationships: rel_18d29a351ce40d00_75, rel_18d29a351d503480_86
+   Target resources: OpenCode (res_18d29ab9efb597d8_9), issue_read (res_18d29ab9f07c7dd0_49), Public GitHub issue content (res_18d29ab9f0c89e18_67)
+   Target relationships: rel_18d29ab9f0aa5c00_61, rel_18d29ab9f0d64248_71
    Target relationship (human-readable):
      - OpenCode -> issue_read (can_call)
      - issue_read -> Public GitHub issue content (can_retrieve)
@@ -172,8 +172,8 @@ Recommended cuts
    Description: Remove or narrow the exact production mutation edge reached by the Actor.
    Security effect: Limit the final authority-to-production mutation cut.
    Cut phase: AUTHORITY
-   Target resources: Cloudflare API Token (res_18d29a351d7a3280_93), production-fixture (res_18d29a352463aae0_117)
-   Target relationships: rel_18d29a35259773d8_121
+   Target resources: Cloudflare API Token (res_18d29ab9f0f2b770_79), production-fixture (res_18d29ab9f1b144b0_113)
+   Target relationships: rel_18d29ab9f1ce0be0_118
    Target relationship (human-readable):
      - Cloudflare API Token -> production-fixture (can_mutate)
 Recommendations only. Pico did not apply these changes.
