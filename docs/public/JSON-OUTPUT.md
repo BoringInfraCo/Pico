@@ -28,6 +28,9 @@ coverage, reason codes, and `disappearance_confirmed`. `before`/`after` field
 values distinguish missing, null, redacted, and typed JSON values; empty string and the
 literal string `"null"` are neither null nor missing. Raw objects and non-allowlisted arrays are redacted, as are token-shaped strings. Legacy cause summaries
 are preserved for human parity; attribution is the source of confirmation.
+A Cause summary alone is insufficient to establish an environmental cause,
+confirmation, or remediation; consult attribution classification, reasons,
+coverage, and `disappearance_confirmed` plus `limitations`.
 
 `compared_via` is latest_two or explicit_pair. Latest comparisons assess
 newer incomplete attempts via `freshness`. Explicit pairs use not_assessed,
@@ -37,7 +40,10 @@ Public schema version 1 is independent of both and of the SQLite schema.
 
 All history is retained history: first-seen does not establish first-ever.
 History reports its actual COMPLETE window, not a claimed configured prune
-policy. Catalog order is started_at then ID. COMPLETE window endpoints use
+policy. The prune `--keep` argument selects a retention policy input; it does
+not define the retained window. Consumers must read the actual window
+(`retained_history_only`, `complete_scan_count`, oldest/newest COMPLETE) and
+must not treat first-seen as first-ever. Catalog order is started_at then ID. COMPLETE window endpoints use
 completed_at, started_at, then ID; diff uses that same COMPLETE chronology.
 Finding/graph/attribution arrays preserve deterministic application ordering.
 Repeated reads of unchanged state produce equal bytes and omit read-time clocks.

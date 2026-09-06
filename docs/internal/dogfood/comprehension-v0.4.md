@@ -50,6 +50,25 @@ do not coach a participant to invent the missing claim. If no active production
 Finding is supported in H, preserve that uncertainty and test comprehension of
 why no active Finding was produced. Do not seed a fictional live success.
 
+Packet presentation and provenance (neutral; no expected values stated):
+
+- Present D side-by-side: include both the reduced-scope COMPLETE capture and
+  the legacy-provenance-unavailable capture together; do not isolate either as
+  a standalone all-clear.
+- For C, include both the latest-COMPLETE-pair capture and the
+  newer-incomplete-attempt context; Q5 freshness cannot be assessed from one
+  side alone.
+- For F, disclose seeded provenance in the packet inventory: a seeded persisted
+  metadata mutation, not a real upgrade run.
+- For H, label provider observations as synthetic injection and preserve unknown
+  authority/production/coverage state as shown; do not substitute live success.
+- For retention, include all three sources and keep their terminology distinct:
+  (a) history retained window, (b) diff retained-history scope and limitations,
+  (c) prune/doctor retained-state and removed-ID error. Do not conflate (a) the
+  actual retained window with a configured keep policy, (b) retained-pair
+  comparability with first-ever claims, or (c) removed-ID unavailability with
+  evidence of absence.
+
 ## 3. Set A — change comprehension questions
 
 Ask these questions for each relevant case; record N/A only when the question
@@ -72,6 +91,21 @@ After all cases, show corresponding JSON/MCP output for B, C, F, and G. Ask whet
 it changes the interpretation or hides a limitation visible in the human view.
 A participant need not understand JSON syntax perfectly; they must not be induced
 into a false safety claim by an absent or ambiguous limitation.
+
+N/A and citation rules (neutral; no expected values stated):
+
+- Record N/A only when the question truly does not apply, with the
+  administrator's reason. For Set B Q6 in a single-posture packet, the
+  "distinguish the agents" clause is N/A with reason; the
+  enforced/absent/uncertain boundary clause still requires an answer.
+- For G, the JSON/MCP comparison must still be shown; a pruned-ID typed error
+  states unavailability through the query and does not supply the missing
+  evidence.
+- Cite attribution, not Cause alone: a Cause summary is insufficient to
+  establish confirmation, cause, or remediation. An answer claiming an
+  environmental cause, confirmation, or remediation must cite the attribution
+  classification, reasons, coverage, and disappearance_confirmed fields plus
+  the applicable limitation/footer shown.
 
 ## 4. Set B — carried v0.3 path comprehension
 
@@ -112,6 +146,23 @@ Safety-critical requirements, all mandatory:
   movement or ambiguous multiple changes as proof of one environmental cause.
 - H: preserve unknown authority/production/boundary state; do not infer
   exploitation or executed remediation from observation.
+
+Scoring notes (neutral; no case-to-value mapping):
+
+- For Q3, accept a combined classification when the output shows multiple
+  supporting reasons; do not require a single exclusive choice when the
+  attribution lists more than one reason.
+- For the pruned-pair query, accept either wording for unavailability (for
+  example pruned, removed, or unavailable) only when the answer also explains
+  the retained-window scope and that deleted evidence is unavailable through
+  the query.
+- For reduced-scope cases, require citation of the attribution coverage field
+  even when IDs or fingerprints are unchanged; unchanged IDs alone do not
+  establish comparable scope.
+- Require citation of the applicable human footer and JSON limitations entry
+  (for example the not-observed/remediation line, the retained-history
+  limitation, or the not-all-clear line where shown); score at most 1 without
+  that citation.
 
 For a PASS, each safety-critical answer must score 2, all other applicable
 answers must score at least 1, and at least 80% of total possible points must be
@@ -155,6 +206,8 @@ Additional help shown / interruptions / coaching:
 Case / question:
 Verbatim answer:
 Supporting output identified by participant:
+Footer/limitation cited verbatim:
+JSON attribution fields cited (classification / reasons / coverage / disappearance_confirmed):
 Score (0/1/2) and reason:
 Safety-critical requirement (if any):
 Confusion / requested missing information:

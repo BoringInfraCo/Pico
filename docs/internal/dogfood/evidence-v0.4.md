@@ -60,6 +60,13 @@ to the oldest remaining witness. The test explicitly checks that exception and
 compares the complete remaining graph. Earlier first-seen history cannot survive
 its evidence being pruned. Doctor succeeds; removed IDs return an explicit error.
 
+Retention terminology — keep distinct: (a) retained history window (what history
+lists as the retained COMPLETE window), (b) retained-pair comparability (what a
+retained diff pair establishes within that window, including window-relative
+`first_seen_scan_id`), (c) removed-ID unavailability (explicit typed error for
+pruned/missing IDs, not evidence of absence). Do not conflate the configured
+prune keep argument with the actual retained window reported by history/doctor.
+
 All capture writes check the synthetic malformed-config sentinel and raw control
 bytes. Final database checks reject the sentinel and synthetic credential. The
 artifact sweep additionally rejects both known synthetic secret strings. This is
