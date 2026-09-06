@@ -1,0 +1,6 @@
+Pico diff
+
+A previous COMPLETE scan is required to compare.
+Newest COMPLETE scan: scan_18d29465052575a8_101 (COMPLETE)
+Run `pico scan` again after a completed scan to produce a diff.
+This is not an all-clear.

@@ -1,0 +1,19 @@
+Pico Findings
+
+Scan: scan_18d29464ba1184f8_47
+Status: COMPLETE
+Completed: 2026-09-06T00:39:22.398886+00:00
+Freshness: LATEST COMPLETE
+Findings: 1
+
+CRITICAL · HIGH confidence
+External content can reach production mutation authority
+Class: UNTRUSTED_TO_PRODUCTION
+Status: OPEN
+Paths: 1
+Affected production resources: 1
+ID: finding_scan_18d29464ba1184f8_47:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7
+Fingerprint: sha256:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7
+
+Run:
+  pico finding finding_scan_18d29464ba1184f8_47:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7

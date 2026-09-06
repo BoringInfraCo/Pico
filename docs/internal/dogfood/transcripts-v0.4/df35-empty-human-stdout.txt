@@ -1,0 +1,5 @@
+Pico diff
+
+No COMPLETE scan exists in this workspace.
+Run `pico scan` and let it complete to produce results.
+This is not an all-clear.

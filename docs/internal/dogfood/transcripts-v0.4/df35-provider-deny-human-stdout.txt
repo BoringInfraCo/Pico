@@ -1,0 +1,90 @@
+Pico diff
+
+From: scan_18d29464ba1184f8_47 (COMPLETE)
+To:   scan_18d29464db994a48_78 (COMPLETE)
+Compared: LAST TWO COMPLETE SCANS
+Freshness: LATEST COMPLETE
+Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
+Pico versions: 0.1.0 → 0.1.0
+
+Findings
+  Unchanged: 0
+  Appeared:  0
+  Disappeared: 1
+  Weakened: 0
+  Strengthened: 0
+  Uncertain: 0
+
+Disappeared
+  CRITICAL · HIGH confidence
+  External content can reach production mutation authority
+  Fingerprint: sha256:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7
+  ID: finding_scan_18d29464ba1184f8_47:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7
+  Cause: Bash effective state AUTO_ALLOW → DENIED
+
+Resources
+  Unchanged: 6
+  First seen: 0
+  Reappeared: 0
+  Changed: 0
+  Disappeared: 2
+
+Disappeared
+  provider_account · cloudflare · cloudflare:account:account-1234567890123456
+  First seen: scan_18d29464b6fcea28_0
+  Last seen: scan_18d29464ba1184f8_47
+  worker · cloudflare · cloudflare:worker:account-1234567890123456:worker-tag-production-fixture
+  First seen: scan_18d29464b6fcea28_0
+  Last seen: scan_18d29464ba1184f8_47
+
+Relationships
+  Unchanged: 4
+  First seen: 0
+  Reappeared: 0
+  Changed: 2
+  Disappeared: 2
+
+Changed
+  can_execute · agent:opencode|can_execute|shell:bash
+  First seen: scan_18d29464b6fcea28_0
+  Last seen: scan_18d29464db994a48_78
+  state: DERIVED → BLOCKED
+  effective_state: AUTO_ALLOW → DENIED
+  effective_permission: ALLOW → DENY
+  can_access · shell:bash|can_access|credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f
+  First seen: scan_18d29464b6fcea28_0
+  Last seen: scan_18d29464db994a48_78
+  state: DERIVED → BLOCKED
+
+Disappeared
+  can_mutate · credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-production-fixture
+  First seen: scan_18d29464b6fcea28_0
+  Last seen: scan_18d29464ba1184f8_47
+  scoped_to · credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|scoped_to|cloudflare:account:account-1234567890123456
+  First seen: scan_18d29464b6fcea28_0
+  Last seen: scan_18d29464ba1184f8_47
+
+Disappeared means not observed in the newer scan; remediation is not established.
+
+Observed-change attribution
+  agent:opencode|can_execute|shell:bash: observed environment change (field_support_unavailable, paired_field_observation)
+    Before: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29464ba428bc0_50]
+    After: coverage Inspected; sources [opencode_effective_permission]; supported fields [effective_permission, effective_state, runtime_mode, scope]; evidence [ev_18d29464dbdea430_81]
+  cloudflare:account:account-1234567890123456: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [other]; supported fields []; evidence [ev_18d29464bb39d858_71]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  cloudflare:worker:account-1234567890123456:worker-tag-production-fixture: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [other]; supported fields [identity_precision]; evidence [ev_18d29464bb682000_75]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|can_mutate|cloudflare:worker:account-1234567890123456:worker-tag-production-fixture: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [other]; supported fields [account_scope_state, authority_resolution, credential_status, granted_permissions, permission_state, unknown_reasons, zone_scoped]; evidence [ev_18d29464bb76e540_76]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f|scoped_to|cloudflare:account:account-1234567890123456: evidence change (absence_not_proven, observation_presence_only, observation_support_changed)
+    Before: coverage Unknown; sources [other]; supported fields [authority_resolution, credential_status]; evidence [ev_18d29464bb477c88_72]
+    After: coverage Unknown; sources []; supported fields []; evidence []
+  shell:bash|can_access|credential:cloudflare:1b5b9a6cc0058f348c037e16b3353ff76ef5ade490bd078c1169e74f714d552f: unattributed (field_support_unavailable)
+    Before: coverage Unknown; sources [other]; supported fields [authority_resolution, environment_reachability, runtime_mode, validity]; evidence [ev_18d29464bb13f520_68]
+    After: coverage Unknown; sources [other]; supported fields [authority_resolution, environment_reachability, runtime_mode, validity]; evidence [ev_18d29464dd1fcef0_99]
+  sha256:023ccde8669ad83c31bdaba890923298db9d6a84a1158a309bac54ff4bd7cfb7: unattributed (multiple_possible_causes)
+    Before: coverage Unknown; sources []; supported fields []; evidence []
+    After: coverage Unknown; sources []; supported fields []; evidence []

@@ -1,0 +1,13 @@
+Pico diff
+
+From: scan_18d294650c417788_116 (COMPLETE)
+To:   scan_18d2946513cc92d0_123 (COMPLETE)
+Compared: LAST TWO COMPLETE SCANS
+Freshness: LATEST COMPLETE
+
+Comparison contracts: c1-g1-a1-f1 → c999-g1-a1-f1 (MISMATCH)
+Pico versions: 0.1.0 → 0.1.0
+
+Security change comparison was skipped because the persisted comparison contracts differ.
+No Finding, graph, lifecycle, or Cause claim was computed for this pair.
+This is not an all-clear.

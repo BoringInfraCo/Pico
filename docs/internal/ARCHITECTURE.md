@@ -6023,7 +6023,13 @@ the diff carries comparison-contract provenance and returns an explicit
 non-comparable result instead of comparing across differing or unsupported
 contract tuples (schema stays v6). Since S030, `pico prune` applies bounded
 whole-unit retention (`pico prune [--keep N]`) and `pico doctor` reports
-database health read-only. This is not the full v0.4 product (no MCP diff).
+database health read-only. S031 moves all prune decisions and health gates
+inside an immediate transaction and redacts invalid JSON cell contents.
+S032 adds conservative observed-change attribution with separate evidence
+on both sides; absence is not established remediation. S033 adds
+`pico diff [<from> <to>] --json` and `pico history --json`. S034 adds read-only
+MCP `diff_scans` and `list_history`, using the same versioned public output.
+The independent comprehension gate remains required before v0.4 sign-off.
 See `docs/internal/sprints/SPRINT-024-support-note.md`
 and `docs/internal/sprints/SPRINT-027.md`.
 
@@ -7383,7 +7389,7 @@ still exactly one active finding under the golden fixture, with
 §2), read-only allowlisted probes, secret transience, and provider-aware
 adapters.
 
-## 28.5 Started v0.4 — finding-set memory, history, graph memory, lifecycle, contract guard, retention (S024–S030)
+## 28.5 v0.4 — security memory, attribution, and public queries (S024–S035)
 
 v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
 
@@ -7407,7 +7413,6 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   adds `findings.family_fingerprint` with the partial unique index
   `idx_findings_scan_family` and the non-empty insert trigger
   `findings_family_nonempty_insert`; legacy rows backfill to `''`.
-- No MCP diff/history tool.
 - Comparison contract guard (S029, schema stays v6): `pico diff` loads and
   validates a composite comparison tuple
   (`comparison_contract_version + graph_snapshot_version + analysis_version +
@@ -7438,6 +7443,36 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   and retention state read-only and fail-closed (non-zero exit when any
   check fails; it never repairs). Pruning never fabricates disappearance,
   remediation, or an all-clear.
+- Retention correctness (S031): the RUNNING check, plan, pre-health, deletion,
+  and post-health gate share one immediate transaction. Failed health gates
+  roll back before commit. Prune rejects unsupported schemas without
+  migrating; doctor reports invalid JSON locations/counts without their contents.
+- Attribution (S032): versioned application results classify observed changes
+  as environment, evidence, mixed, or unattributed. Typed snapshot deltas keep
+  missing/null/value distinct and normalize set-like policy arrays. Paired
+  field evidence and comparable bounded configuration coverage support
+  affirmative environment claims; unknown provider enumeration and missing
+  legacy coverage do not establish disappearance. Evidence IDs and supported
+  fields remain separate for each side. Collection scope records are safe
+  versioned scan metadata; SQLite stays v6. S029 still gates comparisons first.
+- Public output (S033): diff/history `--json` project explicit public DTOs
+  through `src/output.rs`, with public schema version 1 independent of SQLite
+  and comparison versions. Empty history, insufficient history, non-comparable
+  pairs, and application errors have distinct shapes; ready never means
+  all-clear. Unobserved subjects use `not_observed`; explicit-pair freshness
+  is `not_assessed`. No raw metadata or database exception details are exported.
+  Schema and consumer contract: `docs/public/output-v1.schema.json` and
+  `docs/public/JSON-OUTPUT.md`.
+- MCP history/diff (S034): `list_history` and `diff_scans` call the same
+  application services and public projections as CLI JSON. New tools validate
+  arguments strictly before database access. Application errors carry the
+  same redacted JSON payload with `isError: true`; parameter-shape failures
+  are fixed JSON-RPC errors. Original finding tool descriptors/payloads stay
+  compatible. No additional write or discovery operation is exposed.
+- Release evidence (S035): controlled offline scans and explicitly synthetic
+  provider observations produce CLI/JSON/MCP captures, retention checks, and
+  a participant packet. Automated evidence cannot close the independent
+  developer comprehension gate or the carried v0.3 comprehension requirement.
 - Authoritative slice scope:
   `docs/internal/sprints/SPRINT-024-support-note.md`,
   `docs/internal/sprints/SPRINT-025.md`,
@@ -7445,7 +7480,12 @@ v0.4 (ROADMAP §8) is **in progress**. These slices are not the whole phase.
   `docs/internal/sprints/SPRINT-027.md`,
   `docs/internal/sprints/SPRINT-028.md`,
   `docs/internal/sprints/SPRINT-029.md`,
-  `docs/internal/sprints/SPRINT-030.md`.
+  `docs/internal/sprints/SPRINT-030.md`,
+  `docs/internal/sprints/SPRINT-031.md`,
+  `docs/internal/sprints/SPRINT-032.md`,
+  `docs/internal/sprints/SPRINT-033.md`,
+  `docs/internal/sprints/SPRINT-034.md`,
+  `docs/internal/sprints/SPRINT-035.md`.
 
 ---
 

@@ -1,0 +1,1 @@
+{"schema_version":1,"command":"history","status":"ready","retained_history_only":true,"complete_scan_count":0,"oldest_complete_scan_id":null,"newest_complete_scan_id":null,"scans":[],"limitations":["Only retained scans are listed; earlier pruned history is unknown. Incomplete attempts are context and are never diff operands."]}

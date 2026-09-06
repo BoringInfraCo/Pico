@@ -1,0 +1,4 @@
+Pico Scan History
+
+No scans exist in this workspace.
+Run `pico scan` to create the first scan.

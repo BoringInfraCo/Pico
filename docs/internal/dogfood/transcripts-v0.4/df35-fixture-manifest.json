@@ -1,0 +1,12 @@
+{
+  "fixture": "tests/sprint035_dogfood.rs::controlled_scan_history_diff_mcp_and_retention_sequence",
+  "binary_sha256": "5fb04776702bc36468471337a31f832c2e6adcee919186d8e5a1fac9735a264e",
+  "observation_mode": "real local discovery using ScanService fixture seam; empty home and environment; no network providers",
+  "synthetic_mutation": "comparison_contract_version=999 on final scan after observation",
+  "independent_comprehension": "NOT RUN",
+  "limitations": [
+    "No live provider authority evidence",
+    "No active production Finding in this fixture",
+    "Main-file byte digest assumes default rollback journal; not a general WAL digest"
+  ]
+}

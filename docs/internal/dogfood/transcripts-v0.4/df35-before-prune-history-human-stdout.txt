@@ -1,0 +1,10 @@
+Pico Scan History
+
+ID                                         STATUS     FINDINGS   COMPLETED
+scan_18d29465052575a8_101                  COMPLETE   0          2026-09-06T00:39:23.625385+00:00
+scan_18d29465088ded38_110                  COMPLETE   0          2026-09-06T00:39:23.682655+00:00
+scan_18d294650c417788_116                  COMPLETE   0          2026-09-06T00:39:23.744253+00:00
+scan_18d2946510307c68_122                  PARTIAL    0          2026-09-06T00:39:23.806240+00:00
+scan_18d2946513cc92d0_123                  COMPLETE   0          2026-09-06T00:39:23.871449+00:00
+
+Newest COMPLETE: scan_18d2946513cc92d0_123

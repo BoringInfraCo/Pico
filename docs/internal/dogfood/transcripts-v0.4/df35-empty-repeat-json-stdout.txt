@@ -1,0 +1,1 @@
+{"schema_version":1,"command":"diff","status":"insufficient_history","reason":"no_complete_scan","newest_complete":null,"newest_attempt":null,"freshness":"not_assessed","limitations":["First-seen and reappearance refer only to retained COMPLETE observations at or before the destination scan; earlier pruned history is unknown."]}

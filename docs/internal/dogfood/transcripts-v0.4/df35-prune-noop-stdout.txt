@@ -1,0 +1,6 @@
+Pico prune
+
+Policy: keep 2 COMPLETE scans
+Nothing pruned: history is within the window.
+Retained: 2 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING
+Health: ok

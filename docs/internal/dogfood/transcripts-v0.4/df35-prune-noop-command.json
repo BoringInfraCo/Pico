@@ -1,0 +1,8 @@
+{
+  "args": [
+    "prune",
+    "--keep",
+    "2"
+  ],
+  "exit_code": 0
+}

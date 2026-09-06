@@ -1,0 +1,33 @@
+Pico diff
+
+From: scan_18d29465052575a8_101 (COMPLETE)
+To:   scan_18d29465088ded38_110 (COMPLETE)
+Compared: LAST TWO COMPLETE SCANS
+Freshness: LATEST COMPLETE
+Comparison contracts: c1-g1-a1-f1 → c1-g1-a1-f1 (SUPPORTED MATCH)
+Pico versions: 0.1.0 → 0.1.0
+
+Findings
+  Unchanged: 0
+  Appeared:  0
+  Disappeared: 0
+  Weakened: 0
+  Strengthened: 0
+  Uncertain: 0
+
+No security-significant finding change.
+This is not an all-clear.
+
+Resources
+  Unchanged: 2
+  First seen: 0
+  Reappeared: 0
+  Changed: 0
+  Disappeared: 0
+
+Relationships
+  Unchanged: 1
+  First seen: 0
+  Reappeared: 0
+  Changed: 0
+  Disappeared: 0
