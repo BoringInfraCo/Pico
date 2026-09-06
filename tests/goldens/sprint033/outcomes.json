@@ -1,0 +1,166 @@
+[
+  {
+    "schema_version": 1,
+    "command": "diff",
+    "status": "insufficient_history",
+    "reason": "no_complete_scan",
+    "newest_complete": null,
+    "newest_attempt": null,
+    "freshness": "not_assessed",
+    "limitations": [
+      "First-seen and reappearance refer only to retained COMPLETE observations at or before the destination scan; earlier pruned history is unknown."
+    ]
+  },
+  {
+    "schema_version": 1,
+    "command": "diff",
+    "status": "insufficient_history",
+    "reason": "need_previous_complete",
+    "newest_complete": {
+      "id": "only",
+      "status": "COMPLETE",
+      "completed_at": "2026-09-05T00:00:00Z"
+    },
+    "newest_attempt": null,
+    "freshness": "not_assessed",
+    "limitations": [
+      "First-seen and reappearance refer only to retained COMPLETE observations at or before the destination scan; earlier pruned history is unknown."
+    ]
+  },
+  {
+    "schema_version": 1,
+    "command": "diff",
+    "status": "not_comparable",
+    "from": {
+      "id": "older",
+      "status": "COMPLETE",
+      "completed_at": "2026-09-05T00:00:00Z"
+    },
+    "to": {
+      "id": "newer",
+      "status": "COMPLETE",
+      "completed_at": "2026-09-05T00:00:00Z"
+    },
+    "newest_attempt": null,
+    "freshness": "not_assessed",
+    "compared_via": "explicit_pair",
+    "provenance": {
+      "from": {
+        "pico_version": "0.1.0",
+        "contract": {
+          "comparison_contract_version": 1,
+          "graph_snapshot_version": 1,
+          "analysis_version": 1,
+          "finding_version": 1
+        }
+      },
+      "to": {
+        "pico_version": "0.1.0",
+        "contract": {
+          "comparison_contract_version": 1,
+          "graph_snapshot_version": 1,
+          "analysis_version": 1,
+          "finding_version": 1
+        }
+      }
+    },
+    "reason": "contract_changed",
+    "gaps": [],
+    "limitations": [
+      "First-seen and reappearance refer only to retained COMPLETE observations at or before the destination scan; earlier pruned history is unknown."
+    ]
+  },
+  {
+    "schema_version": 1,
+    "command": "diff",
+    "status": "ready",
+    "from": {
+      "id": "older",
+      "status": "COMPLETE",
+      "completed_at": "2026-09-05T00:00:00Z"
+    },
+    "to": {
+      "id": "newer",
+      "status": "COMPLETE",
+      "completed_at": "2026-09-05T00:00:00Z"
+    },
+    "newest_attempt": null,
+    "freshness": "not_assessed",
+    "compared_via": "explicit_pair",
+    "provenance": {
+      "from": {
+        "pico_version": "0.1.0",
+        "contract": {
+          "comparison_contract_version": 1,
+          "graph_snapshot_version": 1,
+          "analysis_version": 1,
+          "finding_version": 1
+        }
+      },
+      "to": {
+        "pico_version": "0.1.0",
+        "contract": {
+          "comparison_contract_version": 1,
+          "graph_snapshot_version": 1,
+          "analysis_version": 1,
+          "finding_version": 1
+        }
+      }
+    },
+    "findings": {
+      "unchanged": [],
+      "appeared": [],
+      "not_observed": [],
+      "weakened": [],
+      "strengthened": [],
+      "uncertain": []
+    },
+    "graph": {
+      "resources": {
+        "unchanged": [],
+        "first_seen": [],
+        "reappeared": [],
+        "changed": [],
+        "not_observed": []
+      },
+      "relationships": {
+        "unchanged": [],
+        "first_seen": [],
+        "reappeared": [],
+        "changed": [],
+        "not_observed": []
+      }
+    },
+    "attribution": {
+      "version": 1,
+      "graph_changes": [],
+      "finding_changes": []
+    },
+    "limitations": [
+      "First-seen and reappearance refer only to retained COMPLETE observations at or before the destination scan; earlier pruned history is unknown.",
+      "A finding-set disappearance or unobserved graph subject does not by itself confirm remediation; consult attribution and disappearance_confirmed."
+    ]
+  },
+  {
+    "schema_version": 1,
+    "command": "history",
+    "status": "ready",
+    "retained_history_only": true,
+    "complete_scan_count": 0,
+    "oldest_complete_scan_id": null,
+    "newest_complete_scan_id": null,
+    "scans": [],
+    "limitations": [
+      "Only retained scans are listed; earlier pruned history is unknown. Incomplete attempts are context and are never diff operands."
+    ]
+  },
+  {
+    "schema_version": 1,
+    "command": "diff",
+    "status": "error",
+    "error": {
+      "code": "database_error",
+      "message": "Cannot read a supported, consistent Pico database."
+    }
+  }
+]

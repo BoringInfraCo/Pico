@@ -36,7 +36,11 @@ enum Command {
     /// Run a scan of the current workspace.
     Scan,
     /// List all scans with status and finding counts.
-    History,
+    History {
+        /// Emit the versioned public JSON contract.
+        #[arg(long)]
+        json: bool,
+    },
     /// List Findings from the newest COMPLETE scan.
     Findings,
     /// Show one Finding by its exact ID.
@@ -47,6 +51,9 @@ enum Command {
         from: Option<String>,
         /// Newer scan id (COMPLETE).
         to: Option<String>,
+        /// Emit the versioned public JSON contract.
+        #[arg(long)]
+        json: bool,
     },
     /// Prune local scan history beyond the retention window.
     Prune {
@@ -65,10 +72,10 @@ pub fn run() -> Result<(), PicoError> {
     match Cli::parse().command {
         Command::Init => run_init(),
         Command::Scan => run_scan(),
-        Command::History => run_history(),
+        Command::History { json } => run_history(json),
         Command::Findings => run_findings(),
         Command::Finding { id } => run_finding(&id),
-        Command::Diff { from, to } => run_diff(from.as_deref(), to.as_deref()),
+        Command::Diff { from, to, json } => run_diff(from.as_deref(), to.as_deref(), json),
         Command::Prune { keep } => run_prune(keep),
         Command::Doctor => run_doctor(),
         Command::Mcp => crate::mcp::run(),
@@ -193,8 +200,15 @@ fn run_findings() -> Result<(), PicoError> {
 }
 
 /// Renders `pico history`.
-fn run_history() -> Result<(), PicoError> {
-    let history = HistoryService::list(&workspace()?)?;
+fn run_history(json: bool) -> Result<(), PicoError> {
+    let result = workspace().and_then(|workspace| HistoryService::list(&workspace));
+    if json {
+        return match result {
+            Ok(history) => print_json(&crate::output::history(&history)),
+            Err(error) => print_json_error("history", error),
+        };
+    }
+    let history = result?;
     print!("{}", render::render_scan_history(&history));
     Ok(())
 }
@@ -210,7 +224,22 @@ fn run_finding(id: &str) -> Result<(), PicoError> {
 }
 
 /// Renders `pico diff` or `pico diff <from> <to>`.
-fn run_diff(from: Option<&str>, to: Option<&str>) -> Result<(), PicoError> {
+fn run_diff(from: Option<&str>, to: Option<&str>, json: bool) -> Result<(), PicoError> {
+    let result = query_diff(from, to);
+    if json {
+        return match result {
+            Ok(result) => print_json(&crate::output::diff(&result)),
+            Err(error) => print_json_error("diff", error),
+        };
+    }
+    print!("{}", render::render_finding_diff(&result?));
+    Ok(())
+}
+
+fn query_diff(
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<crate::application::FindingDiffResult, PicoError> {
     let result = match (from, to) {
         (Some(from_id), Some(to_id)) => DiffService::compare(&workspace()?, from_id, to_id)?,
         (None, None) => DiffService::latest(&workspace()?)?,
@@ -220,8 +249,21 @@ fn run_diff(from: Option<&str>, to: Option<&str>) -> Result<(), PicoError> {
             ));
         }
     };
-    print!("{}", render::render_finding_diff(&result));
-    Ok(())
+    Ok(result)
+}
+
+fn print_json(payload: &impl serde::Serialize) -> Result<(), PicoError> {
+    use std::io::Write;
+    let encoded =
+        serde_json::to_string(payload).map_err(|_| PicoError::io("cannot encode JSON output"))?;
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{encoded}").map_err(|_| PicoError::io("cannot write JSON output"))
+}
+
+fn print_json_error(command: &str, error: PicoError) -> Result<(), PicoError> {
+    print_json(&crate::output::error(command, &error))?;
+    // main.rs preserves failure exit behavior, without echoing raw DB or ID data.
+    Err(PicoError::usage("query failed; see JSON error on stdout"))
 }
 
 /// Renders `pico prune` (SPRINT-030.md §5.4). Service-level failures (keep

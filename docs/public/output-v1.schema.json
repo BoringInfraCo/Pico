@@ -1,0 +1,1043 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pico diff/history public output v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/diff_ready"
+    },
+    {
+      "$ref": "#/$defs/diff_insufficient"
+    },
+    {
+      "$ref": "#/$defs/diff_not_comparable"
+    },
+    {
+      "$ref": "#/$defs/history"
+    },
+    {
+      "$ref": "#/$defs/error"
+    }
+  ],
+  "$defs": {
+    "scan": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "completed_at"
+      ],
+      "additionalProperties": false
+    },
+    "contract": {
+      "type": "object",
+      "properties": {
+        "comparison_contract_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "graph_snapshot_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "analysis_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finding_version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "comparison_contract_version",
+        "graph_snapshot_version",
+        "analysis_version",
+        "finding_version"
+      ],
+      "additionalProperties": false
+    },
+    "side_provenance": {
+      "type": "object",
+      "properties": {
+        "pico_version": {
+          "type": "string"
+        },
+        "contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/contract"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "pico_version",
+        "contract"
+      ],
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/side_provenance"
+        },
+        "to": {
+          "$ref": "#/$defs/side_provenance"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "additionalProperties": false
+    },
+    "gap": {
+      "type": "object",
+      "properties": {
+        "side": {
+          "enum": [
+            "from",
+            "to"
+          ]
+        },
+        "field": {
+          "enum": [
+            "comparison_contract_version",
+            "graph_snapshot_version",
+            "analysis_version",
+            "finding_version"
+          ]
+        }
+      },
+      "required": [
+        "side",
+        "field"
+      ],
+      "additionalProperties": false
+    },
+    "cause": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "graph_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_source_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "graph_key",
+        "field",
+        "from_value",
+        "to_value",
+        "evidence_source_types"
+      ],
+      "additionalProperties": false
+    },
+    "finding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "family_fingerprint": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "string"
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/cause"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "fingerprint",
+        "family_fingerprint",
+        "title",
+        "severity",
+        "confidence",
+        "cause"
+      ],
+      "additionalProperties": false
+    },
+    "rating_delta": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "from_value": {
+          "type": "string"
+        },
+        "to_value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "from_value",
+        "to_value"
+      ],
+      "additionalProperties": false
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/finding"
+        },
+        "to": {
+          "$ref": "#/$defs/finding"
+        },
+        "deltas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rating_delta"
+          }
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "deltas"
+      ],
+      "additionalProperties": false
+    },
+    "findings": {
+      "type": "object",
+      "properties": {
+        "unchanged": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "appeared": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "not_observed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "weakened": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lifecycle"
+          }
+        },
+        "strengthened": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lifecycle"
+          }
+        },
+        "uncertain": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lifecycle"
+          }
+        }
+      },
+      "required": [
+        "unchanged",
+        "appeared",
+        "not_observed",
+        "weakened",
+        "strengthened",
+        "uncertain"
+      ],
+      "additionalProperties": false
+    },
+    "typed_value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "missing"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "null"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "redacted"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "value"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "value"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "delta": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "before": {
+          "$ref": "#/$defs/typed_value"
+        },
+        "after": {
+          "$ref": "#/$defs/typed_value"
+        }
+      },
+      "required": [
+        "field",
+        "before",
+        "after"
+      ],
+      "additionalProperties": false
+    },
+    "subject": {
+      "type": "object",
+      "properties": {
+        "canonical_key": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "first_seen_scan_id": {
+          "type": "string"
+        },
+        "last_seen_scan_id": {
+          "type": "string"
+        },
+        "deltas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/delta"
+          }
+        }
+      },
+      "required": [
+        "canonical_key",
+        "kind",
+        "provider",
+        "name",
+        "state",
+        "first_seen_scan_id",
+        "last_seen_scan_id",
+        "deltas"
+      ],
+      "additionalProperties": false
+    },
+    "subjects": {
+      "type": "object",
+      "properties": {
+        "unchanged": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subject"
+          }
+        },
+        "first_seen": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subject"
+          }
+        },
+        "reappeared": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subject"
+          }
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subject"
+          }
+        },
+        "not_observed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subject"
+          }
+        }
+      },
+      "required": [
+        "unchanged",
+        "first_seen",
+        "reappeared",
+        "changed",
+        "not_observed"
+      ],
+      "additionalProperties": false
+    },
+    "graph": {
+      "type": "object",
+      "properties": {
+        "resources": {
+          "$ref": "#/$defs/subjects"
+        },
+        "relationships": {
+          "$ref": "#/$defs/subjects"
+        }
+      },
+      "required": [
+        "resources",
+        "relationships"
+      ],
+      "additionalProperties": false
+    },
+    "side_evidence": {
+      "type": "object",
+      "properties": {
+        "source_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "supported_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "coverage": {
+          "enum": [
+            "inspected",
+            "incomplete",
+            "not_attempted",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "source_types",
+        "evidence_ids",
+        "supported_fields",
+        "coverage"
+      ],
+      "additionalProperties": false
+    },
+    "change_attribution": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "enum": [
+            "first_seen",
+            "reappeared",
+            "changed",
+            "not_observed",
+            "appeared",
+            "weakened",
+            "strengthened",
+            "uncertain"
+          ]
+        },
+        "classification": {
+          "enum": [
+            "observed_environment_change",
+            "evidence_change",
+            "mixed",
+            "unattributed"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "before": {
+          "$ref": "#/$defs/side_evidence"
+        },
+        "after": {
+          "$ref": "#/$defs/side_evidence"
+        },
+        "disappearance_confirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "lifecycle",
+        "classification",
+        "reasons",
+        "before",
+        "after",
+        "disappearance_confirmed"
+      ],
+      "additionalProperties": false
+    },
+    "attribution": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "graph_changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/change_attribution"
+          }
+        },
+        "finding_changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/change_attribution"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "graph_changes",
+        "finding_changes"
+      ],
+      "additionalProperties": false
+    },
+    "diff_ready": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command": {
+          "const": "diff"
+        },
+        "status": {
+          "const": "ready"
+        },
+        "from": {
+          "$ref": "#/$defs/scan"
+        },
+        "to": {
+          "$ref": "#/$defs/scan"
+        },
+        "newest_attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/scan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "latest_complete",
+            "newer_incomplete_attempt",
+            "not_assessed"
+          ]
+        },
+        "compared_via": {
+          "enum": [
+            "latest_two",
+            "explicit_pair"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "findings": {
+          "$ref": "#/$defs/findings"
+        },
+        "graph": {
+          "$ref": "#/$defs/graph"
+        },
+        "attribution": {
+          "$ref": "#/$defs/attribution"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "command",
+        "status",
+        "from",
+        "to",
+        "newest_attempt",
+        "freshness",
+        "compared_via",
+        "provenance",
+        "findings",
+        "graph",
+        "attribution",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "diff_insufficient": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command": {
+          "const": "diff"
+        },
+        "status": {
+          "const": "insufficient_history"
+        },
+        "reason": {
+          "enum": [
+            "no_complete_scan",
+            "need_previous_complete"
+          ]
+        },
+        "newest_complete": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/scan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "newest_attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/scan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness": {
+          "const": "not_assessed"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "command",
+        "status",
+        "reason",
+        "newest_complete",
+        "newest_attempt",
+        "freshness",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "diff_not_comparable": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command": {
+          "const": "diff"
+        },
+        "status": {
+          "const": "not_comparable"
+        },
+        "from": {
+          "$ref": "#/$defs/scan"
+        },
+        "to": {
+          "$ref": "#/$defs/scan"
+        },
+        "newest_attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/scan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "latest_complete",
+            "newer_incomplete_attempt",
+            "not_assessed"
+          ]
+        },
+        "compared_via": {
+          "enum": [
+            "latest_two",
+            "explicit_pair"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "reason": {
+          "enum": [
+            "provenance_unavailable",
+            "contract_changed",
+            "contract_unsupported"
+          ]
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gap"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "command",
+        "status",
+        "from",
+        "to",
+        "newest_attempt",
+        "freshness",
+        "compared_via",
+        "provenance",
+        "reason",
+        "gaps",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "history_scan": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finding_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "started_at",
+        "completed_at",
+        "finding_count"
+      ],
+      "additionalProperties": false
+    },
+    "history": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command": {
+          "const": "history"
+        },
+        "status": {
+          "const": "ready"
+        },
+        "retained_history_only": {
+          "const": true
+        },
+        "complete_scan_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "oldest_complete_scan_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "newest_complete_scan_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/history_scan"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "command",
+        "status",
+        "retained_history_only",
+        "complete_scan_count",
+        "oldest_complete_scan_id",
+        "newest_complete_scan_id",
+        "scans",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command": {
+          "enum": [
+            "diff",
+            "history"
+          ]
+        },
+        "status": {
+          "const": "error"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "enum": [
+                "usage_error",
+                "database_error",
+                "io_error",
+                "internal_error"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema_version",
+        "command",
+        "status",
+        "error"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
