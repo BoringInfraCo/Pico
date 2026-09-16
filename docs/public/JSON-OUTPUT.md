@@ -56,3 +56,19 @@ should ignore unknown fields. Optional additive fields may retain v1;
 changed meanings/types, removed fields, and new enum variants need a new
 public version. The checked-in producer schema rejects unexpected fields to
 catch accidental projection leaks.
+
+## Runtime JSON
+
+Use `pico runtime --json` to emit the versioned, read-only runtime
+observability survey (schema v1, `command: "runtime"`, `status: "ready"`).
+Each `surfaces` entry reports filesystem metadata only — `agent`, `label`,
+`path` (relative or `~` form, never a raw home path), `present`, `bytes`, and a
+`level` of `observable`, `available_unread`, `not_available`, or `unknown` —
+ordered by agent then label. `distinctions` maps the closed set
+(`configured_capability`, `attempted_use`, `approved_use`, `completed_action`)
+to the same level enum. `notes` and `limitations` carry the survey's caveats,
+including that this reports what is observable, not what the agent did. There
+are no timestamps: the survey is a point-in-time capability read. A missing or
+unreadable surface is an explicit `not_available` or `unknown`, never omitted,
+and `bytes` is present with `null` when a present surface's size is
+unavailable. Failures reuse the shared error payload with `command: "runtime"`.

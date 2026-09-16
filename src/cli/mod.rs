@@ -94,6 +94,22 @@ enum Command {
     },
     /// Show freshness, recent watch notices, and the next step (read-only).
     Status,
+    /// Survey local agent runtime artifact surfaces (read-only, metadata-only).
+    ///
+    /// Reports filesystem metadata only — path, presence, byte size, and
+    /// observability level — for each supported agent's known runtime
+    /// artifacts. This command is read-only and metadata-only: it opens no
+    /// content database, reads no prompt, transcript, message, or credential
+    /// contents, creates no files or SQLite `-wal`/`-shm` sidecars, installs
+    /// no hooks, and runs no background process. It reports observability
+    /// capability over the configured, attempted, approved, and completed
+    /// distinctions — never agent activity, execution, or approval itself.
+    /// Use `--json` for the versioned public contract.
+    Runtime {
+        /// Emit the versioned public JSON contract.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Runs the parsed CLI command.
@@ -110,6 +126,7 @@ pub fn run() -> Result<(), PicoError> {
         Command::Mcp => crate::mcp::run(),
         Command::Watch { interval_secs } => run_watch(interval_secs),
         Command::Status => run_status(),
+        Command::Runtime { json } => run_runtime(json),
     }
 }
 
@@ -189,6 +206,94 @@ fn render_status_report(report: &crate::application::status::StatusReport) -> St
     ));
     out.push_str("This is not an all-clear: Pico reports what it observed, not safety.\n");
     out
+}
+
+/// Renders `pico runtime` (SPRINT-039.md §2.3). Thin view over the runtime
+/// survey: resolves the workspace (cwd) and the HOME seam exactly like
+/// `run_watch`, then delegates. All surface resolution, observability-level
+/// decisions, and notes live in `crate::application::runtime`; the CLI only
+/// formats the frozen human lines. Zero survey logic lives here.
+fn run_runtime(json: bool) -> Result<(), PicoError> {
+    let workspace = workspace()?;
+    let home_var = std::env::var_os("HOME");
+    let home = home_var.as_deref().map(Path::new);
+    let result = crate::application::runtime::survey(&workspace, home);
+    if json {
+        return match result {
+            Ok(report) => print_json(&crate::output::runtime(&report)),
+            Err(error) => print_json_error("runtime", error),
+        };
+    }
+    let report = result?;
+    print!("{}", render_runtime_report(&report));
+    Ok(())
+}
+
+/// Formats a runtime survey per the frozen §2.3 human contract: one line per
+/// surface (present/absent, size, level), one line per distinction, ending
+/// with the exact honesty line. Absent/unknown surfaces stay explicit, never
+/// blank reassurance. Every persisted string passes through `terminal_safe`.
+fn render_runtime_report(report: &crate::application::runtime::RuntimeReport) -> String {
+    use crate::shared::terminal_safe;
+
+    let mut out = String::from("Pico runtime survey\n");
+    out.push_str("Surfaces (filesystem metadata only):\n");
+    let mut surfaces: Vec<_> = report.surfaces.iter().collect();
+    surfaces.sort_by(|a, b| (&a.agent, &a.label).cmp(&(&b.agent, &b.label)));
+    for surface in surfaces {
+        let size = if !surface.present {
+            "size n/a".to_string()
+        } else {
+            match surface.bytes {
+                Some(bytes) => format!("{bytes} bytes"),
+                None => "size unknown".to_string(),
+            }
+        };
+        out.push_str(&format!(
+            "  {}/{}: {} ({}) [{}] {}\n",
+            terminal_safe(&surface.agent),
+            terminal_safe(&surface.label),
+            if surface.present { "present" } else { "absent" },
+            size,
+            human_level(&surface.level),
+            terminal_safe(&surface.path),
+        ));
+    }
+    out.push_str("Distinctions:\n");
+    let mut distinctions: Vec<_> = report.distinctions.iter().collect();
+    distinctions.sort_by_key(|pair| human_distinction_rank(&pair.0));
+    for (distinction, level) in distinctions {
+        out.push_str(&format!(
+            "  {}: {}\n",
+            human_distinction(distinction),
+            human_level(level),
+        ));
+    }
+    out.push_str(crate::application::runtime::HONESTY_LINE);
+    out.push('\n');
+    out
+}
+
+fn human_level(level: &crate::application::runtime::ObservabilityLevel) -> &'static str {
+    level.as_str()
+}
+fn human_distinction(distinction: &crate::application::runtime::Distinction) -> &'static str {
+    use crate::application::runtime::Distinction;
+    match distinction {
+        Distinction::ConfiguredCapability => "configured capability",
+        Distinction::AttemptedUse => "attempted use",
+        Distinction::ApprovedUse => "approved vs denied use",
+        Distinction::CompletedAction => "completed consequential action",
+    }
+}
+fn human_distinction_rank(distinction: &crate::application::runtime::Distinction) -> u8 {
+    use crate::application::runtime::Distinction;
+    match distinction {
+        Distinction::ConfiguredCapability => 0,
+        Distinction::AttemptedUse => 1,
+        Distinction::ApprovedUse => 2,
+        Distinction::CompletedAction => 3,
+    }
 }
 
 /// Resolves the workspace to the current directory.

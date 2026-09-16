@@ -15,6 +15,9 @@
       "$ref": "#/$defs/history"
     },
     {
+      "$ref": "#/$defs/runtime"
+    },
+    {
       "$ref": "#/$defs/error"
     }
   ],
@@ -994,6 +997,125 @@
       ],
       "additionalProperties": false
     },
+    "runtime_surface": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "enum": [
+            "observable",
+            "available_unread",
+            "not_available",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "label",
+        "path",
+        "present",
+        "bytes",
+        "level"
+      ],
+      "additionalProperties": false
+    },
+    "runtime_distinction": {
+      "type": "object",
+      "properties": {
+        "distinction": {
+          "enum": [
+            "configured_capability",
+            "attempted_use",
+            "approved_use",
+            "completed_action"
+          ]
+        },
+        "level": {
+          "enum": [
+            "observable",
+            "available_unread",
+            "not_available",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "distinction",
+        "level"
+      ],
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "command": {
+          "const": "runtime"
+        },
+        "status": {
+          "const": "ready"
+        },
+        "surfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/runtime_surface"
+          }
+        },
+        "distinctions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/runtime_distinction"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "command",
+        "status",
+        "surfaces",
+        "distinctions",
+        "notes",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
     "error": {
       "type": "object",
       "properties": {
@@ -1003,7 +1125,8 @@
         "command": {
           "enum": [
             "diff",
-            "history"
+            "history",
+            "runtime"
           ]
         },
         "status": {

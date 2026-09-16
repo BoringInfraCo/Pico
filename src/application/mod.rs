@@ -14,6 +14,7 @@ pub mod graph_diff;
 pub mod history;
 pub mod init;
 pub mod retention;
+pub mod runtime;
 pub mod scan;
 pub mod status;
 pub mod watch;

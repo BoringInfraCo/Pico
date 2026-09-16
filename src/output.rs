@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::application::compare_contract::{DiffProvenance, DiffSideProvenance};
 use crate::application::diff::{ComparedVia, DiffNotComparableReason};
 use crate::application::graph_diff::{GraphDelta, GraphSubject, GraphSubjectDiff};
+use crate::application::runtime::{Distinction, ObservabilityLevel, RuntimeReport, SurfaceReport};
 use crate::application::{
     DiffFinding, FindingDiffResult, FindingLifecycleChange, Freshness, ScanBrief, ScanHistory,
 };
@@ -423,6 +424,95 @@ pub fn history(v: &ScanHistory) -> HistoryOutput {
         (&a.completed_at, &a.started_at, &a.id).cmp(&(&b.completed_at, &b.started_at, &b.id))
     });
     HistoryOutput { schema_version: SCHEMA_VERSION, command: "history", status: "ready", retained_history_only: true, complete_scan_count: complete.len(), oldest_complete_scan_id: complete.first().map(|s| safe(&s.id)), newest_complete_scan_id: complete.last().map(|s| safe(&s.id)), scans: scans.iter().map(|s| HistoryScan { id: safe(&s.id), status: safe(&s.status), started_at: optional(&s.started_at), completed_at: optional(&s.completed_at), finding_count: s.finding_count }).collect(), limitations: vec!["Only retained scans are listed; earlier pruned history is unknown. Incomplete attempts are context and are never diff operands."] }
+}
+
+const RUNTIME_LIMITATIONS: [&str; 2] = [
+    crate::application::runtime::HONESTY_LINE,
+    "Surfaces report filesystem metadata only; Pico opens no content database and reads no prompt, transcript, or credential contents.",
+];
+
+#[derive(Debug, Serialize)]
+pub struct RuntimeOutput {
+    schema_version: u32,
+    command: &'static str,
+    status: &'static str,
+    surfaces: Vec<RuntimeSurface>,
+    distinctions: Vec<RuntimeDistinction>,
+    notes: Vec<String>,
+    limitations: Vec<&'static str>,
+}
+#[derive(Debug, Serialize)]
+struct RuntimeSurface {
+    agent: String,
+    label: String,
+    path: String,
+    present: bool,
+    bytes: Option<u64>,
+    level: &'static str,
+}
+#[derive(Debug, Serialize)]
+struct RuntimeDistinction {
+    distinction: &'static str,
+    level: &'static str,
+}
+/// Project the runtime capability survey: metadata-only, deterministic,
+/// timestamp-free. Nullable sizes stay present as null, never absent.
+pub fn runtime(report: &RuntimeReport) -> RuntimeOutput {
+    let mut surfaces: Vec<&SurfaceReport> = report.surfaces.iter().collect();
+    surfaces.sort_by(|a, b| (&a.agent, &a.label).cmp(&(&b.agent, &b.label)));
+    let mut distinctions: Vec<&(Distinction, ObservabilityLevel)> =
+        report.distinctions.iter().collect();
+    distinctions.sort_by_key(|pair| distinction_rank(&pair.0));
+    RuntimeOutput {
+        schema_version: SCHEMA_VERSION,
+        command: "runtime",
+        status: "ready",
+        surfaces: surfaces
+            .into_iter()
+            .map(|surface| RuntimeSurface {
+                agent: safe(&surface.agent),
+                label: safe(&surface.label),
+                path: safe(&surface.path),
+                present: surface.present,
+                bytes: surface.bytes,
+                level: runtime_level(&surface.level),
+            })
+            .collect(),
+        distinctions: distinctions
+            .into_iter()
+            .map(|(distinction, level)| RuntimeDistinction {
+                distinction: distinction_code(distinction),
+                level: runtime_level(level),
+            })
+            .collect(),
+        notes: report.notes.iter().map(|note| safe(note)).collect(),
+        limitations: RUNTIME_LIMITATIONS.to_vec(),
+    }
+}
+
+fn runtime_level(level: &ObservabilityLevel) -> &'static str {
+    match level {
+        ObservabilityLevel::Observable => "observable",
+        ObservabilityLevel::AvailableUnread => "available_unread",
+        ObservabilityLevel::NotAvailable => "not_available",
+        ObservabilityLevel::Unknown => "unknown",
+    }
+}
+fn distinction_code(distinction: &Distinction) -> &'static str {
+    match distinction {
+        Distinction::ConfiguredCapability => "configured_capability",
+        Distinction::AttemptedUse => "attempted_use",
+        Distinction::ApprovedUse => "approved_use",
+        Distinction::CompletedAction => "completed_action",
+    }
+}
+fn distinction_rank(distinction: &Distinction) -> u8 {
+    match distinction {
+        Distinction::ConfiguredCapability => 0,
+        Distinction::AttemptedUse => 1,
+        Distinction::ApprovedUse => 2,
+        Distinction::CompletedAction => 3,
+    }
 }
 
 #[derive(Debug, Serialize)]

@@ -1027,7 +1027,7 @@ v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
 v0.4  Security memory              ADVANCE with open caveats (S024–S036 DONE; independent v0.4 + carried v0.3 gates carried, §23)
-v0.5  Continuous observation       IN PROGRESS (S037 `pico watch`, FILESYSTEM_CHANGE slice 1)
+v0.5  Continuous observation       IN PROGRESS (S037 `pico watch`; S038 notices + `pico status`; S039 `pico runtime` observability survey; runtime ingestion deferred to S040)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
