@@ -58,6 +58,7 @@ impl std::fmt::Display for ScanStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScanTrigger {
     Manual,
+    FilesystemChange,
 }
 
 impl ScanTrigger {
@@ -65,6 +66,7 @@ impl ScanTrigger {
     pub fn as_str(&self) -> &'static str {
         match self {
             ScanTrigger::Manual => "MANUAL",
+            ScanTrigger::FilesystemChange => "FILESYSTEM_CHANGE",
         }
     }
 }
@@ -75,6 +77,7 @@ impl std::str::FromStr for ScanTrigger {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "MANUAL" => Ok(ScanTrigger::Manual),
+            "FILESYSTEM_CHANGE" => Ok(ScanTrigger::FilesystemChange),
             other => Err(DomainError::InvalidValue(format!(
                 "unknown scan trigger: {other}"
             ))),
@@ -107,17 +110,29 @@ impl Scan {
                 "pico_version must not be empty".to_string(),
             ));
         }
-        Ok(Scan {
+        Ok(Self::begin(pico_version, ScanTrigger::Manual))
+    }
+
+    /// Begin a new Scan in the RUNNING state with an explicit trigger
+    /// (SPRINT-037: the filesystem watcher records `FilesystemChange`).
+    /// `start()` keeps the `Manual` default. The crate version is always
+    /// non-empty, so this constructor is infallible.
+    pub fn start_with_trigger(trigger: ScanTrigger) -> Self {
+        Self::begin(env!("CARGO_PKG_VERSION"), trigger)
+    }
+
+    fn begin(pico_version: &str, trigger: ScanTrigger) -> Self {
+        Scan {
             id: new_id("scan"),
             started_at: Utc::now(),
             completed_at: None,
             status: ScanStatus::Running,
-            trigger: ScanTrigger::Manual,
+            trigger,
             scope: None,
             pico_version: pico_version.to_string(),
             environment_fingerprint: None,
             metadata: None,
-        })
+        }
     }
 
     /// Transition a RUNNING scan to COMPLETE, recording completion time.
@@ -233,10 +248,32 @@ mod tests {
 
     #[test]
     fn trigger_round_trips() {
-        assert_eq!(
-            ScanTrigger::from_str(ScanTrigger::Manual.as_str()).unwrap(),
-            ScanTrigger::Manual
-        );
+        for trigger in [ScanTrigger::Manual, ScanTrigger::FilesystemChange] {
+            assert_eq!(ScanTrigger::from_str(trigger.as_str()).unwrap(), trigger);
+        }
         assert!(ScanTrigger::from_str("SCHEDULED").is_err());
+        assert!(ScanTrigger::from_str("filesystem_change").is_err());
+        assert!(ScanTrigger::from_str("").is_err());
+    }
+
+    #[test]
+    fn filesystem_change_trigger_spelling_is_frozen() {
+        assert_eq!(ScanTrigger::FilesystemChange.as_str(), "FILESYSTEM_CHANGE");
+    }
+
+    #[test]
+    fn start_with_trigger_records_filesystem_change() {
+        let scan = Scan::start_with_trigger(ScanTrigger::FilesystemChange);
+        assert_eq!(scan.trigger, ScanTrigger::FilesystemChange);
+        assert_eq!(scan.status, ScanStatus::Running);
+        assert!(scan.id.starts_with("scan_"));
+        assert!(!scan.pico_version.trim().is_empty());
+    }
+
+    #[test]
+    fn start_with_trigger_manual_matches_start_default() {
+        let triggered = Scan::start_with_trigger(ScanTrigger::Manual);
+        assert_eq!(triggered.trigger, ScanTrigger::Manual);
+        assert_eq!(triggered.trigger, Scan::start("0.1.0").unwrap().trigger);
     }
 }

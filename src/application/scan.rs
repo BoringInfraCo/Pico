@@ -9,8 +9,8 @@ use crate::application::compare_contract::COMPARISON_CONTRACT_VERSION;
 use crate::discovery;
 use crate::domain::{
     relationship_snapshot_metadata, resource_snapshot_metadata, Evidence, EvidenceClass,
-    Observation, Relationship, RelationshipState, Resource, Scan, ScanStatus, Sensitivity,
-    GRAPH_SNAPSHOT_VERSION,
+    Observation, Relationship, RelationshipState, Resource, Scan, ScanStatus, ScanTrigger,
+    Sensitivity, GRAPH_SNAPSHOT_VERSION,
 };
 use crate::findings::diagnostics::{ProviderDiagnostic, ScanDiagnostics};
 use crate::findings::{
@@ -24,7 +24,7 @@ use crate::persistence::{
     FindingRemediationRecord, FindingRepo, ObservationRepo, RelationshipRepo, ResourceRepo,
     ScanAnalysisRecord, ScanAnalysisRepo, ScanDiagnosticsRepo, ScanRepo,
 };
-use crate::shared::{PicoError, PICO_VERSION};
+use crate::shared::PicoError;
 use chrono::Utc;
 
 /// One discovered agent's effective Bash posture for scan-summary surfacing (S023 / F-U1).
@@ -183,6 +183,26 @@ impl ScanService {
         )
     }
 
+    /// Trigger-taking operator entry (SPRINT-037): runs the identical bounded
+    /// pipeline as [`ScanService::run`] but records the caller's trigger
+    /// instead of `Manual`. The filesystem watcher passes
+    /// [`ScanTrigger::FilesystemChange`]; all other entries keep `Manual`.
+    pub fn run_with_trigger(
+        workspace: &Path,
+        home: Option<&Path>,
+        trigger: ScanTrigger,
+    ) -> Result<ScanResult, PicoError> {
+        Self::run_pipeline(
+            workspace,
+            home,
+            None,
+            OPERATOR_REACHABILITY,
+            None,
+            None,
+            trigger,
+        )
+    }
+
     /// Combined provider seam: injects optional Cloudflare and GitHub provider
     /// results after discovery so fixtures can exercise either authority path
     /// without network access.
@@ -194,11 +214,33 @@ impl ScanService {
         provider_result: Option<discovery::cloudflare::ProviderResult>,
         github_result: Option<discovery::github::GitHubAuthorityResult>,
     ) -> Result<ScanResult, PicoError> {
+        Self::run_pipeline(
+            workspace,
+            home,
+            environment,
+            environment_reachability,
+            provider_result,
+            github_result,
+            ScanTrigger::Manual,
+        )
+    }
+
+    /// The single bounded scan pipeline. Every public entry funnels through
+    /// here; only the recorded [`ScanTrigger`] varies.
+    fn run_pipeline(
+        workspace: &Path,
+        home: Option<&Path>,
+        environment: Option<&[(&str, &str)]>,
+        environment_reachability: discovery::EnvironmentReachability,
+        provider_result: Option<discovery::cloudflare::ProviderResult>,
+        github_result: Option<discovery::github::GitHubAuthorityResult>,
+        trigger: ScanTrigger,
+    ) -> Result<ScanResult, PicoError> {
         let mut db = Database::open_existing(&workspace.join(".pico").join("pico.db"))?;
         db.migrate()?;
 
         let scan_repo = ScanRepo::new(db.connection());
-        let mut scan = Scan::start(PICO_VERSION)?;
+        let mut scan = Scan::start_with_trigger(trigger);
         // Every scan declares the full comparison-contract tuple (SPRINT-029):
         // comparison_contract_version and finding_version join the existing
         // graph_snapshot_version declaration. scan_analyses remains the
@@ -1939,6 +1981,7 @@ fn persist_influence_relationship(
 mod tests {
     use super::OPERATOR_REACHABILITY;
     use crate::discovery::EnvironmentReachability;
+    use crate::domain::ScanTrigger;
 
     /// The operator entry point must assert Proven reachability: with the
     /// parameter pinned to Unknown upstream, the live provider gate
@@ -1947,5 +1990,47 @@ mod tests {
     #[test]
     fn operator_entry_point_asserts_proven_reachability() {
         assert_eq!(OPERATOR_REACHABILITY, EnvironmentReachability::Proven);
+    }
+
+    /// The trigger-taking entry threads `FilesystemChange` into the persisted
+    /// scan while existing entries keep `Manual` (SPRINT-037 §2.2).
+    #[test]
+    fn run_with_trigger_records_caller_trigger() {
+        use crate::persistence::{Database, ScanRepo};
+
+        let dir = tempfile::tempdir().unwrap();
+        crate::application::InitService::run(dir.path()).unwrap();
+        // A sentinel config VALUE the adapters never project: it must stay
+        // transient and never reach persisted state.
+        std::fs::write(
+            dir.path().join("opencode.json"),
+            r#"{"permission":{"bash":"allow"},"token":"PICO_SWEEP_SENTINEL_7f3a9c_VALUE"}"#,
+        )
+        .unwrap();
+
+        let triggered =
+            super::ScanService::run_with_trigger(dir.path(), None, ScanTrigger::FilesystemChange)
+                .unwrap();
+        let db = Database::open_read_only(&dir.path().join(".pico").join("pico.db")).unwrap();
+        let stored = ScanRepo::new(db.connection())
+            .get(&triggered.scan_id)
+            .unwrap()
+            .expect("triggered scan persisted");
+        assert_eq!(stored.trigger, ScanTrigger::FilesystemChange);
+
+        let manual = super::ScanService::run_with_home(dir.path(), None).unwrap();
+        let stored = ScanRepo::new(db.connection())
+            .get(&manual.scan_id)
+            .unwrap()
+            .expect("manual scan persisted");
+        assert_eq!(stored.trigger, ScanTrigger::Manual);
+
+        drop(db);
+        let raw = std::fs::read(dir.path().join(".pico").join("pico.db")).unwrap();
+        let haystack = String::from_utf8_lossy(&raw);
+        assert!(
+            !haystack.contains("PICO_SWEEP_SENTINEL_7f3a9c_VALUE"),
+            "sentinel config values stay transient; DB holds paths and IDs only"
+        );
     }
 }

@@ -6,7 +6,7 @@
 
 pub mod render;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
@@ -65,6 +65,33 @@ enum Command {
     Doctor,
     /// Serve Pico findings to coding agents over MCP (stdio).
     Mcp,
+    /// Watch agent/MCP configs for changes and rescan on change.
+    ///
+    /// Watches the same config files `pico scan` reads: workspace
+    /// `opencode.json[c]`, `.opencode/opencode.json[c]`, Claude
+    /// `.claude/settings.json`, `settings.local.json`, `.mcp.json`, the
+    /// `$HOME` user copies of those files, and the project `.env` (key
+    /// names only, never values). Missing files are watched for creation.
+    /// Only modification time and size are checked; file contents are
+    /// never read by the watcher.
+    ///
+    /// Budgets: one filesystem stat round per interval while idle; one
+    /// bounded `pico scan` per change batch only; no network beyond what
+    /// `scan` already does; no content or config-value capture anywhere.
+    ///
+    /// Each trigger appends one JSON object to `.pico/watch.jsonl` with
+    /// the watch-root-relative changed paths (never absolute home paths,
+    /// never secret values) and the resulting scan summary.
+    ///
+    /// Stop with Ctrl-C (or kill the process). Watching is foreground
+    /// only: there is no daemon to install or stop. A kill mid-scan
+    /// leaves at most an unscanned change, which the next `pico watch`
+    /// or `pico scan` picks up.
+    Watch {
+        /// Seconds between filesystem checks (must be >= 1).
+        #[arg(long, default_value_t = 2)]
+        interval_secs: u64,
+    },
 }
 
 /// Runs the parsed CLI command.
@@ -79,6 +106,7 @@ pub fn run() -> Result<(), PicoError> {
         Command::Prune { keep } => run_prune(keep),
         Command::Doctor => run_doctor(),
         Command::Mcp => crate::mcp::run(),
+        Command::Watch { interval_secs } => run_watch(interval_secs),
     }
 }
 
@@ -287,6 +315,29 @@ fn run_doctor() -> Result<(), PicoError> {
             "pico doctor: database health check failed",
         ));
     }
+    Ok(())
+}
+
+/// Renders `pico watch` (SPRINT-037.md §2.2/§2.3). Thin view over the watch
+/// service: validates the interval, resolves workspace + HOME the same way
+/// `run_scan` does, and delegates. The CLI always passes
+/// `max_events: None` (run until killed); all scan/diff/JSONL behavior
+/// lives in the application service.
+fn run_watch(interval_secs: u64) -> Result<(), PicoError> {
+    if interval_secs == 0 {
+        return Err(PicoError::usage(
+            "watch requires --interval-secs >= 1 (got 0); rerun with e.g. `pico watch --interval-secs 2`",
+        ));
+    }
+    let workspace = workspace()?;
+    let home_var = std::env::var_os("HOME");
+    let home = home_var.as_deref().map(Path::new);
+    let cfg = crate::application::watch::WatchConfig {
+        interval_secs,
+        max_events: None,
+    };
+    crate::application::watch::run(&workspace, home, &cfg)?;
+    println!("Pico watch stopped.");
     Ok(())
 }
 

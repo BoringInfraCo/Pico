@@ -38,7 +38,8 @@ Per `skills/build-pico/SKILL.md` (the canonical Engineering Constitution), read 
 - **v0.1 Golden-Path Proof COMPLETE** (SPRINT-001–012; ADVANCE with one open caveat: independent-developer comprehension was a proxy self-check, not an independent run).
 - **v0.2 Evidence and Authority Depth COMPLETE** (SPRINT-013–019; ADVANCE).
 - **v0.3 Earned Expansion COMPLETE** (SPRINT-020–023; ADVANCE). The v0.3 independent-developer comprehension gate stays open and is not closed by later work.
-- **v0.4 Security Memory and Change Detection IN PROGRESS** (S024 finding-set `pico diff` over COMPLETE scans; S025 `pico history` + explicit-pair diff; S026 resource/relationship graph memory; S027 causal explanation; S028 finding lifecycle via family fingerprint; S029 comparison-contract guard returning explicit `NotComparable`; S030 retention/prune/doctor; S031 retention correctness; S032 observed-change attribution; S033 stable public JSON schema v1; S034 read-only MCP `list_history`/`diff_scans` DONE (S036 validation, no code change); S035 automated evidence bounded, independent comprehension PARTIAL/HOLD; S036 closeout-finish DONE). No ADVANCE claimed; the independent gate remains open. A third agent remains architecture unless concrete user demand outweighs this sequencing.
+- **v0.4 Security Memory and Change Detection ADVANCE with open caveats** (S024–S036; independent v0.4 + carried v0.3 comprehension gates NOT RUN and carried into v0.5 — ROADMAP §23, recorded at founder direction to unblock development).
+- **v0.5 Continuous and Runtime Observation IN PROGRESS** (S037 `pico watch`: opt-in foreground FILESYSTEM_CHANGE observer over adapter-read configs; same scan/diff engine; no daemon, notifications, or enforcement). A third agent remains architecture unless concrete user demand outweighs this sequencing.
 
 Product loop:
 

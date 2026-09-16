@@ -1,7 +1,7 @@
 # Pico — Product Roadmap
 
 **File:** `ROADMAP.md`  
-**Status:** Implemented through v0.3 (advancement records §§20–22); v0.4 in progress (S024–S034 done, S035 automated-bounded/HOLD human-only, S036 closeout-finish done); v0.3 exit review pending
+**Status:** Implemented through v0.4 (advancement records §§20–23; ADVANCE with open caveats: independent v0.4 + carried v0.3 comprehension gates carried into v0.5); v0.5 in progress (S037 `pico watch`); v0.3 exit review pending
 **Date:** August 18, 2026  
 **Stage:** Post-architecture, implementation in progress (v0.1–v0.3 shipped; v0.4 in progress; see §§20–22)  
 **Depends on:** `PRODUCT_DEFINITION.md`, `TECHNICAL.md`, `ARCHITECTURE.md`
@@ -1026,7 +1026,8 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
-v0.4  Security memory              IN PROGRESS (S024–S034 DONE; S035 automated-bounded, human-only HOLD; S036 closeout-finish DONE)
+v0.4  Security memory              ADVANCE with open caveats (S024–S036 DONE; independent v0.4 + carried v0.3 gates carried, §23)
+v0.5  Continuous observation       IN PROGRESS (S037 `pico watch`, FILESYSTEM_CHANGE slice 1)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
@@ -1313,3 +1314,78 @@ single-agent OpenCode line `Effective Bash: ALLOW` is unchanged. The
 independent-developer comprehension gate remains open (S022/S023 proxies
 only; same caveat as v0.1, §20). Do not treat this as v0.3 exit-review
 close.
+
+---
+
+# 23. v0.4 Advancement Decision Record
+
+Recorded 2026-09-16 at founder direction to unblock product development:
+S036 closed every automated v0.4 item and human-gate recruitment is
+unbounded, so waiting would stall the product. This record explicitly
+overrides S036's holding note. Format per §17.
+
+```text
+Phase: v0.4 — Security Memory and Change Detection
+
+Decision: ADVANCE with open caveats (v0.1 §20 / v0.3 §22 precedent)
+
+Product claim proven:
+Pico remembers security posture and explains change: finding-set and
+graph memory over COMPLETE scans, causal explanation with
+environment/evidence/mixed/unattributed attribution, finding lifecycle
+(weakened/strengthened/uncertian) via family fingerprint,
+comparison-contract guards returning explicit NotComparable, retention
+controls that never fabricate disappearance, and stable public JSON
+schema v1 over CLI and read-only MCP — all bounded automated evidence,
+no ADVANCE of anything the evidence does not support.
+
+Exit criteria met (ROADMAP §8, via S024–S036):
+unchanged environments produce no significant diff; permission/approval/
+scope/MCP/authority changes produce expected deterministic diffs with
+attribution; first appearance carries smallest observed cause (no invented
+unique cause); failure/reduced scope never reads as remediation;
+lifecycle stable with explicit NotComparable on contract change; retained
+history usable and secret-safe; machine diffs stable (schema v1).
+
+Exit criteria not met:
+- Independent-developer comprehension validation (v0.4): NOT RUN.
+- Carried v0.3 independent path-comprehension gate: NOT RUN.
+Both are carried into v0.5, not closed.
+
+What users demonstrated:
+No independent users; proxies only (implementing-agent self-checks).
+Usefulness beyond fixtures is unproven — the central residual risk.
+
+What the evidence demonstrated:
+S035 controlled packet (real local + synthetic provider, limits stated);
+564-test suite green (1 ignored); fmt/clippy/diff-check clean; manual
+allow→deny verification with paired environment attribution.
+
+Known false positives: none observed.
+Known false negatives: none beyond documented UNKNOWN-by-design
+(sink_impact; offline scopes; seeded-only variants).
+Known UNKNOWN states: provider authority offline; legacy provenance;
+ambiguous multi-change causes (correctly unattributed).
+
+Self-security results:
+Zero secret leakage (sentinel sweeps; synthetic credentials only);
+allowlisted read-only provider ops; read-only/retained-row digests;
+redacted doctor diagnostics.
+
+Compatibility limits:
+Authority precision bounded by token scope readability (S013 matrix);
+watch-relevant file set bounded to adapter-read configs (S037 scope).
+
+What was learned:
+MANUAL trigger is now the binding constraint: memory without timely
+observation does not change developer decisions. The highest-value next
+uncertainty is whether change-triggered observation (starting with the
+config files S032/E3 prove deterministic) converts memory into action
+without noise, content capture, or background trust cost.
+
+Why the next phase is justified:
+v0.5 slice 1 (S037 `pico watch`, FILESYSTEM_CHANGE) reuses the proven
+scan/diff engine unchanged and the reserved ARCHITECTURE §8.2 trigger
+slot; it adds no analysis, notification, runtime-event, or enforcement
+semantics. v0.5 must earn comprehension on `watch` output itself.
+```

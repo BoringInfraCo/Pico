@@ -15,6 +15,7 @@ pub mod history;
 pub mod init;
 pub mod retention;
 pub mod scan;
+pub mod watch;
 
 pub use cause::FindingCause;
 pub use compare_contract::{
@@ -41,3 +42,4 @@ pub use retention::{
     KEEP_COMPLETE_DEFAULT, MIN_KEEP_COMPLETE,
 };
 pub use scan::{AgentBashPosture, ScanResult, ScanService};
+pub use watch::{Snapshot, WatchConfig, WatchEvent, WatchFindingDelta, WatchReport};
