@@ -16,6 +16,19 @@ Record controlled end-to-end evidence and administer an uncoached independent
 comprehension check against the final build. A prepared protocol or successful
 automated suite does not establish human comprehension.
 
+S036 bound (2026-09-16, HEAD `615e530`): automated evidence finished to its
+synthetic limits with no recapture needed (`git diff d3c0d83 HEAD -- src tests`
+empty — post-freeze commits are docs-only). Remaining E4/E5/E6/E7/E8/E11
+variants (live-provider correctness, other access-loss modes, real legacy
+provenance / identity churn, real rating movement, real upgrade run,
+independent understanding) are accepted synthetic limits per the stated limits
+in `evidence-v0.4.md`, not coverage to be narrated away; E4 unsupported-field
+marking is bounded by the S032 contract (environment labels require comparable
+supported observations on both sides —
+`tests/integration/sprint032_cli_test.rs`). Independent v0.4 comprehension:
+still NOT RUN. Carried v0.3 gate: still NOT RUN. Release decision: still HOLD
+(human gate + release review only).
+
 This sprint adds no providers, continuous observation, notifications, policy
 thresholds, remediation, or infrastructure mutation. Exercise read-only queries
 and explicit local pruning only in a disposable fixture workspace. Synthetic

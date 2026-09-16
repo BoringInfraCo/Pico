@@ -1,7 +1,7 @@
 # Pico — Product Roadmap
 
 **File:** `ROADMAP.md`  
-**Status:** Implemented through v0.3 (advancement records §§20–22); v0.4 in progress (S024–S033 done, S034 code-done, S035 PARTIAL/HOLD); v0.3 exit review pending
+**Status:** Implemented through v0.3 (advancement records §§20–22); v0.4 in progress (S024–S034 done, S035 automated-bounded/HOLD human-only, S036 closeout-finish done); v0.3 exit review pending
 **Date:** August 18, 2026  
 **Stage:** Post-architecture, implementation in progress (v0.1–v0.3 shipped; v0.4 in progress; see §§20–22)  
 **Depends on:** `PRODUCT_DEFINITION.md`, `TECHNICAL.md`, `ARCHITECTURE.md`
@@ -539,9 +539,9 @@ This is not v0.4 complete.
 retention/diagnostic defects and a concurrency gap. Sprint 031 corrected
 them (fail-closed prune transaction, redacted diagnostics, immediate
 write-transaction concurrency). Attribution delivered per SPRINT-032:3,
-stable JSON output delivered per SPRINT-033:3, MCP history/diff code-done
-per SPRINT-034:3, and evidence/comprehension PARTIAL/HOLD per
-SPRINT-035:3. No ADVANCE claimed; the independent gate remains open.
+stable JSON output delivered per SPRINT-033:3, MCP history/diff DONE per
+SPRINT-034:3 (S036 validation, no code change), and automated evidence bounded
+plus comprehension PARTIAL/HOLD per SPRINT-035:3. No ADVANCE claimed; the independent gate remains open.
 
 Authoritative slice scope:
 `docs/internal/sprints/SPRINT-024-support-note.md`,
@@ -554,8 +554,9 @@ Authoritative slice scope:
 `docs/internal/sprints/SPRINT-031.md`,
 `docs/internal/sprints/SPRINT-032.md`,
 `docs/internal/sprints/SPRINT-033.md`,
-`docs/internal/sprints/SPRINT-034.md`, and
-`docs/internal/sprints/SPRINT-035.md`.
+`docs/internal/sprints/SPRINT-034.md`,
+`docs/internal/sprints/SPRINT-035.md`, and
+`docs/internal/sprints/SPRINT-036.md`.
 
 ---
 
@@ -1025,7 +1026,7 @@ v0.1  Golden-Path Proof            COMPLETE   (SPRINT-001..012; ADVANCE, §20)
 v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
-v0.4  Security memory              IN PROGRESS (S024–S033 DONE; S034 code-done; S035 PARTIAL/HOLD)
+v0.4  Security memory              IN PROGRESS (S024–S034 DONE; S035 automated-bounded, human-only HOLD; S036 closeout-finish DONE)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
