@@ -92,6 +92,8 @@ enum Command {
         #[arg(long, default_value_t = 2)]
         interval_secs: u64,
     },
+    /// Show freshness, recent watch notices, and the next step (read-only).
+    Status,
 }
 
 /// Runs the parsed CLI command.
@@ -107,7 +109,86 @@ pub fn run() -> Result<(), PicoError> {
         Command::Doctor => run_doctor(),
         Command::Mcp => crate::mcp::run(),
         Command::Watch { interval_secs } => run_watch(interval_secs),
+        Command::Status => run_status(),
     }
+}
+
+/// Renders `pico status` (SPRINT-038.md §2.3). Thin view over the status
+/// service: all freshness, notice-tally, and next-step logic lives in
+/// `crate::application::status`; this only formats the frozen lines.
+fn run_status() -> Result<(), PicoError> {
+    let report = crate::application::status::status(&workspace()?)?;
+    print!("{}", render_status_report(&report));
+    Ok(())
+}
+
+/// Formats a status report per the frozen §2.3 wording contract. Every
+/// persisted string passes through `terminal_safe`; counts are plain
+/// integers. Missing/empty states stay explicit, never blank reassurance.
+fn render_status_report(report: &crate::application::status::StatusReport) -> String {
+    use crate::shared::terminal_safe;
+
+    let mut out = String::from("Pico status\n");
+    match &report.last_complete_scan_id {
+        Some(id) if report.stale => {
+            out.push_str(&format!(
+                "Last COMPLETE scan: {} ({}; STALE: freshness heuristic, run `pico scan`)\n",
+                terminal_safe(id),
+                terminal_safe(&report.last_complete_age),
+            ));
+        }
+        Some(id) => {
+            out.push_str(&format!(
+                "Last COMPLETE scan: {} ({})\n",
+                terminal_safe(id),
+                terminal_safe(&report.last_complete_age),
+            ));
+        }
+        None => {
+            out.push_str(
+                "Last COMPLETE scan: none recorded (run `pico scan` to create the first scan)\n",
+            );
+        }
+    }
+    out.push_str(&format!(
+        "Watch events (retained log tail): {} total, {} URGENT, {} INFO{}\n",
+        report.watch_total,
+        report.watch_urgent,
+        report.watch_info,
+        if !report.watch_log_present {
+            " (no watch log yet)"
+        } else if report.watch_total == 0 {
+            " (no events recorded yet)"
+        } else {
+            ""
+        },
+    ));
+    match &report.last_urgent_ts {
+        Some(ts) => {
+            let reasons = if report.last_urgent_reasons.is_empty() {
+                "no reasons recorded".to_string()
+            } else {
+                report
+                    .last_urgent_reasons
+                    .iter()
+                    .map(|reason| terminal_safe(reason))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            out.push_str(&format!(
+                "Last URGENT: {} ({})\n",
+                terminal_safe(ts),
+                reasons
+            ));
+        }
+        None => out.push_str("Last URGENT: none recorded\n"),
+    }
+    out.push_str(&format!(
+        "Next step: {}\n",
+        terminal_safe(&report.next_step)
+    ));
+    out.push_str("This is not an all-clear: Pico reports what it observed, not safety.\n");
+    out
 }
 
 /// Resolves the workspace to the current directory.

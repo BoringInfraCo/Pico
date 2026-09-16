@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::application::diff::{DiffService, FindingDiff, FindingDiffResult};
 use crate::application::scan::ScanService;
@@ -98,7 +98,7 @@ pub fn relativize(path: &Path, workspace: &Path, home: Option<&Path>) -> String 
 
 /// Finding-delta counts carried by a watch event. All zero when no
 /// contract-matched comparison was produced.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchFindingDelta {
     pub appeared: u64,
     pub disappeared: u64,
@@ -119,10 +119,115 @@ impl WatchFindingDelta {
     }
 }
 
+/// Deterministic notice level for a watch event (SPRINT-038 §2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Notice {
+    Urgent,
+    Info,
+    Quiet,
+}
+
+impl Notice {
+    /// Machine-readable lowercase form used in `watch.jsonl`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Notice::Urgent => "urgent",
+            Notice::Info => "info",
+            Notice::Quiet => "quiet",
+        }
+    }
+}
+
+impl std::str::FromStr for Notice {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "urgent" => Ok(Notice::Urgent),
+            "info" => Ok(Notice::Info),
+            "quiet" => Ok(Notice::Quiet),
+            other => Err(format!(
+                "unknown notice level: {other} (expected urgent|info|quiet)"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for Notice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Flat, Copy-friendly facts for [`classify`]: finding-delta counts plus the
+/// scan and environment booleans. Counts and reason codes only — never
+/// values or contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventFacts {
+    pub appeared: usize,
+    pub disappeared: usize,
+    pub weakened: usize,
+    pub strengthened: usize,
+    pub uncertain: usize,
+    pub contracts_match: bool,
+    pub scan_partial: bool,
+    pub env_change_observed: bool,
+}
+
+/// Pure deterministic notice rules (SPRINT-038 §2.1, frozen). Priority
+/// URGENT > INFO > QUIET; reasons accumulate across levels so an overlap
+/// like appeared + weakened reports URGENT with both codes. Stable order:
+/// appeared, strengthened, weakened, uncertain, disappeared, scan_partial,
+/// contracts_mismatch, env_change_no_finding_delta.
+pub fn classify(event_facts: &EventFacts) -> (Notice, Vec<&'static str>) {
+    let mut reasons: Vec<&'static str> = Vec::new();
+    if event_facts.appeared > 0 {
+        reasons.push("finding_appeared");
+    }
+    if event_facts.strengthened > 0 {
+        reasons.push("finding_strengthened");
+    }
+    let urgent = !reasons.is_empty();
+    if event_facts.weakened > 0 {
+        reasons.push("finding_weakened");
+    }
+    if event_facts.uncertain > 0 {
+        reasons.push("finding_uncertain");
+    }
+    if event_facts.disappeared > 0 {
+        reasons.push("disappearance_unconfirmed");
+    }
+    if event_facts.scan_partial {
+        reasons.push("scan_partial");
+    }
+    if !event_facts.contracts_match {
+        reasons.push("contracts_mismatch");
+    }
+    let zero_deltas = event_facts.appeared == 0
+        && event_facts.disappeared == 0
+        && event_facts.weakened == 0
+        && event_facts.strengthened == 0
+        && event_facts.uncertain == 0;
+    if event_facts.env_change_observed && zero_deltas {
+        reasons.push("env_change_no_finding_delta");
+    }
+    if urgent {
+        (Notice::Urgent, reasons)
+    } else if !reasons.is_empty() {
+        (Notice::Info, reasons)
+    } else {
+        (Notice::Quiet, vec!["no_significant_change"])
+    }
+}
+
 /// One `.pico/watch.jsonl` record. Field order is the frozen SPRINT-037
 /// §2.4 shape: watch-root-relative `changed` paths only — never contents,
 /// never absolute HOME paths; `scan_id` is the only opaque identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// SPRINT-038 appends `notice` + `reasons`; `"v"` stays 1.
+/// Readers MUST tolerate unknown fields (serde ignores them by default) so
+/// future event extensions never break older status readers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchEvent {
     pub v: u32,
     pub ts: String,
@@ -132,6 +237,8 @@ pub struct WatchEvent {
     pub scan_status: String,
     pub contracts_match: bool,
     pub findings: WatchFindingDelta,
+    pub notice: Notice,
+    pub reasons: Vec<String>,
 }
 
 impl WatchEvent {
@@ -142,6 +249,7 @@ impl WatchEvent {
         scan_status: ScanStatus,
         contracts_match: bool,
         findings: WatchFindingDelta,
+        classified: (Notice, Vec<String>),
     ) -> Self {
         WatchEvent {
             v: 1,
@@ -152,7 +260,36 @@ impl WatchEvent {
             scan_status: scan_status.as_str().to_string(),
             contracts_match,
             findings,
+            notice: classified.0,
+            reasons: classified.1,
         }
+    }
+}
+
+/// Exactly one human notice line per event. URGENT names `pico findings`;
+/// QUIET keeps the not-an-all-clear. Counts plus reason codes only — never
+/// values or contents.
+fn notice_line(facts: &EventFacts, notice: Notice, reasons: &[&'static str]) -> String {
+    match notice {
+        Notice::Quiet => "Pico watch: [QUIET] no significant change (no_significant_change). This is not an all-clear.".to_string(),
+        Notice::Urgent => format!(
+            "Pico watch: [URGENT] {} appeared, {} disappeared, {} weakened, {} strengthened, {} uncertain ({}) — run `pico findings`",
+            facts.appeared,
+            facts.disappeared,
+            facts.weakened,
+            facts.strengthened,
+            facts.uncertain,
+            reasons.join(", ")
+        ),
+        Notice::Info => format!(
+            "Pico watch: [INFO] {} appeared, {} disappeared, {} weakened, {} strengthened, {} uncertain ({})",
+            facts.appeared,
+            facts.disappeared,
+            facts.weakened,
+            facts.strengthened,
+            facts.uncertain,
+            reasons.join(", ")
+        ),
     }
 }
 
@@ -315,6 +452,20 @@ fn scan_and_record(
         );
         (false, WatchFindingDelta::default())
     };
+    let facts = EventFacts {
+        appeared: findings.appeared as usize,
+        disappeared: findings.disappeared as usize,
+        weakened: findings.weakened as usize,
+        strengthened: findings.strengthened as usize,
+        uncertain: findings.uncertain as usize,
+        contracts_match,
+        scan_partial: result.status == ScanStatus::Partial,
+        // Every recorded event follows an attributed watch-set change batch,
+        // so a non-empty relative change list marks the env observation.
+        env_change_observed: !changed_rel.is_empty(),
+    };
+    let (notice, reason_codes) = classify(&facts);
+    let reasons: Vec<String> = reason_codes.iter().map(|code| code.to_string()).collect();
     let event = WatchEvent::new(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         changed_rel,
@@ -322,9 +473,11 @@ fn scan_and_record(
         result.status,
         contracts_match,
         findings,
+        (notice, reasons),
     );
     append_event(workspace, &event)?;
     report.events.push(event);
+    println!("{}", notice_line(&facts, notice, &reason_codes));
     Ok(Some(snapshot(watch_set)))
 }
 
@@ -635,11 +788,192 @@ mod tests {
                 strengthened: 0,
                 uncertain: 0,
             },
+            (Notice::Quiet, vec!["no_significant_change".to_string()]),
         );
         assert_eq!(
             serde_json::to_string(&event).unwrap(),
-            r#"{"v":1,"ts":"2026-09-16T00:00:00Z","trigger":"FILESYSTEM_CHANGE","changed":["opencode.json"],"scan_id":"scan_abc123","scan_status":"COMPLETE","contracts_match":true,"findings":{"appeared":0,"disappeared":0,"weakened":0,"strengthened":0,"uncertain":0}}"#
+            r#"{"v":1,"ts":"2026-09-16T00:00:00Z","trigger":"FILESYSTEM_CHANGE","changed":["opencode.json"],"scan_id":"scan_abc123","scan_status":"COMPLETE","contracts_match":true,"findings":{"appeared":0,"disappeared":0,"weakened":0,"strengthened":0,"uncertain":0},"notice":"quiet","reasons":["no_significant_change"]}"#
         );
+    }
+
+    // SPRINT-038 Red: frozen §2.1 matrix + Notice round-trip + tolerance + wording.
+    fn quiet_baseline() -> EventFacts {
+        EventFacts {
+            appeared: 0,
+            disappeared: 0,
+            weakened: 0,
+            strengthened: 0,
+            uncertain: 0,
+            contracts_match: true,
+            scan_partial: false,
+            env_change_observed: false,
+        }
+    }
+
+    #[test]
+    fn notice_round_trips_lowercase() {
+        use std::str::FromStr;
+        for (notice, text) in [
+            (Notice::Urgent, "urgent"),
+            (Notice::Info, "info"),
+            (Notice::Quiet, "quiet"),
+        ] {
+            assert_eq!(notice.as_str(), text);
+            assert_eq!(Notice::from_str(text).unwrap(), notice);
+        }
+        assert!(Notice::from_str("URGENT").is_err());
+        assert!(Notice::from_str("").is_err());
+        assert!(Notice::from_str("nope").is_err());
+    }
+
+    #[test]
+    fn classify_full_matrix() {
+        let base = quiet_baseline();
+        // URGENT
+        assert_eq!(
+            classify(&EventFacts {
+                appeared: 1,
+                ..base
+            }),
+            (Notice::Urgent, vec!["finding_appeared"])
+        );
+        assert_eq!(
+            classify(&EventFacts {
+                strengthened: 2,
+                ..base
+            }),
+            (Notice::Urgent, vec!["finding_strengthened"])
+        );
+        // INFO: one reason each in isolation
+        assert_eq!(
+            classify(&EventFacts {
+                weakened: 1,
+                ..base
+            }),
+            (Notice::Info, vec!["finding_weakened"])
+        );
+        assert_eq!(
+            classify(&EventFacts {
+                uncertain: 1,
+                ..base
+            }),
+            (Notice::Info, vec!["finding_uncertain"])
+        );
+        assert_eq!(
+            classify(&EventFacts {
+                disappeared: 1,
+                ..base
+            }),
+            (Notice::Info, vec!["disappearance_unconfirmed"])
+        );
+        assert_eq!(
+            classify(&EventFacts {
+                scan_partial: true,
+                ..base
+            }),
+            (Notice::Info, vec!["scan_partial"])
+        );
+        assert_eq!(
+            classify(&EventFacts {
+                contracts_match: false,
+                ..base
+            }),
+            (Notice::Info, vec!["contracts_mismatch"])
+        );
+        assert_eq!(
+            classify(&EventFacts {
+                env_change_observed: true,
+                ..base
+            }),
+            (Notice::Info, vec!["env_change_no_finding_delta"])
+        );
+        // QUIET otherwise
+        assert_eq!(
+            classify(&quiet_baseline()),
+            (Notice::Quiet, vec!["no_significant_change"])
+        );
+        // Env change with non-zero deltas carries no env reason.
+        assert_eq!(
+            classify(&EventFacts {
+                weakened: 1,
+                env_change_observed: true,
+                ..base
+            }),
+            (Notice::Info, vec!["finding_weakened"])
+        );
+        // PARTIAL scans also record the non-matching contracts.
+        assert_eq!(
+            classify(&EventFacts {
+                contracts_match: false,
+                scan_partial: true,
+                ..base
+            }),
+            (Notice::Info, vec!["scan_partial", "contracts_mismatch"])
+        );
+    }
+
+    #[test]
+    fn classify_priority_overlap_keeps_both_reasons() {
+        let base = quiet_baseline();
+        assert_eq!(
+            classify(&EventFacts {
+                appeared: 1,
+                weakened: 1,
+                ..base
+            }),
+            (Notice::Urgent, vec!["finding_appeared", "finding_weakened"])
+        );
+        assert_eq!(
+            classify(&EventFacts {
+                strengthened: 1,
+                contracts_match: false,
+                scan_partial: true,
+                ..base
+            }),
+            (
+                Notice::Urgent,
+                vec!["finding_strengthened", "scan_partial", "contracts_mismatch"]
+            )
+        );
+    }
+
+    #[test]
+    fn watch_jsonl_reader_tolerates_unknown_fields() {
+        let line = r#"{"v":1,"ts":"2026-09-16T00:00:00Z","trigger":"FILESYSTEM_CHANGE","changed":["opencode.json"],"scan_id":"scan_abc123","scan_status":"COMPLETE","contracts_match":true,"findings":{"appeared":0,"disappeared":0,"weakened":0,"strengthened":0,"uncertain":0},"notice":"quiet","reasons":["no_significant_change"],"future_field":"tolerate-me"}"#;
+        let event: WatchEvent = serde_json::from_str(line).unwrap();
+        assert_eq!(event.v, 1);
+        assert_eq!(event.notice, Notice::Quiet);
+        assert_eq!(event.reasons, vec!["no_significant_change".to_string()]);
+    }
+
+    #[test]
+    fn notice_line_wording_family() {
+        let base = quiet_baseline();
+        let urgent_facts = EventFacts {
+            appeared: 1,
+            env_change_observed: true,
+            ..base
+        };
+        let (notice, reasons) = classify(&urgent_facts);
+        let line = notice_line(&urgent_facts, notice, &reasons);
+        assert!(line.contains("[URGENT]"), "got: {line}");
+        assert!(line.contains("pico findings"), "got: {line}");
+        assert!(line.contains("finding_appeared"), "got: {line}");
+
+        let quiet_facts = quiet_baseline();
+        let (notice, reasons) = classify(&quiet_facts);
+        let line = notice_line(&quiet_facts, notice, &reasons);
+        assert!(line.contains("[QUIET]"), "got: {line}");
+        assert!(line.contains("not an all-clear"), "got: {line}");
+
+        let info_facts = EventFacts {
+            weakened: 1,
+            ..base
+        };
+        let (notice, reasons) = classify(&info_facts);
+        let line = notice_line(&info_facts, notice, &reasons);
+        assert!(line.contains("[INFO]"), "got: {line}");
+        assert!(line.contains("finding_weakened"), "got: {line}");
     }
 
     #[test]
@@ -745,6 +1079,7 @@ mod tests {
             ScanStatus::Complete,
             true,
             WatchFindingDelta::default(),
+            (Notice::Quiet, vec!["no_significant_change".to_string()]),
         );
         let json = serde_json::to_string(&event).unwrap();
         assert!(!json.contains(SENTINEL), "events carry paths and IDs only");

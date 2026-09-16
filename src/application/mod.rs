@@ -15,6 +15,7 @@ pub mod history;
 pub mod init;
 pub mod retention;
 pub mod scan;
+pub mod status;
 pub mod watch;
 
 pub use cause::FindingCause;
