@@ -277,8 +277,9 @@ impl SafeGitHubCredentialView {
 /// Machine-readable scan diagnostics mirrored from
 /// `findings::diagnostics::ScanDiagnostics`. All provider-supplied strings pass
 /// through `terminal_safe` before serialization; the structure is an exact
-/// field-for-field projection so the MCP payload and the application DTO
-/// serialize identically for the same scan.
+/// field-for-field projection (including the optional SPRINT-040 runtime
+/// limitation) so the MCP payload and the application DTO serialize identically
+/// for the same scan.
 #[derive(Serialize)]
 struct SafeScanDiagnostics {
     provider_statuses: Vec<SafeProviderDiagnostic>,
@@ -286,6 +287,10 @@ struct SafeScanDiagnostics {
     partial_reason: Option<String>,
     suppressed: Vec<SafeSuppressedReason>,
     reduced_confidence: Vec<SafeConfidenceNote>,
+    /// Opt-in runtime-evidence limitation (SPRINT-040), omitted entirely when
+    /// absent so default and clean-runtime scans serialize unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime: Option<SafeRuntimeDiagnostic>,
 }
 
 impl SafeScanDiagnostics {
@@ -308,6 +313,28 @@ impl SafeScanDiagnostics {
                 .iter()
                 .map(SafeConfidenceNote::new)
                 .collect(),
+            runtime: diagnostics.runtime.as_ref().map(SafeRuntimeDiagnostic::new),
+        }
+    }
+}
+
+/// Machine-readable runtime-evidence limitation mirrored from
+/// `findings::diagnostics::RuntimeDiagnostic`. `state` and `reason` are
+/// Pico-authored limitation labels (never store-derived content or secrets) and
+/// pass through `terminal_safe`; `migrations` is the observed migration count.
+#[derive(Serialize)]
+struct SafeRuntimeDiagnostic {
+    state: String,
+    reason: String,
+    migrations: Option<u64>,
+}
+
+impl SafeRuntimeDiagnostic {
+    fn new(runtime: &crate::findings::diagnostics::RuntimeDiagnostic) -> Self {
+        SafeRuntimeDiagnostic {
+            state: terminal_safe(&runtime.state),
+            reason: terminal_safe(&runtime.reason),
+            migrations: runtime.migrations,
         }
     }
 }
@@ -814,7 +841,7 @@ mod tests {
     use super::{SafeExplainedPath, SafeGitHubCredentialView, SafeScanDiagnostics};
     use crate::application::ExplainedPath;
     use crate::findings::diagnostics::{
-        ConfidenceNote, ProviderDiagnostic, ScanDiagnostics, SuppressedReason,
+        ConfidenceNote, ProviderDiagnostic, RuntimeDiagnostic, ScanDiagnostics, SuppressedReason,
     };
 
     /// Asserts the MCP `SafeScanDiagnostics` mirror serializes every structured
@@ -853,6 +880,7 @@ mod tests {
                     0.25,
                 )],
             }],
+            runtime: None,
         };
         let safe = SafeScanDiagnostics::new(&detail);
         let value = serde_json::to_value(&safe).expect("serializable");
@@ -877,6 +905,124 @@ mod tests {
             edge,
             serde_json::json!(["agent:opencode|can_execute|shell:bash", "STALE", 0.25]),
             "edge tuple (edge_key, freshness, penalty) must serialize as a 3-element array"
+        );
+        assert!(
+            value.get("runtime").is_none(),
+            "an absent runtime limitation must be omitted, not serialized as null or an empty object"
+        );
+    }
+
+    /// Asserts the MCP `SafeScanDiagnostics` mirror projects the optional
+    /// runtime limitation (SPRINT-040) with the exact application-DTO field
+    /// names and values, so the `list_findings` payload exposes the same
+    /// `state`/`reason`/`migrations` an agent needs to tell an incomplete
+    /// runtime read from a clean one.
+    #[test]
+    fn safe_scan_diagnostics_projects_runtime_limitation() {
+        let detail = ScanDiagnostics {
+            provider_statuses: vec![],
+            scan_status: "COMPLETE".to_string(),
+            partial_reason: None,
+            suppressed: vec![],
+            reduced_confidence: vec![],
+            runtime: Some(RuntimeDiagnostic {
+                state: "UNSUPPORTED".to_string(),
+                reason: "OpenCode store schema is outside Pico's supported range; runtime evidence was not read"
+                    .to_string(),
+                migrations: Some(39),
+            }),
+        };
+        let safe = SafeScanDiagnostics::new(&detail);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        assert_eq!(
+            value["runtime"],
+            serde_json::json!({
+                "state": "UNSUPPORTED",
+                "reason": "OpenCode store schema is outside Pico's supported range; runtime evidence was not read",
+                "migrations": 39,
+            })
+        );
+
+        // Field-for-field parity with the application DTO the CLI renders from
+        // and the database persists: the same diagnostics input yields the same
+        // structured JSON on both projections.
+        let dto = serde_json::to_value(&detail).expect("serializable");
+        assert_eq!(
+            value, dto,
+            "MCP runtime projection must serialize identically to the application DTO"
+        );
+
+        // A limitation without a migration count stays present as an explicit
+        // null, never a silently absent key.
+        let without_migrations = ScanDiagnostics {
+            runtime: Some(RuntimeDiagnostic {
+                state: "INCOMPLETE".to_string(),
+                reason: "runtime store read hit a bounded budget; results may be partial"
+                    .to_string(),
+                migrations: None,
+            }),
+            ..detail
+        };
+        let safe = SafeScanDiagnostics::new(&without_migrations);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        assert_eq!(value["runtime"]["migrations"], serde_json::Value::Null);
+    }
+
+    /// Asserts the runtime projection is bounded to Pico-authored fields and
+    /// terminal-safe: a synthetic sentinel carrying control bytes in the runtime
+    /// fields cannot reach output as a raw control sequence. `state`/`reason`
+    /// are Pico-authored limitation labels, never store-derived content, and the
+    /// object has no field through which forbidden content could travel.
+    #[test]
+    fn safe_scan_diagnostics_sanitizes_runtime_limitation() {
+        const SENTINEL: &str = "SENTINEL_S040";
+        let detail = ScanDiagnostics {
+            provider_statuses: vec![],
+            scan_status: "COMPLETE".to_string(),
+            partial_reason: None,
+            suppressed: vec![],
+            reduced_confidence: vec![],
+            runtime: Some(RuntimeDiagnostic {
+                state: format!("UNSUPPORTED\u{1b}[31m{SENTINEL}"),
+                reason: format!("{SENTINEL}\nsecond line"),
+                migrations: None,
+            }),
+        };
+        let safe = SafeScanDiagnostics::new(&detail);
+        let value = serde_json::to_value(&safe).expect("serializable");
+
+        let runtime = value["runtime"].as_object().expect("runtime object");
+        let mut keys: Vec<&String> = runtime.keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["migrations", "reason", "state"],
+            "the runtime projection is bounded to Pico-authored fields; no content channel exists"
+        );
+
+        let state = runtime["state"].as_str().expect("state string");
+        let reason = runtime["reason"].as_str().expect("reason string");
+        assert!(
+            !state.contains('\u{1b}'),
+            "a raw ESC must not survive into the state string"
+        );
+        assert!(
+            !reason.contains('\n'),
+            "a raw newline must not survive into the reason string"
+        );
+        assert!(
+            state.contains("\\x1B"),
+            "the ESC must be escaped by terminal_safe: {state}"
+        );
+        assert!(
+            reason.contains("\\x0A"),
+            "the newline must be escaped by terminal_safe: {reason}"
+        );
+
+        let text = serde_json::to_string(&value).expect("serializable");
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\n'),
+            "serialized projection must contain no raw control bytes: {text}"
         );
     }
 

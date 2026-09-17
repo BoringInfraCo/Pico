@@ -242,6 +242,7 @@ fn cli_secret_sweep_never_leaks_token_across_postures() {
                 0.25,
             )],
         }],
+        runtime: None,
     };
     let stale_block = render_scan_diagnostics(&stale);
     assert!(
@@ -267,6 +268,7 @@ fn cli_secret_sweep_never_leaks_token_across_postures() {
             reason: "authority resolution UNKNOWN; candidate not confirmed".to_string(),
         }],
         reduced_confidence: vec![],
+        runtime: None,
     };
     let unknown_block = render_scan_diagnostics(&unknown);
     assert!(

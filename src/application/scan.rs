@@ -7,12 +7,17 @@ use crate::analysis::{
 };
 use crate::application::compare_contract::COMPARISON_CONTRACT_VERSION;
 use crate::discovery;
+use crate::discovery::coverage::{CoverageEntry, CoverageState};
+use crate::discovery::runtime::{
+    ingest_with_summary as runtime_ingest_with_summary, RuntimeIngestConfig, RuntimeReadOutcome,
+    ToolInvocation, ToolStatus,
+};
 use crate::domain::{
     relationship_snapshot_metadata, resource_snapshot_metadata, Evidence, EvidenceClass,
     Observation, Relationship, RelationshipState, Resource, Scan, ScanStatus, ScanTrigger,
     Sensitivity, GRAPH_SNAPSHOT_VERSION,
 };
-use crate::findings::diagnostics::{ProviderDiagnostic, ScanDiagnostics};
+use crate::findings::diagnostics::{ProviderDiagnostic, RuntimeDiagnostic, ScanDiagnostics};
 use crate::findings::{
     eligibility_diagnostics, generate_with_scan_status, FindingGenerationStatus, FindingLimits,
     FindingResult, FINDING_VERSION,
@@ -102,6 +107,269 @@ pub struct ScanService;
 /// are unaffected by this constant.
 const OPERATOR_REACHABILITY: discovery::EnvironmentReachability =
     discovery::EnvironmentReachability::Proven;
+
+/// The only relationship the runtime slice may promote (SPRINT-040 §1.6).
+const GOLDEN_BASH_RELATIONSHIP_KEY: &str = "agent:opencode|can_execute|shell:bash";
+/// The content-free provenance label for observed runtime execution.
+const RUNTIME_SOURCE_TYPE: &str = "opencode_runtime_observer";
+/// Structural provenance locator; the resolved store path is never persisted.
+const RUNTIME_SOURCE_LOCATOR: &str = "user:opencode_runtime_store";
+/// Disclosed `immutable=1` read mode: the WAL is ignored.
+const RUNTIME_READ_MODE: &str = "ro+immutable";
+/// Disclosed staleness of the immutable read.
+const RUNTIME_WAL_NOTE: &str = "possibly_stale";
+
+/// Runtime slice defaults (SPRINT-040 §1.9): 7-day window, 10k rows, 3s cap.
+const RUNTIME_WINDOW_SECS: i64 = 7 * 24 * 60 * 60;
+const RUNTIME_MAX_ROWS: usize = 10_000;
+const RUNTIME_WALL_CLOCK_MS: u64 = 3_000;
+
+/// The planned, content-free runtime step for one opt-in scan. Everything here
+/// is derived before graph persistence so the promotion decision can shape the
+/// single scan-scoped relationship snapshot the projector accepts.
+#[derive(Debug)]
+struct RuntimePlan {
+    /// Honest coverage entry; `None` when the store was absent or unread.
+    coverage: Option<CoverageEntry>,
+    /// `scope.runtime` for the scan row (only present on enabled scans).
+    scope: serde_json::Value,
+    /// Same-scan `DIRECT` evidence describing what was observed.
+    evidence: Option<Evidence>,
+    /// Whether the evidence supports promotion of the golden-path edge.
+    promote: bool,
+    /// Rendered limitation when the read did not complete cleanly (SPRINT-040 §4).
+    diagnostic: Option<RuntimeDiagnostic>,
+}
+
+/// Classify a store read into the honest runtime-artifacts coverage state. An
+/// absent or unattempted store produces no entry at all; an attempted read that
+/// could not complete is `Incomplete`; an unreadable schema is `Unknown`.
+fn runtime_coverage_entry(
+    path: &Path,
+    store_present: bool,
+    outcome: &RuntimeReadOutcome,
+) -> Option<CoverageEntry> {
+    let state = match outcome {
+        RuntimeReadOutcome::Ingested {
+            truncated: false, ..
+        } => CoverageState::Inspected,
+        RuntimeReadOutcome::Ingested {
+            truncated: true, ..
+        } => CoverageState::Incomplete,
+        RuntimeReadOutcome::Unsupported { .. } => CoverageState::Unknown,
+        RuntimeReadOutcome::NotAttempted => return None,
+        // A missing store is absence-without-attempt: no entry is fabricated.
+        RuntimeReadOutcome::Unavailable { .. } if !store_present => return None,
+        RuntimeReadOutcome::Unavailable { .. } => CoverageState::Incomplete,
+    };
+    Some(CoverageEntry::runtime_artifacts(state, path))
+}
+
+/// Rendered, sanitized limitation for a runtime step that did not read cleanly
+/// (SPRINT-040 §4: an unsupported or failed read must be actionable, not silent).
+///
+/// A clean ingest and a disabled/unattempted step produce no diagnostic, so the
+/// golden path and every default scan stay silent.
+fn runtime_diagnostic(
+    outcome: &RuntimeReadOutcome,
+    store_present: bool,
+) -> Option<RuntimeDiagnostic> {
+    match outcome {
+        RuntimeReadOutcome::Ingested {
+            truncated: false, ..
+        } => None,
+        RuntimeReadOutcome::Ingested {
+            truncated: true, ..
+        } => Some(RuntimeDiagnostic {
+            state: "INCOMPLETE".to_string(),
+            reason: "runtime store read hit a bounded budget; results may be partial".to_string(),
+            migrations: None,
+        }),
+        RuntimeReadOutcome::Unsupported { migrations } => Some(RuntimeDiagnostic {
+            state: "UNSUPPORTED".to_string(),
+            reason: "OpenCode store schema is outside Pico's supported range; runtime evidence was not read"
+                .to_string(),
+            migrations: *migrations,
+        }),
+        RuntimeReadOutcome::NotAttempted => None,
+        // Absence without attempt is not a limitation worth surfacing.
+        RuntimeReadOutcome::Unavailable { reason } if !store_present => {
+            let _ = reason;
+            None
+        }
+        RuntimeReadOutcome::Unavailable { reason } => Some(RuntimeDiagnostic {
+            state: "UNAVAILABLE".to_string(),
+            reason: (*reason).to_string(),
+            migrations: None,
+        }),
+    }
+}
+
+/// Whether the resolved store exists on disk. Checked structurally (read-only
+/// metadata) so presence never depends on a reader reason string.
+fn runtime_store_present(store: Option<&Path>) -> bool {
+    store.is_some_and(|path| std::fs::symlink_metadata(path).is_ok())
+}
+
+fn runtime_status_label(status: ToolStatus) -> &'static str {
+    match status {
+        ToolStatus::Pending => "pending",
+        ToolStatus::Running => "running",
+        ToolStatus::Completed => "completed",
+        ToolStatus::Error => "error",
+    }
+}
+
+/// Build the optional runtime step. This reads only the synthesized store from
+/// the `home` seam; a `None` home yields `NotAttempted` and no coverage entry.
+fn plan_runtime(
+    workspace: &Path,
+    home: Option<&Path>,
+    scan_id: &str,
+    scan_time: chrono::DateTime<chrono::Utc>,
+) -> Result<RuntimePlan, PicoError> {
+    let store = home.map(|home| {
+        home.join(".local")
+            .join("share")
+            .join("opencode")
+            .join("opencode.db")
+    });
+    let config = RuntimeIngestConfig {
+        store: store.clone(),
+        workspace: workspace.to_path_buf(),
+        window_secs: RUNTIME_WINDOW_SECS,
+        max_rows: RUNTIME_MAX_ROWS,
+        wall_clock_ms: RUNTIME_WALL_CLOCK_MS,
+    };
+    let (outcome, summary) = runtime_ingest_with_summary(&config)?;
+    let store_present = runtime_store_present(store.as_deref());
+    let scope = serde_json::json!({
+        "enabled": true,
+        "store_present": store_present,
+        "migrations": match &outcome {
+            RuntimeReadOutcome::Unsupported { migrations } => migrations
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+            _ => serde_json::Value::Null,
+        },
+        "window_secs": RUNTIME_WINDOW_SECS,
+        "rows_scanned": summary.rows_scanned,
+        "truncated": summary.truncated,
+        "read_mode": RUNTIME_READ_MODE,
+        "wal_note": RUNTIME_WAL_NOTE,
+    });
+    let mut plan = RuntimePlan {
+        coverage: store
+            .as_deref()
+            .and_then(|path| runtime_coverage_entry(path, store_present, &outcome)),
+        scope,
+        evidence: None,
+        promote: false,
+        diagnostic: runtime_diagnostic(&outcome, store_present),
+    };
+
+    let (invocations, truncated) = match &outcome {
+        RuntimeReadOutcome::Ingested {
+            invocations,
+            truncated,
+        } => (invocations.as_slice(), *truncated),
+        _ => (&[][..], false),
+    };
+    // Only the golden-path `bash` tool name is considered (case-insensitive
+    // exact); other tools are at most coverage-level facts and never here.
+    let bash: Vec<&ToolInvocation> = invocations
+        .iter()
+        .filter(|invocation| invocation.tool.eq_ignore_ascii_case("bash"))
+        .collect();
+    if bash.is_empty() {
+        return Ok(plan);
+    }
+
+    let first = bash
+        .iter()
+        .map(|invocation| invocation.observed_at)
+        .min()
+        .expect("non-empty");
+    let last = bash
+        .iter()
+        .map(|invocation| invocation.observed_at)
+        .max()
+        .expect("non-empty");
+    let mut status_counts = serde_json::Map::new();
+    for label in ["pending", "running", "completed", "error"] {
+        let count = bash
+            .iter()
+            .filter(|invocation| runtime_status_label(invocation.status) == label)
+            .count();
+        status_counts.insert(label.to_string(), serde_json::Value::from(count));
+    }
+    let executable: Vec<&ToolInvocation> = bash
+        .iter()
+        .copied()
+        .filter(|invocation| invocation.status != ToolStatus::Pending)
+        .collect();
+    let newest_executable = executable
+        .iter()
+        .copied()
+        .max_by_key(|item| item.observed_at);
+    let newest_pending = bash
+        .iter()
+        .copied()
+        .filter(|invocation| invocation.status == ToolStatus::Pending)
+        .max_by_key(|item| item.observed_at);
+
+    let (newest, kind) = match (newest_executable, newest_pending) {
+        (Some(newest), _) => (newest, "observed_execution"),
+        (None, Some(newest)) => (newest, "attempted_not_executed"),
+        // `bash` is non-empty, so exactly one branch is reachable.
+        (None, None) => return Ok(plan),
+    };
+
+    let mut evidence = Evidence::new(
+        scan_id,
+        EvidenceClass::Direct,
+        RUNTIME_SOURCE_TYPE,
+        RUNTIME_SOURCE_LOCATOR,
+        GOLDEN_BASH_RELATIONSHIP_KEY,
+        &runtime_observation(kind, runtime_status_label(newest.status)),
+        Sensitivity::Internal,
+    )?;
+    // `captured_at` is the newest invocation's fact time, never the scan
+    // wall-clock; freshness is classified from that time (SPRINT-040 §1.8).
+    evidence.captured_at = newest.observed_at;
+    let freshness = evidence.freshness_state(scan_time).as_str().to_string();
+    evidence.freshness = Some(freshness.clone());
+    let metadata = serde_json::json!({
+        "tool": "bash",
+        "observed_first": first.to_rfc3339(),
+        "observed_last": last.to_rfc3339(),
+        "invocation_count": bash.len(),
+        "status_counts": status_counts,
+        "truncated": truncated,
+        "read_mode": RUNTIME_READ_MODE,
+        "wal_note": RUNTIME_WAL_NOTE,
+        "classification": kind,
+    });
+    validate_secret_safe(&metadata)?;
+    evidence.metadata = Some(metadata);
+    // Promotion requires an observed execution whose *fact time* still passes the
+    // existing freshness windows. A stale invocation is recorded honestly but
+    // never laundered into a current capability claim (SPRINT-040 §1.8).
+    plan.promote = kind == "observed_execution" && matches!(freshness.as_str(), "FRESH" | "AGING");
+    plan.evidence = Some(evidence);
+    Ok(plan)
+}
+
+fn runtime_observation(kind: &str, status: &str) -> String {
+    match kind {
+        "observed_execution" => format!(
+            "OpenCode agent invoked Bash in this workspace within the retained window (newest observed status: {status})"
+        ),
+        _ => format!(
+            "OpenCode agent attempted Bash but no execution was observed (status: {status})"
+        ),
+    }
+}
 
 impl ScanService {
     pub fn run(workspace: &Path) -> Result<ScanResult, PicoError> {
@@ -200,6 +468,61 @@ impl ScanService {
             None,
             None,
             trigger,
+            false,
+        )
+    }
+
+    /// Opt-in runtime entry (SPRINT-040): the identical bounded pipeline plus a
+    /// content-free read of the OpenCode runtime store when `runtime_enabled`.
+    ///
+    /// With `runtime_enabled == false` this is byte-for-byte the default scan:
+    /// no store is opened, no coverage entry, `scope.runtime`, or new row is
+    /// produced. With it enabled the scan additionally records an honest
+    /// `runtime_artifacts` coverage entry and may promote the golden-path
+    /// `agent:opencode | can_execute | shell:bash` edge to `CONFIRMED` when a
+    /// fresh in-scope Bash invocation was observed.
+    pub fn run_with_runtime(
+        workspace: &Path,
+        home: Option<&Path>,
+        runtime_enabled: bool,
+    ) -> Result<ScanResult, PicoError> {
+        Self::run_pipeline(
+            workspace,
+            home,
+            None,
+            OPERATOR_REACHABILITY,
+            None,
+            None,
+            ScanTrigger::Manual,
+            runtime_enabled,
+        )
+    }
+
+    /// Combined runtime-and-provider seam (SPRINT-040 completion): the identical
+    /// bounded pipeline with both the opt-in runtime step and an injected
+    /// normalized Cloudflare provider result, so a controlled fixture can prove
+    /// end-to-end that the `UNTRUSTED_TO_PRODUCTION` finding carries the
+    /// same-scan runtime evidence without a network or live credentials.
+    ///
+    /// With `runtime_enabled == false` this delegates to the same internal path
+    /// as the existing default entries, so behavior is byte-for-byte unchanged.
+    pub fn run_with_runtime_and_provider(
+        workspace: &Path,
+        home: Option<&Path>,
+        environment: Option<&[(&str, &str)]>,
+        environment_reachability: discovery::EnvironmentReachability,
+        provider_result: Option<discovery::cloudflare::ProviderResult>,
+        runtime_enabled: bool,
+    ) -> Result<ScanResult, PicoError> {
+        Self::run_pipeline(
+            workspace,
+            home,
+            environment,
+            environment_reachability,
+            provider_result,
+            None,
+            ScanTrigger::Manual,
+            runtime_enabled,
         )
     }
 
@@ -222,11 +545,13 @@ impl ScanService {
             provider_result,
             github_result,
             ScanTrigger::Manual,
+            false,
         )
     }
 
     /// The single bounded scan pipeline. Every public entry funnels through
-    /// here; only the recorded [`ScanTrigger`] varies.
+    /// here; only the recorded [`ScanTrigger`] and the opt-in runtime step vary.
+    #[allow(clippy::too_many_arguments)]
     fn run_pipeline(
         workspace: &Path,
         home: Option<&Path>,
@@ -235,6 +560,7 @@ impl ScanService {
         provider_result: Option<discovery::cloudflare::ProviderResult>,
         github_result: Option<discovery::github::GitHubAuthorityResult>,
         trigger: ScanTrigger,
+        runtime_enabled: bool,
     ) -> Result<ScanResult, PicoError> {
         let mut db = Database::open_existing(&workspace.join(".pico").join("pico.db"))?;
         db.migrate()?;
@@ -264,6 +590,21 @@ impl ScanService {
         if github_result.is_some() {
             discovered.github = github_result;
         }
+
+        // Opt-in runtime step (SPRINT-040 §1.1). Nothing in this block executes
+        // for a default scan, so the default scan's coverage, scope, rows, and
+        // byte output are unchanged.
+        let runtime = if runtime_enabled {
+            let plan = plan_runtime(workspace, home, &scan.id, scan.started_at)?;
+            if let Some(entry) = &plan.coverage {
+                discovered.coverage.push(entry.clone());
+            }
+            scan.scope = Some(serde_json::json!({ "runtime": plan.scope }));
+            Some(plan)
+        } else {
+            None
+        };
+
         if let Some(serde_json::Value::Object(metadata)) = &mut scan.metadata {
             metadata.insert(
                 "coverage".into(),
@@ -315,6 +656,9 @@ impl ScanService {
         let mut agent_bash_postures = Vec::new();
         let mut bash_resource = None;
         let mut bash_observed = false;
+        // Set when the opt-in runtime observation promoted the golden-path edge,
+        // so the same-scan runtime evidence can be linked after persistence.
+        let mut runtime_relationship: Option<Relationship> = None;
         for capability in discovered.bash_capabilities.iter() {
             let Some(actor) = actor_resources.get(capability.provider) else {
                 continue;
@@ -330,7 +674,7 @@ impl ScanService {
             bash_resource = Some(bash.clone());
 
             let relationship_key = format!("{agent_key}|can_execute|shell:bash");
-            let (state, boundary_kind) = match capability.effective_state {
+            let (mut state, boundary_kind) = match capability.effective_state {
                 discovery::EffectiveBashPermission::AutoAllow => (RelationshipState::Derived, None),
                 discovery::EffectiveBashPermission::Sandboxed => {
                     (RelationshipState::Derived, Some("SANDBOX".to_string()))
@@ -341,6 +685,15 @@ impl ScanService {
                 discovery::EffectiveBashPermission::Denied => (RelationshipState::Blocked, None),
                 discovery::EffectiveBashPermission::Unknown => (RelationshipState::Unknown, None),
             };
+            // SPRINT-040 §1.6: an observed, fresh, in-scope Bash invocation is
+            // the only runtime fact that may promote this edge to CONFIRMED. A
+            // configured deny is never silently overwritten.
+            let runtime_promoted = relationship_key == GOLDEN_BASH_RELATIONSHIP_KEY
+                && state != RelationshipState::Blocked
+                && runtime.as_ref().is_some_and(|plan| plan.promote);
+            if runtime_promoted {
+                state = RelationshipState::Confirmed;
+            }
             let mut relationship = match relationship_repo
                 .get_by_canonical_key(&relationship_key)?
             {
@@ -350,6 +703,9 @@ impl ScanService {
                 }
             };
             relationship.state = state;
+            if runtime_promoted {
+                runtime_relationship = Some(relationship.clone());
+            }
             relationship.last_observed_at = chrono::Utc::now();
             let mut capability_metadata = serde_json::json!({
                 "effective_permission": capability.permission.as_str(),
@@ -421,6 +777,24 @@ impl ScanService {
                 provider: capability.provider.to_string(),
                 effective_state: capability.effective_state.as_str().to_string(),
             });
+        }
+
+        // Persist the same-scan runtime evidence once, after the golden-path
+        // relationship exists. Only a promoted observation is linked to the
+        // edge; a stale or pending observation is recorded honestly without
+        // being allowed to weaken (or inflate) the configured-capability edge.
+        if let Some(plan) = &runtime {
+            if let Some(evidence) = &plan.evidence {
+                if let Some(metadata) = &evidence.metadata {
+                    validate_secret_safe(metadata)?;
+                }
+                evidence_repo.insert(evidence)?;
+                if plan.promote {
+                    if let Some(relationship) = &runtime_relationship {
+                        relationship_repo.link_evidence(&relationship.id, &evidence.id)?;
+                    }
+                }
+            }
         }
 
         let mut github_mcp_observed = false;
@@ -1074,6 +1448,7 @@ impl ScanService {
             partial_reason,
             suppressed,
             reduced_confidence,
+            runtime: runtime.as_ref().and_then(|plan| plan.diagnostic.clone()),
         };
 
         persist_scan_diagnostics(db.connection(), &completed.id, &diagnostics_detail)?;
@@ -2031,6 +2406,906 @@ mod tests {
         assert!(
             !haystack.contains("PICO_SWEEP_SENTINEL_7f3a9c_VALUE"),
             "sentinel config values stay transient; DB holds paths and IDs only"
+        );
+    }
+}
+
+/// SPRINT-040 opt-in runtime ingestion: promotion, honesty, scoping, and
+/// read-only guarantees. Synthetic stores are built inline with rusqlite in
+/// temp dirs; the real OpenCode store is never opened.
+#[cfg(test)]
+mod runtime_tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use chrono::Utc;
+    use rusqlite::{params, Connection};
+
+    use super::{
+        runtime_coverage_entry, ScanService, GOLDEN_BASH_RELATIONSHIP_KEY, RUNTIME_READ_MODE,
+        RUNTIME_SOURCE_LOCATOR, RUNTIME_SOURCE_TYPE, RUNTIME_WAL_NOTE,
+    };
+    use crate::application::{DiffService, FindingDiffResult, FindingQueryService, InitService};
+    use crate::discovery::cloudflare::{
+        AuthorityObservation, AuthorityResolution, CredentialStatus, ObservedAccount,
+        ObservedWorker, ProviderResult, ScopeState,
+    };
+    use crate::discovery::coverage::{CoverageState, OPERATION_RUNTIME_ARTIFACTS};
+    use crate::discovery::runtime::RuntimeReadOutcome;
+    use crate::discovery::EnvironmentReachability;
+    use crate::domain::{Evidence, Relationship, RelationshipState, Scan, ScanStatus};
+    use crate::persistence::{Database, RelationshipRepo, ScanRepo};
+
+    const SENTINEL: &str = "PICO_RUNTIME_SENTINEL_0d7a51";
+
+    fn setup() -> (tempfile::TempDir, tempfile::TempDir) {
+        let workspace = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join("opencode.json"),
+            r#"{"permission":{"bash":"allow"}}"#,
+        )
+        .unwrap();
+        InitService::run(workspace.path()).unwrap();
+        (workspace, home)
+    }
+
+    fn store_path(home: &Path) -> std::path::PathBuf {
+        home.join(".local/share/opencode/opencode.db")
+    }
+
+    fn store_dir(home: &Path) -> std::path::PathBuf {
+        home.join(".local/share/opencode")
+    }
+
+    /// Minimal OpenCode-shaped store: exactly the tables/columns the frozen
+    /// reader requires, with 38 applied migrations (the supported version).
+    fn create_store(home: &Path) -> Connection {
+        std::fs::create_dir_all(store_dir(home)).unwrap();
+        let conn = Connection::open(store_path(home)).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT);
+             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+                                time_created INTEGER, data TEXT);
+             CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER);
+             CREATE TABLE credential (id TEXT PRIMARY KEY, token TEXT);",
+        )
+        .unwrap();
+        for index in 0..38 {
+            conn.execute(
+                "INSERT INTO migration (id, time_completed) VALUES (?1, ?2)",
+                params![format!("migration_{index:04}"), 0i64],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    fn seed_session(conn: &Connection, id: &str, directory: &Path) {
+        conn.execute(
+            "INSERT INTO session (id, directory, title) VALUES (?1, ?2, ?3)",
+            params![id, directory.to_string_lossy(), SENTINEL],
+        )
+        .unwrap();
+    }
+
+    fn seed_tool(conn: &Connection, id: &str, session: &str, tool: &str, status: &str, at_ms: i64) {
+        let data = serde_json::json!({
+            "type": "tool",
+            "tool": tool,
+            "callID": format!("call_{id}"),
+            "state": {
+                "status": status,
+                "input": { "note": SENTINEL },
+                "output": SENTINEL,
+                "text": SENTINEL,
+            }
+        });
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, "msg_1", session, at_ms, data.to_string()],
+        )
+        .unwrap();
+    }
+
+    fn now_ms() -> i64 {
+        Utc::now().timestamp_millis()
+    }
+
+    fn hours_ago_ms(hours: i64) -> i64 {
+        now_ms() - hours * 3_600_000
+    }
+
+    /// Recursive file-content digest of the store directory; a read-only
+    /// operation must leave it byte-identical and create no sidecars.
+    fn store_digest(home: &Path) -> Vec<(String, u64, String)> {
+        use sha2::{Digest, Sha256};
+        fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, u64, String)>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    walk(root, &entry.path(), out);
+                } else {
+                    let bytes = std::fs::read(entry.path()).unwrap();
+                    out.push((
+                        entry
+                            .path()
+                            .strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
+                        bytes.len() as u64,
+                        format!("{:x}", Sha256::digest(&bytes)),
+                    ));
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        walk(home, home, &mut entries);
+        entries.sort();
+        entries
+    }
+
+    fn stored_scan(workspace: &Path, id: &str) -> Scan {
+        let db = Database::open_read_only(&workspace.join(".pico").join("pico.db")).unwrap();
+        ScanRepo::new(db.connection())
+            .get(id)
+            .unwrap()
+            .expect("scan persisted")
+    }
+
+    fn stored_relationship(workspace: &Path) -> Relationship {
+        let db = Database::open_read_only(&workspace.join(".pico").join("pico.db")).unwrap();
+        RelationshipRepo::new(db.connection())
+            .get_by_canonical_key(GOLDEN_BASH_RELATIONSHIP_KEY)
+            .unwrap()
+            .expect("golden-path can_execute relationship persisted")
+    }
+
+    fn runtime_evidence(result: &super::ScanResult) -> Option<Evidence> {
+        result
+            .graph
+            .as_ref()?
+            .evidence_index
+            .by_evidence_id
+            .values()
+            .find(|evidence| evidence.source_type == RUNTIME_SOURCE_TYPE)
+            .cloned()
+    }
+
+    fn linked_evidence_ids(result: &super::ScanResult) -> BTreeSet<String> {
+        result
+            .graph
+            .as_ref()
+            .and_then(|graph| {
+                graph
+                    .edges
+                    .iter()
+                    .find(|edge| edge.canonical_key == GOLDEN_BASH_RELATIONSHIP_KEY)
+                    .map(|edge| edge.evidence_ids.iter().cloned().collect())
+            })
+            .unwrap_or_default()
+    }
+
+    fn coverage_operations(scan: &Scan) -> Vec<String> {
+        scan.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("coverage"))
+            .and_then(|coverage| coverage.get("entries"))
+            .and_then(serde_json::Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.get("operation"))
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn runtime_coverage_state(scan: &Scan) -> Option<CoverageState> {
+        let entry = scan
+            .metadata
+            .as_ref()?
+            .get("coverage")?
+            .get("entries")?
+            .as_array()?
+            .iter()
+            .find(|entry| {
+                entry.get("operation").and_then(serde_json::Value::as_str)
+                    == Some(OPERATION_RUNTIME_ARTIFACTS)
+            })?
+            .clone();
+        serde_json::from_value(entry.get("state")?.clone()).ok()
+    }
+
+    fn scope_runtime(scan: &Scan) -> Option<serde_json::Value> {
+        scan.scope.as_ref()?.get("runtime").cloned()
+    }
+
+    // --- Coverage mapping honesty -------------------------------------------
+
+    #[test]
+    fn coverage_state_maps_every_outcome_honestly() {
+        let store = Path::new("/tmp/s040/opencode.db");
+        let inspected = runtime_coverage_entry(
+            store,
+            true,
+            &RuntimeReadOutcome::Ingested {
+                invocations: vec![],
+                truncated: false,
+            },
+        )
+        .expect("successful read yields an entry");
+        assert_eq!(inspected.state, CoverageState::Inspected);
+
+        let incomplete = runtime_coverage_entry(
+            store,
+            true,
+            &RuntimeReadOutcome::Ingested {
+                invocations: vec![],
+                truncated: true,
+            },
+        )
+        .expect("truncated read yields an entry");
+        assert_eq!(incomplete.state, CoverageState::Incomplete);
+
+        let unknown = runtime_coverage_entry(
+            store,
+            true,
+            &RuntimeReadOutcome::Unsupported {
+                migrations: Some(41),
+            },
+        )
+        .expect("unsupported schema yields an entry");
+        assert_eq!(unknown.state, CoverageState::Unknown);
+        assert_eq!(unknown.operation, OPERATION_RUNTIME_ARTIFACTS);
+
+        // Absent/unattempted stores never fabricate a coverage entry.
+        assert!(runtime_coverage_entry(store, false, &RuntimeReadOutcome::NotAttempted).is_none());
+        assert!(runtime_coverage_entry(
+            store,
+            false,
+            &RuntimeReadOutcome::Unavailable {
+                reason: "store path does not exist"
+            }
+        )
+        .is_none());
+        // A store that exists but could not be read is Incomplete, not absent.
+        assert_eq!(
+            runtime_coverage_entry(
+                store,
+                true,
+                &RuntimeReadOutcome::Unavailable {
+                    reason: "store is locked by another writer"
+                }
+            )
+            .expect("busy store yields an entry")
+            .state,
+            CoverageState::Incomplete
+        );
+    }
+
+    // --- Default scan byte-identity -----------------------------------------
+
+    #[test]
+    fn default_scan_emits_no_runtime_artifacts_and_leaves_store_untouched() {
+        let (workspace, home) = setup();
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", now_ms() - 60_000);
+        }
+        let before = store_digest(home.path());
+
+        // The pre-existing default entry with the same reachability as the new
+        // entry; the runtime flag is off.
+        let result = ScanService::run_with_home_and_environment(
+            workspace.path(),
+            Some(home.path()),
+            None,
+            crate::discovery::EnvironmentReachability::Proven,
+        )
+        .unwrap();
+
+        // No runtime row, coverage entry, scope, evidence, or state change.
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Derived
+        );
+        assert!(runtime_evidence(&result).is_none());
+        assert!(
+            !coverage_operations(&stored_scan(workspace.path(), &result.scan_id))
+                .contains(&OPERATION_RUNTIME_ARTIFACTS.to_string())
+        );
+        assert!(scope_runtime(&stored_scan(workspace.path(), &result.scan_id)).is_none());
+
+        // The store was never opened: bytes and sidecar state are unchanged.
+        assert_eq!(before, store_digest(home.path()));
+        assert!(!store_path(home.path()).with_extension("db-wal").exists());
+        assert!(!store_path(home.path()).with_extension("db-shm").exists());
+
+        let raw = std::fs::read(workspace.path().join(".pico").join("pico.db")).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains(SENTINEL));
+    }
+
+    #[test]
+    fn runtime_disabled_via_new_entry_matches_default_entry() {
+        let (workspace_a, home_a) = setup();
+        let (workspace_b, home_b) = setup();
+
+        let default = ScanService::run_with_home_and_environment(
+            workspace_a.path(),
+            Some(home_a.path()),
+            None,
+            crate::discovery::EnvironmentReachability::Proven,
+        )
+        .unwrap();
+        let disabled =
+            ScanService::run_with_runtime(workspace_b.path(), Some(home_b.path()), false).unwrap();
+
+        let describe = |result: &super::ScanResult| {
+            let graph = result.graph.as_ref().unwrap();
+            let nodes: BTreeSet<(String, String)> = graph
+                .nodes
+                .iter()
+                .map(|node| (node.canonical_key.clone(), node.kind.clone()))
+                .collect();
+            let edges: BTreeSet<(String, String, String)> = graph
+                .edges
+                .iter()
+                .map(|edge| {
+                    (
+                        edge.canonical_key.clone(),
+                        edge.kind.clone(),
+                        edge.state.as_str().to_string(),
+                    )
+                })
+                .collect();
+            let evidence: BTreeSet<String> = graph
+                .evidence_index
+                .by_evidence_id
+                .values()
+                .map(|evidence| evidence.source_type.clone())
+                .collect();
+            (nodes, edges, evidence)
+        };
+        assert_eq!(describe(&default), describe(&disabled));
+        assert!(scope_runtime(&stored_scan(workspace_b.path(), &disabled.scan_id)).is_none());
+        assert!(
+            !coverage_operations(&stored_scan(workspace_b.path(), &disabled.scan_id))
+                .contains(&OPERATION_RUNTIME_ARTIFACTS.to_string())
+        );
+    }
+
+    // --- Promotion and honesty ----------------------------------------------
+
+    #[test]
+    fn fresh_completed_bash_promotes_can_execute_and_links_runtime_evidence() {
+        let (workspace, home) = setup();
+        let newest = now_ms() - 60_000;
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", newest);
+        }
+        let before = store_digest(home.path());
+
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        // The single scan-scoped relationship snapshot carries CONFIRMED.
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Confirmed
+        );
+        let edge = result
+            .graph
+            .as_ref()
+            .unwrap()
+            .edges
+            .iter()
+            .find(|edge| edge.canonical_key == GOLDEN_BASH_RELATIONSHIP_KEY)
+            .expect("golden-path edge projected");
+        assert_eq!(edge.state, RelationshipState::Confirmed);
+
+        let evidence = runtime_evidence(&result).expect("runtime evidence recorded");
+        assert_eq!(evidence.class, crate::domain::EvidenceClass::Direct);
+        assert_eq!(evidence.freshness.as_deref(), Some("FRESH"));
+        // captured_at is the invocation time, never the scan wall-clock.
+        assert_eq!(evidence.captured_at.timestamp_millis(), newest);
+        assert!(linked_evidence_ids(&result).contains(&evidence.id));
+        let metadata = evidence.metadata.as_ref().unwrap();
+        assert_eq!(metadata["classification"], "observed_execution");
+        assert_eq!(metadata["status_counts"]["completed"], 1);
+        assert_eq!(metadata["read_mode"], RUNTIME_READ_MODE);
+        assert_eq!(metadata["wal_note"], RUNTIME_WAL_NOTE);
+
+        // Coverage and scope are honest and present.
+        let scan = stored_scan(workspace.path(), &result.scan_id);
+        assert_eq!(
+            runtime_coverage_state(&scan),
+            Some(CoverageState::Inspected)
+        );
+        let scope = scope_runtime(&scan).expect("scope.runtime recorded");
+        assert_eq!(scope["enabled"], true);
+        assert_eq!(scope["store_present"], true);
+        assert_eq!(scope["truncated"], false);
+        assert_eq!(scope["read_mode"], RUNTIME_READ_MODE);
+        assert_eq!(scope["wal_note"], RUNTIME_WAL_NOTE);
+        assert!(scope["rows_scanned"].as_u64().unwrap() >= 1);
+
+        // Read-only: the store directory is byte-identical.
+        assert_eq!(before, store_digest(home.path()));
+    }
+
+    #[test]
+    fn pending_only_bash_is_recorded_but_never_promoted() {
+        let (workspace, home) = setup();
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "pending", now_ms() - 30_000);
+        }
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Derived
+        );
+        let evidence = runtime_evidence(&result).expect("attempt recorded honestly");
+        assert_eq!(evidence.freshness.as_deref(), Some("FRESH"));
+        assert_eq!(
+            evidence.metadata.as_ref().unwrap()["classification"],
+            "attempted_not_executed"
+        );
+        assert!(!linked_evidence_ids(&result).contains(&evidence.id));
+        assert!(evidence.observation.contains("attempted"));
+    }
+
+    #[test]
+    fn stale_bash_is_recorded_stale_and_never_laundered() {
+        let (workspace, home) = setup();
+        let newest = hours_ago_ms(48);
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", newest);
+        }
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Derived
+        );
+        let evidence = runtime_evidence(&result).expect("stale observation recorded");
+        assert_eq!(evidence.freshness.as_deref(), Some("STALE"));
+        assert_eq!(evidence.captured_at.timestamp_millis(), newest);
+        assert!(!linked_evidence_ids(&result).contains(&evidence.id));
+    }
+
+    #[test]
+    fn out_of_scope_session_never_affects_this_workspace() {
+        let (workspace, home) = setup();
+        let other = tempfile::tempdir().unwrap();
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_other", other.path());
+            seed_tool(
+                &conn,
+                "p1",
+                "ses_other",
+                "bash",
+                "completed",
+                now_ms() - 60_000,
+            );
+        }
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Derived
+        );
+        assert!(runtime_evidence(&result).is_none());
+        // The read succeeded; it simply found nothing in this workspace.
+        assert_eq!(
+            runtime_coverage_state(&stored_scan(workspace.path(), &result.scan_id)),
+            Some(CoverageState::Inspected)
+        );
+    }
+
+    #[test]
+    fn unsupported_schema_is_unknown_and_changes_nothing() {
+        let (workspace, home) = setup();
+        {
+            let conn = create_store(home.path());
+            // Re-seed an out-of-range migration count to fail the schema gate.
+            conn.execute("DELETE FROM migration", []).unwrap();
+            for index in 0..37 {
+                conn.execute(
+                    "INSERT INTO migration (id, time_completed) VALUES (?1, ?2)",
+                    params![format!("migration_{index:04}"), 0i64],
+                )
+                .unwrap();
+            }
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", now_ms() - 60_000);
+        }
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Derived
+        );
+        assert!(runtime_evidence(&result).is_none());
+        let scan = stored_scan(workspace.path(), &result.scan_id);
+        assert_eq!(runtime_coverage_state(&scan), Some(CoverageState::Unknown));
+        let scope = scope_runtime(&scan).unwrap();
+        assert_eq!(scope["migrations"], 37);
+        assert_eq!(scope["store_present"], true);
+    }
+
+    #[test]
+    fn missing_store_omits_coverage_and_never_fabricates() {
+        let (workspace, home) = setup();
+        // No store at all under the home seam.
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Derived
+        );
+        assert!(runtime_evidence(&result).is_none());
+        let scan = stored_scan(workspace.path(), &result.scan_id);
+        assert!(runtime_coverage_state(&scan).is_none());
+        assert!(coverage_operations(&scan)
+            .iter()
+            .all(|operation| operation == "static_config"));
+        assert!(!coverage_operations(&scan).contains(&OPERATION_RUNTIME_ARTIFACTS.to_string()));
+        let scope = scope_runtime(&scan).unwrap();
+        assert_eq!(scope["store_present"], false);
+
+        // No HOME seam at all: also honest, also no coverage entry.
+        let (workspace_none, _home_none) = setup();
+        let none = ScanService::run_with_runtime(workspace_none.path(), None, true).unwrap();
+        assert!(
+            scope_runtime(&stored_scan(workspace_none.path(), &none.scan_id)).unwrap()
+                ["store_present"]
+                .as_bool()
+                .is_some_and(|present| !present)
+        );
+        assert!(
+            runtime_coverage_state(&stored_scan(workspace_none.path(), &none.scan_id)).is_none()
+        );
+    }
+
+    // --- Secret/content safety ----------------------------------------------
+
+    #[test]
+    fn runtime_sentinel_content_never_reaches_persisted_state() {
+        let (workspace, home) = setup();
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", now_ms() - 60_000);
+            conn.execute(
+                "INSERT INTO credential (id, token) VALUES (?1, ?2)",
+                params!["cred_1", SENTINEL],
+            )
+            .unwrap();
+        }
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        let raw = std::fs::read(workspace.path().join(".pico").join("pico.db")).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&raw).contains(SENTINEL),
+            "runtime sentinel content must never be persisted"
+        );
+        let evidence = runtime_evidence(&result).unwrap();
+        let serialized = serde_json::to_string(&evidence).unwrap();
+        assert!(!serialized.contains(SENTINEL));
+        assert!(!format!("{:?}", evidence.metadata).contains(SENTINEL));
+        assert!(
+            !serde_json::to_string(&stored_scan(workspace.path(), &result.scan_id))
+                .unwrap()
+                .contains(SENTINEL)
+        );
+    }
+
+    // --- Comparison honesty --------------------------------------------------
+
+    #[test]
+    fn default_versus_runtime_scan_reports_coverage_change_not_remediation() {
+        let (workspace, home) = setup();
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", now_ms() - 60_000);
+        }
+        ScanService::run_with_runtime(workspace.path(), Some(home.path()), false).unwrap();
+        ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+
+        let diff = match DiffService::latest(workspace.path()).unwrap() {
+            FindingDiffResult::Ready(diff) => diff,
+            other => panic!("expected a comparable diff, got {other:?}"),
+        };
+        let change = diff
+            .attribution
+            .graph_changes
+            .iter()
+            .find(|change| change.key.contains("can_execute"))
+            .expect("golden-path change attributed");
+        assert!(
+            change.reasons.contains(&"coverage_changed".to_string()),
+            "expected coverage_changed, got {:?}",
+            change.reasons
+        );
+        assert!(!change.disappearance_confirmed);
+        assert!(diff
+            .attribution
+            .graph_changes
+            .iter()
+            .all(|change| !change.disappearance_confirmed));
+        assert!(diff
+            .attribution
+            .finding_changes
+            .iter()
+            .all(|change| !change.disappearance_confirmed));
+    }
+
+    #[test]
+    fn runtime_scan_scope_names_the_disclosed_read_mode() {
+        let (workspace, home) = setup();
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "running", now_ms() - 120_000);
+        }
+        let result =
+            ScanService::run_with_runtime(workspace.path(), Some(home.path()), true).unwrap();
+        let scope = scope_runtime(&stored_scan(workspace.path(), &result.scan_id)).unwrap();
+        assert_eq!(scope["window_secs"], super::RUNTIME_WINDOW_SECS);
+        assert_eq!(scope["read_mode"], RUNTIME_READ_MODE);
+        assert_eq!(scope["wal_note"], RUNTIME_WAL_NOTE);
+        // A running invocation is an observed execution and may promote.
+        assert_eq!(
+            stored_relationship(workspace.path()).state,
+            RelationshipState::Confirmed
+        );
+    }
+
+    // --- End-to-end finding provenance (SPRINT-040 completion) ---------------
+
+    /// Offline, synthetic PRODUCTION-rated Cloudflare provider projection, copied
+    /// from the S035 fixture pattern. `discover_with_environment` is the same
+    /// fixture seam the scan uses, so the fingerprint matches the scanned
+    /// credential and no network or live credential is ever touched.
+    fn production_provider(workspace: &Path, home: &Path) -> ProviderResult {
+        let environment = [("CLOUDFLARE_API_TOKEN", "synthetic-token")];
+        let discovered = crate::discovery::discover_with_environment(
+            workspace,
+            Some(home),
+            Some(&environment),
+            EnvironmentReachability::Proven,
+        )
+        .unwrap();
+        let worker = ObservedWorker {
+            account_id: "account-1234567890123456".to_string(),
+            script_name: "synthetic-production-worker".to_string(),
+            worker_tag: Some("worker-tag-synthetic".to_string()),
+            source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            sink_impact: Some("PRODUCTION".to_string()),
+        };
+        let worker_key = worker.canonical_key();
+        ProviderResult {
+            credential_fingerprint: discovered.credentials[0].fingerprint.clone(),
+            credential_status: Some(CredentialStatus::Active),
+            accounts: vec![ObservedAccount {
+                account_id: "account-1234567890123456".to_string(),
+                name: Some("Synthetic Account".to_string()),
+                account_type: Some("standard".to_string()),
+                scope: ScopeState::InScope,
+                source_locator: "/accounts".to_string(),
+            }],
+            workers: vec![worker],
+            authorities: vec![AuthorityObservation {
+                account_id: "account-1234567890123456".to_string(),
+                worker_key,
+                state: RelationshipState::Derived,
+                resolution: AuthorityResolution::Exact,
+                permission_state: "WORKERS_SCRIPTS_WRITE".to_string(),
+                scope_state: ScopeState::InScope,
+                unknown_reasons: Vec::new(),
+                granted_permissions: Vec::new(),
+                zone_scoped: false,
+                source_locator: "/accounts/account-1234567890123456/workers/scripts".to_string(),
+            }],
+            ..ProviderResult::default()
+        }
+    }
+
+    /// Golden-path workspace: Bash allow plus the supported GitHub MCP server, so
+    /// the golden path is complete once a synthetic PRODUCTION Cloudflare sink is
+    /// injected. The sentinel is placed only in the forbidden GitHub token
+    /// environment value to prove it never surfaces.
+    fn setup_golden_path() -> (tempfile::TempDir, tempfile::TempDir) {
+        let workspace = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({
+            "permission": { "bash": "allow" },
+            "mcp": { "servers": { "github": {
+                "type": "local",
+                "command": ["docker", "run", "ghcr.io/github/github-mcp-server:0.1.0"],
+                "environment": { "GITHUB_PERSONAL_ACCESS_TOKEN": SENTINEL }
+            }}}
+        });
+        std::fs::write(workspace.path().join("opencode.json"), config.to_string()).unwrap();
+        InitService::run(workspace.path()).unwrap();
+        (workspace, home)
+    }
+
+    fn golden_path_scan(workspace: &Path, home: &Path, runtime_enabled: bool) -> super::ScanResult {
+        let environment = [("CLOUDFLARE_API_TOKEN", "synthetic-token")];
+        ScanService::run_with_runtime_and_provider(
+            workspace,
+            Some(home),
+            Some(&environment),
+            EnvironmentReachability::Proven,
+            Some(production_provider(workspace, home)),
+            runtime_enabled,
+        )
+        .unwrap()
+    }
+
+    /// Source types reachable from the single Finding's `evidence_ids`.
+    fn finding_evidence_source_types(result: &super::ScanResult) -> BTreeSet<String> {
+        let Some(graph) = result.graph.as_ref() else {
+            return BTreeSet::new();
+        };
+        let Some(finding) = result
+            .findings
+            .as_ref()
+            .and_then(|findings| findings.findings.first())
+        else {
+            return BTreeSet::new();
+        };
+        finding
+            .evidence_ids
+            .iter()
+            .filter_map(|id| graph.evidence_index.by_evidence_id.get(id))
+            .map(|evidence| evidence.source_type.clone())
+            .collect()
+    }
+
+    fn assert_forbidden_claim_language_absent(haystack: &str) {
+        let lowered = haystack.to_ascii_lowercase();
+        for forbidden in ["compromised", "exploited", "exfiltrat"] {
+            assert!(
+                !lowered.contains(forbidden),
+                "forbidden claim language {forbidden:?} appeared in output"
+            );
+        }
+    }
+
+    #[test]
+    fn production_finding_carries_runtime_evidence_end_to_end() {
+        let (workspace, home) = setup_golden_path();
+        let newest = now_ms() - 60_000;
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", newest);
+        }
+        let before = store_digest(home.path());
+
+        let result = golden_path_scan(workspace.path(), home.path(), true);
+
+        // The golden-path FINDING is produced and carries the runtime evidence.
+        assert_eq!(result.status, ScanStatus::Complete);
+        assert_eq!(result.finding_count, 1, "golden-path finding expected");
+        assert_eq!(
+            result.finding_class.as_deref(),
+            Some("UNTRUSTED_TO_PRODUCTION")
+        );
+        let source_types = finding_evidence_source_types(&result);
+        assert!(
+            source_types.contains(RUNTIME_SOURCE_TYPE),
+            "finding evidence_ids must resolve to the runtime observer; got {source_types:?}"
+        );
+
+        let graph = result.graph.as_ref().unwrap();
+        let runtime: Vec<&Evidence> = graph
+            .evidence_index
+            .by_evidence_id
+            .values()
+            .filter(|evidence| evidence.source_type == RUNTIME_SOURCE_TYPE)
+            .collect();
+        assert_eq!(runtime.len(), 1, "exactly one runtime evidence expected");
+        assert_eq!(runtime[0].class, crate::domain::EvidenceClass::Direct);
+        assert_eq!(runtime[0].freshness.as_deref(), Some("FRESH"));
+        assert_eq!(runtime[0].captured_at.timestamp_millis(), newest);
+
+        // Rendered detail shows the runtime evidence with locator + freshness.
+        let finding = result.findings.as_ref().unwrap().findings.first().unwrap();
+        let detail = FindingQueryService::get(workspace.path(), &finding.id).unwrap();
+        let rendered = crate::cli::render::render_finding_detail(&detail);
+        assert!(
+            detail
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source_type == RUNTIME_SOURCE_TYPE),
+            "rendered evidence set must include the runtime observer"
+        );
+        assert!(rendered.contains(RUNTIME_SOURCE_TYPE));
+        assert!(rendered.contains(RUNTIME_SOURCE_LOCATOR));
+        assert!(rendered.contains("Freshness: FRESH"));
+
+        // Runtime evidence must never upgrade potential into a compromise claim.
+        let detail_json = serde_json::to_string(&detail).unwrap();
+        assert_forbidden_claim_language_absent(&rendered);
+        assert_forbidden_claim_language_absent(&detail_json);
+        assert_forbidden_claim_language_absent(&serde_json::to_string(&result.findings).unwrap());
+
+        // Sentinel content in forbidden store fields never reaches the finding,
+        // its evidence, or the rendering.
+        assert!(
+            !rendered.contains(SENTINEL),
+            "sentinel leaked into rendering"
+        );
+        assert!(
+            !detail_json.contains(SENTINEL),
+            "sentinel leaked into detail JSON"
+        );
+        let all_evidence: Vec<&Evidence> = graph.evidence_index.by_evidence_id.values().collect();
+        assert!(
+            !serde_json::to_string(&all_evidence)
+                .unwrap()
+                .contains(SENTINEL),
+            "sentinel leaked into evidence"
+        );
+        let raw = std::fs::read(workspace.path().join(".pico").join("pico.db")).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains(SENTINEL));
+
+        // Read-only: the synthetic store is byte-identical.
+        assert_eq!(before, store_digest(home.path()));
+    }
+
+    #[test]
+    fn production_finding_without_runtime_omits_runtime_evidence() {
+        let (workspace, home) = setup_golden_path();
+        {
+            let conn = create_store(home.path());
+            seed_session(&conn, "ses_1", workspace.path());
+            seed_tool(&conn, "p1", "ses_1", "bash", "completed", now_ms() - 60_000);
+        }
+
+        let result = golden_path_scan(workspace.path(), home.path(), false);
+
+        // The same FINDING exists, but the runtime upgrade is attributable to
+        // the opt-in only: no runtime evidence, no `scope.runtime`.
+        assert_eq!(result.status, ScanStatus::Complete);
+        assert_eq!(result.finding_count, 1, "golden-path finding expected");
+        assert!(
+            !finding_evidence_source_types(&result).contains(RUNTIME_SOURCE_TYPE),
+            "runtime evidence must be attributable to the opt-in only"
+        );
+        assert!(runtime_evidence(&result).is_none());
+
+        let finding = result.findings.as_ref().unwrap().findings.first().unwrap();
+        let detail = FindingQueryService::get(workspace.path(), &finding.id).unwrap();
+        let rendered = crate::cli::render::render_finding_detail(&detail);
+        assert!(!rendered.contains(RUNTIME_SOURCE_TYPE));
+        assert!(
+            scope_runtime(&stored_scan(workspace.path(), &result.scan_id)).is_none(),
+            "runtime-disabled scan must not record scope.runtime"
         );
     }
 }

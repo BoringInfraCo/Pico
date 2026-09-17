@@ -8,6 +8,7 @@ pub mod cloudflare;
 pub mod coverage;
 pub mod github;
 pub mod mcp;
+pub mod runtime;
 
 use std::path::Path;
 

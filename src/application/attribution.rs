@@ -1,8 +1,10 @@
 //! Versioned interpretation of persisted observations. No network or discovery.
 use crate::application::graph_diff::{typed_field, TypedValue};
 use crate::application::{FindingDiff, GraphSubject};
-use crate::discovery::coverage::CoverageEntry;
 pub use crate::discovery::coverage::CoverageState;
+use crate::discovery::coverage::{
+    CoverageEntry, OPERATION_RUNTIME_ARTIFACTS, PROVIDER_OPENCODE, SCOPE_OPENCODE_RUNTIME_STORE,
+};
 use crate::domain::{Evidence, Scan};
 use crate::persistence::EvidenceRepo;
 use crate::shared::PicoError;
@@ -69,25 +71,15 @@ fn manifest(scan: &Scan) -> Option<Manifest> {
         && manifest.credential_enumeration == "unknown"
         && !manifest.entries.is_empty()
         && manifest.entries.iter().all(|entry| {
-            let known_scope = match entry.provider.as_str() {
-                "opencode" => matches!(
-                    entry.scope.as_str(),
-                    "user"
-                        | "user:opencode.json"
-                        | "user:opencode.jsonc"
-                        | "project:opencode.json"
-                        | "project:opencode.jsonc"
-                        | "project:.opencode/opencode.json"
-                        | "project:.opencode/opencode.jsonc"
-                ),
-                "claude" => matches!(
-                    entry.scope.as_str(),
-                    "user"
-                        | "user:.claude/settings.json"
-                        | "project:.claude/settings.json"
-                        | "project:.claude/settings.local.json"
-                        | "project:.mcp.json"
-                ),
+            // SPRINT-040 adds the opt-in `runtime_artifacts` operation. It is
+            // valid only for the OpenCode runtime store scope and never on a
+            // default (runtime-disabled) scan, which omits the entry entirely.
+            let known_operation = match entry.operation.as_str() {
+                "static_config" => static_scope_known(&entry.provider, &entry.scope),
+                OPERATION_RUNTIME_ARTIFACTS => {
+                    entry.provider == PROVIDER_OPENCODE
+                        && entry.scope == SCOPE_OPENCODE_RUNTIME_STORE
+                }
                 _ => false,
             };
             let fingerprint = if entry.scope == "user" {
@@ -100,12 +92,32 @@ fn manifest(scan: &Scan) -> Option<Manifest> {
                         .bytes()
                         .all(|b| b.is_ascii_hexdigit())
             };
-            known_scope
-                && fingerprint
-                && entry.operation == "static_config"
-                && scopes.insert((&entry.provider, &entry.scope))
+            known_operation && fingerprint && scopes.insert((&entry.provider, &entry.scope))
         });
     valid.then_some(manifest)
+}
+fn static_scope_known(provider: &str, scope: &str) -> bool {
+    match provider {
+        "opencode" => matches!(
+            scope,
+            "user"
+                | "user:opencode.json"
+                | "user:opencode.jsonc"
+                | "project:opencode.json"
+                | "project:opencode.jsonc"
+                | "project:.opencode/opencode.json"
+                | "project:.opencode/opencode.jsonc"
+        ),
+        "claude" => matches!(
+            scope,
+            "user"
+                | "user:.claude/settings.json"
+                | "project:.claude/settings.json"
+                | "project:.claude/settings.local.json"
+                | "project:.mcp.json"
+        ),
+        _ => false,
+    }
 }
 fn coverage(scan: &Scan, sources: &[&Evidence]) -> CoverageState {
     let Some(manifest) = manifest(scan) else {
@@ -206,6 +218,7 @@ fn safe_source(source: &str) -> String {
         | "cloudflare_worker_inventory"
         | "github_mcp_influence"
         | "opencode_credential_reachability"
+        | "opencode_runtime_observer"
         | "claude_credential_reachability"
         | "cloudflare_credential_reachability"
         | "mcp_config"
@@ -772,6 +785,48 @@ mod tests {
         to.metadata.as_mut().unwrap()["coverage"]["entries"][0]["state"] = json!("incomplete");
         assert!(!same_local_scope(&from, &to, &[item], "exact:key"));
     }
+    #[test]
+    fn runtime_observer_source_is_never_retagged_as_other() {
+        assert_eq!(
+            safe_source("opencode_runtime_observer"),
+            "opencode_runtime_observer"
+        );
+        assert_eq!(safe_source("something_unknown"), "other");
+    }
+
+    #[test]
+    fn runtime_artifact_entry_is_accepted_by_the_manifest_contract() {
+        let entry = CoverageEntry::runtime_artifacts(
+            CoverageState::Inspected,
+            std::path::Path::new("/tmp/s040/opencode.db"),
+        );
+        let mut from = scan();
+        let mut to = scan();
+        let base = CoverageEntry::candidate(
+            "opencode",
+            "project:opencode.json",
+            std::path::Path::new("/nonexistent/s040/opencode.json"),
+        );
+        let static_only = json!({"coverage":{"version":1,"entries":[base.clone()],"provider_enumeration":"unknown","credential_enumeration":"unknown"}});
+        let with_runtime = json!({"coverage":{"version":1,"entries":[base,entry],"provider_enumeration":"unknown","credential_enumeration":"unknown"}});
+        from.metadata = Some(static_only.clone());
+        to.metadata = Some(with_runtime);
+        assert!(manifest(&from).is_some());
+        assert!(manifest(&to).is_some());
+        // A default scan versus a --runtime scan is an honest coverage change,
+        // never a remediation or disappearance signal.
+        let mut item = observation(&from, "exact:key", "permission", json!("allow"));
+        item.source_type = "opencode_effective_permission".into();
+        assert!(!same_local_scope(&from, &to, &[item], "exact:key"));
+
+        // The operation is only valid for the OpenCode runtime store scope.
+        let mut forged = static_only;
+        forged["coverage"]["entries"][0]["operation"] = json!("runtime_artifacts");
+        let mut forged_scan = scan();
+        forged_scan.metadata = Some(forged);
+        assert!(manifest(&forged_scan).is_none());
+    }
+
     #[test]
     fn support_signature_ignores_ids_but_detects_evidence_quality() {
         let from = scan();

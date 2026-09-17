@@ -9,6 +9,7 @@
 use std::fs;
 
 use pico::application::{InitService, ScanResult, ScanService};
+use pico::cli::render::render_scan_diagnostics;
 use pico::discovery::cloudflare::{
     AuthorityObservation, AuthorityResolution, CredentialStatus, ObservedAccount, ObservedWorker,
     ProviderResult, ScopeState,
@@ -234,6 +235,106 @@ fn mcp_golden_scan_diagnostics_remain_clean() {
     assert!(
         !text.contains(FAKE_TOKEN),
         "golden MCP diagnostics JSON leaked the synthetic token:\n{text}"
+    );
+}
+
+/// Synthetic content sentinel for the runtime source store. It is placed only in
+/// forbidden fields (`session.title`, `message.data`, `part.data.$.state.input`)
+/// and must never reach the MCP payload.
+const RUNTIME_SENTINEL: &str = "SENTINEL_S040_MCP";
+
+/// Build a synthetic OpenCode-shaped store whose migration version is outside
+/// Pico's supported range, so the opt-in runtime read fails closed and records
+/// an honest `UNSUPPORTED` limitation. Forbidden tables/fields carry the
+/// sentinel so the MCP sweep is meaningful.
+fn seed_unsupported_runtime_store(home: &Path) {
+    let dir = home.join(".local/share/opencode");
+    fs::create_dir_all(&dir).unwrap();
+    let conn = rusqlite::Connection::open(dir.join("opencode.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER, title TEXT);
+         CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+         CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER);
+         CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO migration (id, time_completed) VALUES ('39', 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO session (id, directory, time_created, title) VALUES ('s1', '/tmp', 0, ?1)",
+        [RUNTIME_SENTINEL],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO message (id, session_id, data) VALUES ('m1', 's1', ?1)",
+        [RUNTIME_SENTINEL],
+    )
+    .unwrap();
+    let data = format!(
+        "{{\"type\":\"tool\",\"tool\":\"bash\",\"state\":{{\"input\":\"{RUNTIME_SENTINEL}\"}}}}"
+    );
+    conn.execute(
+        "INSERT INTO part (id, session_id, time_created, data) VALUES ('p1', 's1', 0, ?1)",
+        [data],
+    )
+    .unwrap();
+}
+
+/// The opt-in runtime limitation is projected over MCP with the same
+/// `state`/`reason`/`migrations` the CLI renders. The CLI has no `findings`
+/// JSON transport, so parity is asserted against the application DTO the CLI
+/// renders from (and which is persisted) plus the CLI's rendered text: both
+/// transports agree for the same diagnostics input.
+#[test]
+fn mcp_list_findings_surfaces_runtime_limitation_and_matches_cli() {
+    let workspace = setup(FAKE_TOKEN);
+    let home = tempdir().unwrap();
+    seed_unsupported_runtime_store(home.path());
+
+    let result = ScanService::run_with_runtime(workspace.path(), Some(home.path()), true)
+        .expect("opt-in runtime scan succeeds");
+    let diagnostics = result
+        .diagnostics_detail
+        .as_ref()
+        .expect("scan diagnostics are always populated");
+    let expected = diagnostics
+        .runtime
+        .as_ref()
+        .expect("an unsupported runtime store must record a limitation");
+    assert_eq!(expected.state, "UNSUPPORTED");
+    assert_eq!(expected.migrations, Some(39));
+
+    // The CLI renders the same fact as human text ...
+    let cli_text = render_scan_diagnostics(diagnostics);
+    assert!(
+        cli_text.contains("Runtime evidence: UNSUPPORTED"),
+        "CLI must render the runtime limitation: {cli_text}"
+    );
+    assert!(
+        cli_text.contains("observed migrations: 39"),
+        "CLI must render the observed migration count: {cli_text}"
+    );
+
+    // ... and the decoded MCP payload exposes the same structured limitation.
+    let payload = list_findings_payload(workspace.path());
+    let runtime = payload["diagnostics"]
+        .get("runtime")
+        .expect("MCP must project the runtime limitation, not imply a clean runtime read");
+    assert_eq!(runtime["state"], serde_json::json!("UNSUPPORTED"));
+    assert_eq!(runtime["migrations"], serde_json::json!(39));
+    assert_eq!(
+        runtime,
+        &serde_json::to_value(expected).expect("serializable runtime diagnostic"),
+        "MCP runtime projection must equal the application DTO the CLI renders"
+    );
+
+    let text = serde_json::to_string(&payload).expect("serializable payload");
+    assert!(
+        !text.contains(RUNTIME_SENTINEL),
+        "MCP payload leaked the runtime sentinel:\n{text}"
     );
 }
 

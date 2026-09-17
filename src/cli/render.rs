@@ -558,6 +558,17 @@ pub fn render_scan_diagnostics(diagnostics: &ScanDiagnostics) -> String {
         )),
     }
 
+    if let Some(runtime) = &diagnostics.runtime {
+        out.push_str(&format!(
+            "Runtime evidence: {}\n",
+            terminal_safe(&runtime.state)
+        ));
+        out.push_str(&format!("  - {}\n", terminal_safe(&runtime.reason)));
+        if let Some(migrations) = runtime.migrations {
+            out.push_str(&format!("  - observed migrations: {migrations}\n"));
+        }
+    }
+
     for suppressed in &diagnostics.suppressed {
         out.push_str(&format!(
             "Suppressed {}: {}\n",

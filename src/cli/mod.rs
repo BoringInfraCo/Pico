@@ -34,7 +34,25 @@ enum Command {
     /// Initialize Pico state in the current workspace.
     Init,
     /// Run a scan of the current workspace.
-    Scan,
+    ///
+    /// `pico scan` is read-only and unchanged by default: it never opens the
+    /// agent runtime store, so its output is byte-for-byte the same whether or
+    /// not a store exists.
+    ///
+    /// `--runtime` is an explicit opt-in for this scan only. It reads the
+    /// machine-global OpenCode store read-only and content-free — no prompt,
+    /// message, tool-argument/output, or credential contents — scoped to the
+    /// scanned workspace and limited to the retained window (default 7 days).
+    /// The store is opened with `immutable=1`, which ignores the write-ahead
+    /// log (WAL); the observed data may therefore be a possibly-stale snapshot
+    /// rather than real-time truth. Nothing is written: no `-wal`/`-shm`
+    /// sidecar, temp file, copy, config, daemon, or hook.
+    Scan {
+        /// Opt in to read-only, content-free runtime evidence ingestion for
+        /// this scan only (default: off).
+        #[arg(long)]
+        runtime: bool,
+    },
     /// List all scans with status and finding counts.
     History {
         /// Emit the versioned public JSON contract.
@@ -116,7 +134,7 @@ enum Command {
 pub fn run() -> Result<(), PicoError> {
     match Cli::parse().command {
         Command::Init => run_init(),
-        Command::Scan => run_scan(),
+        Command::Scan { runtime } => run_scan(runtime),
         Command::History { json } => run_history(json),
         Command::Findings => run_findings(),
         Command::Finding { id } => run_finding(&id),
@@ -312,9 +330,19 @@ fn run_init() -> Result<(), PicoError> {
     Ok(())
 }
 
-/// Renders `pico scan`.
-fn run_scan() -> Result<(), PicoError> {
-    let result = ScanService::run(&workspace()?)?;
+/// Renders `pico scan`. Default scans keep the existing `ScanService::run`
+/// path untouched; `--runtime` is an explicit opt-in that delegates to the
+/// frozen `ScanService::run_with_runtime`, resolving HOME the same way
+/// `run_watch`/`run_runtime` do. No scan or ingestion logic lives here.
+fn run_scan(runtime: bool) -> Result<(), PicoError> {
+    let workspace = workspace()?;
+    let result = if runtime {
+        let home_var = std::env::var_os("HOME");
+        let home = home_var.as_deref().map(Path::new);
+        ScanService::run_with_runtime(&workspace, home, true)?
+    } else {
+        ScanService::run(&workspace)?
+    };
     println!("Pico scan complete");
     println!();
     println!("Scan: {}", result.scan_id);

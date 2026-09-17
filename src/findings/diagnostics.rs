@@ -41,6 +41,20 @@ pub struct ConfidenceNote {
     pub edges: Vec<(String, String, f64)>,
 }
 
+/// Honest status of the opt-in runtime-evidence step (SPRINT-040).
+///
+/// Present only when the runtime step did not read cleanly, so a default scan
+/// (and a successful runtime read) serialize exactly as before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeDiagnostic {
+    /// Machine-readable outcome label (`unsupported`, `unavailable`, `incomplete`).
+    pub state: String,
+    /// Sanitized, deterministic explanation; never contains content or secrets.
+    pub reason: String,
+    /// Observed migration count when the store schema was unsupported/unknown.
+    pub migrations: Option<u64>,
+}
+
 /// Structured diagnostics for one scan, surfaced to CLI/MCP alongside the
 /// human-readable `FindingResult::diagnostics` projection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,6 +69,9 @@ pub struct ScanDiagnostics {
     pub suppressed: Vec<SuppressedReason>,
     /// Findings whose confidence was reduced by incomplete edge evidence.
     pub reduced_confidence: Vec<ConfidenceNote>,
+    /// Opt-in runtime-evidence limitation (SPRINT-040). Absent on default scans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeDiagnostic>,
 }
 
 impl ScanDiagnostics {
@@ -65,5 +82,6 @@ impl ScanDiagnostics {
             && self.partial_reason.is_none()
             && self.suppressed.is_empty()
             && self.reduced_confidence.is_empty()
+            && self.runtime.is_none()
     }
 }
