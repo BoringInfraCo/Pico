@@ -11,10 +11,10 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::analysis::{BoundaryDecision, BoundaryEvaluation};
-use crate::domain::{Evidence, Scan, ScanStatus, GRAPH_SNAPSHOT_VERSION};
+use crate::domain::{Evidence, EvidenceClass, Scan, ScanStatus, GRAPH_SNAPSHOT_VERSION};
 use crate::findings::diagnostics::ScanDiagnostics;
 use crate::findings::{Confidence, FindingResult, ReasonCode, Severity};
 use crate::graph::{project, ProjectionInput, SecurityGraph};
@@ -48,6 +48,18 @@ const SUPPORTED_REMEDIATION_RULES: &[&str] = &[
     "RESTRICT_EXTERNAL_RETRIEVAL",
     "SCOPE_PRODUCTION_MUTATION_AUTHORITY",
 ];
+
+/// The persisted `source_type` of same-scan OpenCode runtime-observer evidence
+/// (SPRINT-040 §1.6). Only this source may produce an observation basis entry.
+const RUNTIME_OBSERVER_SOURCE_TYPE: &str = "opencode_runtime_observer";
+
+/// The persisted observation classification of a runtime observation that
+/// actually executed (SPRINT-040 §1.6, stored as `metadata.classification`).
+const OBSERVED_EXECUTION_CLASSIFICATION: &str = "observed_execution";
+
+/// The persisted observation classification of a runtime observation that was
+/// attempted but not executed (SPRINT-040 §1.6).
+const ATTEMPTED_NOT_EXECUTED_CLASSIFICATION: &str = "attempted_not_executed";
 
 /// Latest COMPLETE selection with per-Finding summaries.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -131,6 +143,12 @@ pub struct FindingDetail {
     pub reasons: Vec<ReasonView>,
     pub paths: Vec<ExplainedPath>,
     pub evidence: Vec<EvidenceView>,
+    /// Observation basis derived from this Finding's linked runtime evidence
+    /// (SPRINT-041 §1.1/§1.2). Always present; empty when the Finding carries no
+    /// `DIRECT` `opencode_runtime_observer` evidence with a recognized observed
+    /// state, so a reader can never mistake an inferred capability for an
+    /// observed one.
+    pub observed_execution: Vec<ObservedExecutionView>,
     pub boundary_summary: String,
     pub uncertainties: Vec<String>,
     pub remediations: Vec<RemediationView>,
@@ -305,6 +323,27 @@ pub struct EvidenceView {
     pub freshness: String,
     pub sensitivity: String,
     pub support_roles: Vec<String>,
+}
+
+/// One deterministic observation-basis entry derived from a Finding's own
+/// linked runtime evidence (SPRINT-041 §1.1).
+///
+/// An entry exists only for `DIRECT` `opencode_runtime_observer` evidence whose
+/// persisted observation classification is `observed_execution` or
+/// `attempted_not_executed`. Both the basis and the freshness are read from the
+/// persisted evidence and are never recomputed; any other observation value
+/// yields no entry rather than a guess.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservedExecutionView {
+    /// Canonical key of the capability relationship, e.g.
+    /// `agent:opencode|can_execute|shell:bash`.
+    pub relationship_key: String,
+    /// `OBSERVED_EXECUTION` | `ATTEMPTED_NOT_EXECUTED` (from persisted evidence).
+    pub basis: String,
+    /// Persisted freshness (`FRESH`/`AGING`/`STALE`/`UNKNOWN`).
+    pub freshness: String,
+    /// Supporting evidence id.
+    pub evidence_id: String,
 }
 
 /// Recorded boundary evaluation on a linked path.
@@ -773,6 +812,7 @@ fn linked_paths(
 struct FindingEvidence {
     views: Vec<EvidenceView>,
     ids: BTreeSet<String>,
+    observed_execution: Vec<ObservedExecutionView>,
 }
 
 fn finding_evidence_views(
@@ -820,7 +860,12 @@ fn finding_evidence_views(
         view.support_roles.dedup();
         views.push(view);
     }
-    Ok(FindingEvidence { views, ids })
+    let observed_execution = observed_execution_views(&resolved)?;
+    Ok(FindingEvidence {
+        views,
+        ids,
+        observed_execution,
+    })
 }
 
 fn resolve_same_scan_evidence(
@@ -889,6 +934,72 @@ fn evidence_view(item: &Evidence) -> Result<EvidenceView, PicoError> {
         sensitivity: bounded_string("evidence sensitivity", item.sensitivity.as_str())?,
         support_roles: Vec::new(),
     })
+}
+
+/// The persisted observation classification of a runtime evidence item.
+///
+/// SPRINT-040 records it as `metadata.classification`
+/// (`observed_execution` / `attempted_not_executed`). A classification stored
+/// directly in the `observation` field is honored as a fallback; the human
+/// observation sentence (the normal case) yields no classification.
+fn persisted_observation_classification(item: &Evidence) -> Option<&str> {
+    if let Some(value) = item
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("classification"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(value);
+    }
+    match item.observation.as_str() {
+        OBSERVED_EXECUTION_CLASSIFICATION | ATTEMPTED_NOT_EXECUTED_CLASSIFICATION => {
+            Some(item.observation.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// Maps a persisted observation classification to its observation basis label.
+/// Any unrecognized value yields `None`: the entry is skipped, never guessed.
+fn observation_basis(classification: &str) -> Option<&'static str> {
+    match classification {
+        OBSERVED_EXECUTION_CLASSIFICATION => Some("OBSERVED_EXECUTION"),
+        ATTEMPTED_NOT_EXECUTED_CLASSIFICATION => Some("ATTEMPTED_NOT_EXECUTED"),
+        _ => None,
+    }
+}
+
+/// Derive the deterministic observation basis from a Finding's already-loaded
+/// linked evidence, preserving the finding's persisted evidence order
+/// (SPRINT-041 §1.1).
+///
+/// Only `DIRECT` `opencode_runtime_observer` evidence with a recognized
+/// persisted observation classification produces an entry. Basis, freshness,
+/// relationship key, and evidence id all come from the persisted evidence; no
+/// value is recomputed from scan time or inferred.
+fn observed_execution_views(items: &[Evidence]) -> Result<Vec<ObservedExecutionView>, PicoError> {
+    let mut views = Vec::new();
+    for item in items {
+        if item.class != EvidenceClass::Direct || item.source_type != RUNTIME_OBSERVER_SOURCE_TYPE {
+            continue;
+        }
+        let Some(classification) = persisted_observation_classification(item) else {
+            continue;
+        };
+        let Some(basis) = observation_basis(classification) else {
+            continue;
+        };
+        views.push(ObservedExecutionView {
+            relationship_key: bounded_string("evidence subject", &item.subject)?,
+            basis: bounded_string("observation basis", basis)?,
+            freshness: bounded_string(
+                "evidence freshness",
+                item.freshness.as_deref().unwrap_or("UNKNOWN"),
+            )?,
+            evidence_id: bounded_string("evidence id", &item.id)?,
+        });
+    }
+    Ok(views)
 }
 
 fn historical_graph(conn: &Connection, record: &FindingRecord) -> Result<SecurityGraph, PicoError> {
@@ -1799,6 +1910,7 @@ fn compose_detail(conn: &Connection, finding_id: &str) -> Result<FindingDetail, 
         reasons,
         paths: explained,
         evidence: evidence.views,
+        observed_execution: evidence.observed_execution,
         boundary_summary: BOUNDARY_SUMMARY.to_string(),
         uncertainties: uncertainty_statements(),
         remediations,
@@ -1864,4 +1976,208 @@ fn enforce_dto_budget<T: Serialize>(value: &T) -> Result<(), PicoError> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::Sensitivity;
+
+    const GOLDEN_KEY: &str = "agent:opencode|can_execute|shell:bash";
+
+    /// A runtime-observer evidence item with a controlled id and persisted
+    /// fields. `classification` is stored where SPRINT-040 persists it
+    /// (`metadata.classification`); `observation` carries the human sentence
+    /// unless `classification` is `None`, in which case it is used as the
+    /// classification fallback probe.
+    fn runtime_item(
+        class: EvidenceClass,
+        source_type: &str,
+        subject: &str,
+        classification: Option<&str>,
+        observation: &str,
+        freshness: Option<&str>,
+        id: &str,
+    ) -> Evidence {
+        let mut item = Evidence::new(
+            "scan_1",
+            class,
+            source_type,
+            "user:opencode_runtime_store",
+            subject,
+            observation,
+            Sensitivity::Internal,
+        )
+        .unwrap();
+        item.id = id.to_string();
+        item.freshness = freshness.map(str::to_string);
+        item.metadata = classification.map(|value| serde_json::json!({ "classification": value }));
+        item
+    }
+
+    #[test]
+    fn direct_runtime_observed_execution_maps_to_observed_execution() {
+        let item = runtime_item(
+            EvidenceClass::Direct,
+            RUNTIME_OBSERVER_SOURCE_TYPE,
+            GOLDEN_KEY,
+            Some(OBSERVED_EXECUTION_CLASSIFICATION),
+            "OpenCode agent invoked Bash in this workspace (status: completed)",
+            Some("FRESH"),
+            "ev_runtime",
+        );
+
+        let views = observed_execution_views(&[item]).unwrap();
+        assert_eq!(
+            views,
+            vec![ObservedExecutionView {
+                relationship_key: GOLDEN_KEY.to_string(),
+                basis: "OBSERVED_EXECUTION".to_string(),
+                freshness: "FRESH".to_string(),
+                evidence_id: "ev_runtime".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn direct_runtime_attempted_maps_to_attempted_not_executed() {
+        let item = runtime_item(
+            EvidenceClass::Direct,
+            RUNTIME_OBSERVER_SOURCE_TYPE,
+            GOLDEN_KEY,
+            Some(ATTEMPTED_NOT_EXECUTED_CLASSIFICATION),
+            "OpenCode agent attempted Bash but no execution was observed (status: pending)",
+            Some("AGING"),
+            "ev_attempt",
+        );
+
+        let views = observed_execution_views(&[item]).unwrap();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].basis, "ATTEMPTED_NOT_EXECUTED");
+        assert_eq!(views[0].freshness, "AGING");
+    }
+
+    #[test]
+    fn unknown_observation_value_is_skipped_not_guessed() {
+        let item = runtime_item(
+            EvidenceClass::Direct,
+            RUNTIME_OBSERVER_SOURCE_TYPE,
+            GOLDEN_KEY,
+            Some("maybe_executed"),
+            "unrecognized runtime observation",
+            Some("FRESH"),
+            "ev_unknown",
+        );
+        assert!(observed_execution_views(&[item]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn non_direct_runtime_evidence_is_skipped() {
+        for class in [
+            EvidenceClass::Declared,
+            EvidenceClass::Derived,
+            EvidenceClass::Inferred,
+        ] {
+            let item = runtime_item(
+                class,
+                RUNTIME_OBSERVER_SOURCE_TYPE,
+                GOLDEN_KEY,
+                Some(OBSERVED_EXECUTION_CLASSIFICATION),
+                "derived observation",
+                Some("FRESH"),
+                "ev_non_direct",
+            );
+            assert!(
+                observed_execution_views(&[item]).unwrap().is_empty(),
+                "only DIRECT evidence may produce an observation basis"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_source_type_is_skipped() {
+        for source_type in ["opencode_config", "opencode_effective_permission", "github"] {
+            let item = runtime_item(
+                EvidenceClass::Direct,
+                source_type,
+                GOLDEN_KEY,
+                Some(OBSERVED_EXECUTION_CLASSIFICATION),
+                "direct but not runtime-observed",
+                Some("FRESH"),
+                "ev_other_source",
+            );
+            assert!(observed_execution_views(&[item]).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn no_runtime_evidence_yields_empty() {
+        let config = runtime_item(
+            EvidenceClass::Derived,
+            "opencode_effective_permission",
+            GOLDEN_KEY,
+            None,
+            "effective Bash permission: allow; scope: workspace; runtime mode: auto",
+            Some("FRESH"),
+            "ev_config",
+        );
+        assert!(observed_execution_views(&[config]).unwrap().is_empty());
+        assert!(observed_execution_views(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn freshness_falls_back_to_unknown_and_observation_fallback_is_honored() {
+        // No persisted freshness => UNKNOWN, matching evidence_view.
+        let mut item = runtime_item(
+            EvidenceClass::Direct,
+            RUNTIME_OBSERVER_SOURCE_TYPE,
+            GOLDEN_KEY,
+            Some(OBSERVED_EXECUTION_CLASSIFICATION),
+            "invoked Bash",
+            None,
+            "ev_no_freshness",
+        );
+        let views = observed_execution_views(&[item.clone()]).unwrap();
+        assert_eq!(views[0].freshness, "UNKNOWN");
+
+        // A classification persisted directly in `observation` (no metadata) is
+        // honored rather than dropped.
+        item.metadata = None;
+        item.observation = OBSERVED_EXECUTION_CLASSIFICATION.to_string();
+        item.freshness = Some("STALE".to_string());
+        let views = observed_execution_views(&[item]).unwrap();
+        assert_eq!(views[0].basis, "OBSERVED_EXECUTION");
+        assert_eq!(views[0].freshness, "STALE");
+    }
+
+    #[test]
+    fn entries_preserve_the_finding_evidence_order() {
+        let first = runtime_item(
+            EvidenceClass::Direct,
+            RUNTIME_OBSERVER_SOURCE_TYPE,
+            GOLDEN_KEY,
+            Some(OBSERVED_EXECUTION_CLASSIFICATION),
+            "invoked Bash",
+            Some("FRESH"),
+            "ev_1",
+        );
+        let second = runtime_item(
+            EvidenceClass::Direct,
+            RUNTIME_OBSERVER_SOURCE_TYPE,
+            "agent:claude|can_execute|shell:bash",
+            Some(ATTEMPTED_NOT_EXECUTED_CLASSIFICATION),
+            "attempted Bash",
+            Some("FRESH"),
+            "ev_2",
+        );
+
+        let views = observed_execution_views(&[first, second]).unwrap();
+        assert_eq!(
+            views
+                .iter()
+                .map(|v| v.evidence_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ev_1", "ev_2"]
+        );
+    }
 }

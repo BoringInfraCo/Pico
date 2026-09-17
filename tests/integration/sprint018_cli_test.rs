@@ -244,6 +244,7 @@ fn cloudflare_global_key_marks_unverified_in_cli() {
         remediation_note: "note".to_string(),
         created_at: "2025-01-01T00:00:00Z".to_string(),
         github_credentials: vec![],
+        observed_execution: vec![],
     };
     let rendered = render_finding_detail(&detail);
     assert!(
@@ -431,6 +432,7 @@ fn secret_sweep_never_leaks_cloudflare_token_across_postures() {
         remediation_note: "note".to_string(),
         created_at: "2025-01-01T00:00:00Z".to_string(),
         github_credentials: vec![],
+        observed_execution: vec![],
     };
     let api_key_rendered = render_finding_detail(&detail);
     assert!(

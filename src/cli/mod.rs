@@ -330,6 +330,40 @@ fn run_init() -> Result<(), PicoError> {
     Ok(())
 }
 
+/// The middle segment of a canonical `a|b|c` relationship key when it has
+/// exactly that shape; otherwise the full key. Never fabricates a segment
+/// (SPRINT-041 §1.3).
+fn observed_execution_kind(relationship_key: &str) -> String {
+    let segments: Vec<&str> = relationship_key.split('|').collect();
+    match segments.as_slice() {
+        [_, middle, _] => (*middle).to_string(),
+        _ => relationship_key.to_string(),
+    }
+}
+
+/// Renders the single SPRINT-041 §1.3 scan-summary line, or an empty string
+/// when the opt-in runtime step recorded no observation. The label follows the
+/// persisted basis: an observed execution or an attempt without execution. Both
+/// the kind and the freshness are terminal-safe.
+fn render_observed_execution(
+    observation: Option<&crate::application::findings::ObservedExecutionView>,
+) -> String {
+    let Some(observation) = observation else {
+        return String::new();
+    };
+    let kind = observed_execution_kind(&observation.relationship_key);
+    let label = if observation.basis == "ATTEMPTED_NOT_EXECUTED" {
+        "Attempted (not executed)"
+    } else {
+        "Observed execution"
+    };
+    format!(
+        "{label}: {} via runtime evidence ({})\n",
+        crate::shared::terminal_safe(&kind),
+        crate::shared::terminal_safe(&observation.freshness),
+    )
+}
+
 /// Renders `pico scan`. Default scans keep the existing `ScanService::run`
 /// path untouched; `--runtime` is an explicit opt-in that delegates to the
 /// frozen `ScanService::run_with_runtime`, resolving HOME the same way
@@ -430,6 +464,10 @@ fn run_scan(runtime: bool) -> Result<(), PicoError> {
         println!();
         print!("{}", diagnostics);
     }
+    print!(
+        "{}",
+        render_observed_execution(result.runtime_observation.as_ref())
+    );
     print!("{}", navigation_hint(result.findings.as_ref()));
     Ok(())
 }
@@ -654,5 +692,49 @@ mod tests {
     fn empty_finding_id_is_a_usage_error() {
         let error = super::run_finding("").unwrap_err();
         assert!(matches!(error, crate::shared::PicoError::Usage(_)));
+    }
+
+    #[test]
+    fn observed_execution_kind_uses_middle_segment_or_full_key() {
+        assert_eq!(
+            super::observed_execution_kind("agent:opencode|can_execute|shell:bash"),
+            "can_execute"
+        );
+        assert_eq!(
+            super::observed_execution_kind("agent:opencode|shell:bash"),
+            "agent:opencode|shell:bash"
+        );
+        assert_eq!(super::observed_execution_kind("a|b|c|d"), "a|b|c|d");
+        assert_eq!(
+            super::observed_execution_kind("no-separator"),
+            "no-separator"
+        );
+    }
+
+    #[test]
+    fn render_observed_execution_matches_frozen_wording() {
+        use crate::application::findings::ObservedExecutionView;
+        let view = ObservedExecutionView {
+            relationship_key: "agent:opencode|can_execute|shell:bash".to_string(),
+            basis: "OBSERVED_EXECUTION".to_string(),
+            freshness: "FRESH".to_string(),
+            evidence_id: "ev-runtime-1".to_string(),
+        };
+        assert_eq!(
+            super::render_observed_execution(Some(&view)),
+            "Observed execution: can_execute via runtime evidence (FRESH)\n"
+        );
+        assert_eq!(super::render_observed_execution(None), "");
+
+        // An attempt without execution keeps the identical shape but must never
+        // be labelled as an execution.
+        let attempted = ObservedExecutionView {
+            basis: "ATTEMPTED_NOT_EXECUTED".to_string(),
+            ..view
+        };
+        assert_eq!(
+            super::render_observed_execution(Some(&attempted)),
+            "Attempted (not executed): can_execute via runtime evidence (FRESH)\n"
+        );
     }
 }

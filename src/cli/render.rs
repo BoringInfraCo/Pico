@@ -8,7 +8,7 @@ use crate::application::diff::{FindingLifecycleChange, FindingRatingDelta};
 use crate::application::{
     findings_list_guidance, findings_list_state, DiffFinding, FindingDetail, FindingDiff,
     FindingDiffResult, FindingList, FindingSummary, FindingsListState, GraphSubject,
-    GraphSubjectDiff, ScanHistory, ScanResult,
+    GraphSubjectDiff, ObservedExecutionView, ScanHistory, ScanResult,
 };
 use crate::application::{
     ComparedVia, ComparisonContractVersions, DiffNotComparable, DiffNotComparableReason, Freshness,
@@ -380,6 +380,8 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
     out.push_str(&terminal_safe(&detail.weakest_evidence));
     out.push('\n');
 
+    out.push_str(&render_observation_basis(&detail.observed_execution));
+
     out.push_str("Evidence\n");
     if detail.evidence.is_empty() {
         out.push_str("No same-scan Evidence recorded.\n");
@@ -516,6 +518,48 @@ pub fn render_finding_detail(detail: &FindingDetail) -> String {
     out.push_str(&terminal_safe(&detail.scope_note));
     out.push('\n');
     out
+}
+
+/// Renders the `Observation basis` section for a Finding (SPRINT-041 §1.3).
+///
+/// When the Finding's linked runtime evidence established observed execution,
+/// the section names it plainly and cites the evidence id. It is omitted
+/// entirely (empty string) when nothing was observed, so a Finding without
+/// runtime evidence is given no noise and no false observation claim.
+fn render_observation_basis(entries: &[ObservedExecutionView]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str("Observation basis\n");
+    for entry in entries {
+        let label = match entry.basis.as_str() {
+            "ATTEMPTED_NOT_EXECUTED" => "Attempted (not executed)",
+            _ => "Observed execution",
+        };
+        out.push_str(&format!(
+            "  {}: {} via runtime evidence ({})\n",
+            label,
+            terminal_safe(relationship_kind(&entry.relationship_key)),
+            terminal_safe(&entry.freshness),
+        ));
+        out.push_str(&format!(
+            "  Evidence: {}\n",
+            terminal_safe(&entry.evidence_id)
+        ));
+    }
+    out
+}
+
+/// Extracts the capability segment of a canonical relationship key of the exact
+/// shape `a|b|c` (SPRINT-041 §1.3). Any other shape returns the full key
+/// unchanged; a segment is never fabricated.
+fn relationship_kind(relationship_key: &str) -> &str {
+    let parts: Vec<&str> = relationship_key.split('|').collect();
+    match parts.as_slice() {
+        [_, middle, _] if !middle.is_empty() => middle,
+        _ => relationship_key,
+    }
 }
 
 /// Renders the structured scan diagnostics block for the `pico scan` summary.
@@ -1343,5 +1387,149 @@ fn display_name(resource: &crate::application::ResourceView) -> String {
         resource.canonical_key.clone()
     } else {
         resource.name.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observed_view(
+        relationship_key: &str,
+        basis: &str,
+        freshness: &str,
+        evidence_id: &str,
+    ) -> ObservedExecutionView {
+        ObservedExecutionView {
+            relationship_key: relationship_key.to_string(),
+            basis: basis.to_string(),
+            freshness: freshness.to_string(),
+            evidence_id: evidence_id.to_string(),
+        }
+    }
+
+    fn detail_with(observed: Vec<ObservedExecutionView>) -> FindingDetail {
+        FindingDetail {
+            id: "finding_x".to_string(),
+            fingerprint: "sha256:x".to_string(),
+            attack_path_fingerprints: vec![],
+            finding_version: 1,
+            scan: crate::application::ScanBrief {
+                id: "scan_x".to_string(),
+                status: "COMPLETE".to_string(),
+                completed_at: Some("2025-01-01T00:00:00Z".to_string()),
+            },
+            currentness: crate::application::Currentness::LatestComplete,
+            freshness_warning: None,
+            finding_class: "UNTRUSTED_TO_PRODUCTION".to_string(),
+            status: "OPEN".to_string(),
+            title: "Synthetic".to_string(),
+            summary: "Synthetic".to_string(),
+            severity: "HIGH".to_string(),
+            confidence: "HIGH".to_string(),
+            scope_note: "note".to_string(),
+            severity_basis: "basis".to_string(),
+            confidence_basis: "basis".to_string(),
+            weakest_evidence: "none".to_string(),
+            reasons: vec![],
+            paths: vec![],
+            evidence: vec![],
+            observed_execution: observed,
+            boundary_summary: "none".to_string(),
+            uncertainties: vec![],
+            remediations: vec![],
+            remediation_note: "note".to_string(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            github_credentials: vec![],
+        }
+    }
+
+    #[test]
+    fn observed_execution_renders_the_frozen_wording() {
+        let section = render_observation_basis(&[observed_view(
+            "agent:opencode|can_execute|shell:bash",
+            "OBSERVED_EXECUTION",
+            "FRESH",
+            "ev_runtime",
+        )]);
+        assert_eq!(
+            section,
+            "Observation basis\n  Observed execution: can_execute via runtime evidence (FRESH)\n  Evidence: ev_runtime\n"
+        );
+    }
+
+    #[test]
+    fn attempted_not_executed_renders_the_frozen_wording() {
+        let section = render_observation_basis(&[observed_view(
+            "agent:opencode|can_execute|shell:bash",
+            "ATTEMPTED_NOT_EXECUTED",
+            "AGING",
+            "ev_attempt",
+        )]);
+        assert_eq!(
+            section,
+            "Observation basis\n  Attempted (not executed): can_execute via runtime evidence (AGING)\n  Evidence: ev_attempt\n"
+        );
+    }
+
+    #[test]
+    fn empty_observation_basis_renders_nothing() {
+        assert_eq!(render_observation_basis(&[]), "");
+    }
+
+    #[test]
+    fn observed_execution_is_always_serialized_even_when_empty() {
+        let value = serde_json::to_value(detail_with(vec![])).unwrap();
+        assert_eq!(
+            value["observed_execution"],
+            serde_json::json!([]),
+            "the field must always be present, never skipped when empty"
+        );
+    }
+
+    #[test]
+    fn relationship_kind_extracts_only_an_exact_three_segment_middle() {
+        assert_eq!(relationship_kind("a|b|c"), "b");
+        assert_eq!(
+            relationship_kind("agent:opencode|can_execute|shell:bash"),
+            "can_execute"
+        );
+        // Any other shape prints the full key; no segment is fabricated.
+        assert_eq!(relationship_kind("a|b"), "a|b");
+        assert_eq!(relationship_kind("a|b|c|d"), "a|b|c|d");
+        assert_eq!(relationship_kind("can_execute"), "can_execute");
+        assert_eq!(relationship_kind("a||c"), "a||c");
+    }
+
+    #[test]
+    fn finding_without_runtime_evidence_omits_the_section() {
+        let rendered = render_finding_detail(&detail_with(vec![]));
+        assert!(
+            !rendered.contains("Observation basis"),
+            "a finding with no runtime evidence must not render an observation claim:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn finding_with_runtime_evidence_renders_the_section_before_evidence() {
+        let rendered = render_finding_detail(&detail_with(vec![observed_view(
+            "agent:opencode|can_execute|shell:bash",
+            "OBSERVED_EXECUTION",
+            "FRESH",
+            "ev_runtime",
+        )]));
+        assert!(
+            rendered.contains(
+                "Observation basis\n  Observed execution: can_execute via runtime evidence (FRESH)\n  Evidence: ev_runtime\n"
+            ),
+            "expected the observation basis block:\n{rendered}"
+        );
+        let basis = rendered.find("Observation basis").unwrap();
+        let weakest = rendered.find("Weakest evidence").unwrap();
+        let evidence = rendered.find("Evidence\n").unwrap();
+        assert!(
+            weakest < basis && basis < evidence,
+            "the section must sit after Weakest evidence and before Evidence"
+        );
     }
 }

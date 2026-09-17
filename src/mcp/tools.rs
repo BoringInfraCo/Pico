@@ -488,6 +488,10 @@ struct SafeDetail {
     /// Per-GitHub-credential authority facts for the finding's originating scan
     /// (SPRINT-021 R7), one entry per observed GitHub credential.
     github_credentials: Vec<SafeGitHubCredentialView>,
+    /// Observed runtime execution basis (SPRINT-041 §1.5). Always present; the
+    /// array is empty when nothing was observed. Mirrors the application
+    /// `FindingDetail.observed_execution` field one-for-one.
+    observed_execution: Vec<SafeObservedExecution>,
 }
 
 impl SafeDetail {
@@ -526,6 +530,11 @@ impl SafeDetail {
                 .github_credentials
                 .iter()
                 .map(SafeGitHubCredentialView::new)
+                .collect(),
+            observed_execution: detail
+                .observed_execution
+                .iter()
+                .map(SafeObservedExecution::new)
                 .collect(),
         }
     }
@@ -791,6 +800,29 @@ impl SafeEvidenceView {
     }
 }
 
+/// Observed runtime execution basis mirrored from the application
+/// `ObservedExecutionView` (SPRINT-041 §1.5). All four strings pass through
+/// `terminal_safe` before serialization so the MCP payload stays an exact
+/// field-for-field projection of the application DTO.
+#[derive(Serialize)]
+struct SafeObservedExecution {
+    relationship_key: String,
+    basis: String,
+    freshness: String,
+    evidence_id: String,
+}
+
+impl SafeObservedExecution {
+    fn new(observed: &crate::application::findings::ObservedExecutionView) -> Self {
+        SafeObservedExecution {
+            relationship_key: terminal_safe(&observed.relationship_key),
+            basis: terminal_safe(&observed.basis),
+            freshness: terminal_safe(&observed.freshness),
+            evidence_id: terminal_safe(&observed.evidence_id),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct SafeRemediationView {
     position: u32,
@@ -838,7 +870,9 @@ fn safe_strings(values: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SafeExplainedPath, SafeGitHubCredentialView, SafeScanDiagnostics};
+    use super::{
+        SafeExplainedPath, SafeGitHubCredentialView, SafeObservedExecution, SafeScanDiagnostics,
+    };
     use crate::application::ExplainedPath;
     use crate::findings::diagnostics::{
         ConfidenceNote, ProviderDiagnostic, RuntimeDiagnostic, ScanDiagnostics, SuppressedReason,
@@ -1070,6 +1104,64 @@ mod tests {
             let value = serde_json::to_value(&safe).expect("serializable");
             assert_eq!(value, expected);
         }
+    }
+
+    /// Asserts the MCP `SafeObservedExecution` mirror serializes the exact
+    /// application-DTO field names and values (SPRINT-041 §1.5), so the
+    /// `get_finding` payload's `observed_execution` array is field-for-field
+    /// equal to the application DTO and the whole-payload golden equality holds.
+    #[test]
+    fn safe_observed_execution_serializes_with_exact_dto_fields() {
+        use crate::application::findings::ObservedExecutionView;
+        let observed = ObservedExecutionView {
+            relationship_key: "agent:opencode|can_execute|shell:bash".to_string(),
+            basis: "OBSERVED_EXECUTION".to_string(),
+            freshness: "FRESH".to_string(),
+            evidence_id: "ev-runtime-1".to_string(),
+        };
+        let safe = SafeObservedExecution::new(&observed);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        let dto = serde_json::to_value(&observed).expect("serializable");
+        assert_eq!(
+            value, dto,
+            "MCP observed-execution projection must serialize identically to the application DTO"
+        );
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "relationship_key": "agent:opencode|can_execute|shell:bash",
+                "basis": "OBSERVED_EXECUTION",
+                "freshness": "FRESH",
+                "evidence_id": "ev-runtime-1",
+            })
+        );
+    }
+
+    /// Asserts the MCP `SafeObservedExecution` mirror is terminal-safe: control
+    /// bytes in any of the mirrored strings are escaped, and the serialized
+    /// mirror carries no raw control bytes.
+    #[test]
+    fn safe_observed_execution_sanitizes_strings() {
+        use crate::application::findings::ObservedExecutionView;
+        let observed = ObservedExecutionView {
+            relationship_key: "agent:opencode\u{1b}[31m|can_execute|shell:bash".to_string(),
+            basis: "ATTEMPTED_NOT_EXECUTED".to_string(),
+            freshness: "FRESH\nsecond".to_string(),
+            evidence_id: "ev\u{1b}[0m".to_string(),
+        };
+        let safe = SafeObservedExecution::new(&observed);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        let text = serde_json::to_string(&value).expect("serializable");
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\n'),
+            "serialized mirror must contain no raw control bytes: {text}"
+        );
+        assert!(value["relationship_key"]
+            .as_str()
+            .unwrap()
+            .contains("\\x1B"));
+        assert!(value["freshness"].as_str().unwrap().contains("\\x0A"));
+        assert_eq!(value["basis"], serde_json::json!("ATTEMPTED_NOT_EXECUTED"));
     }
 
     /// Asserts the MCP mirror serializes the effective Bash capability and its

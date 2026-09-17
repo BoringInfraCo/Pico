@@ -313,5 +313,6 @@ fn minimal_detail_with_github_influence() -> FindingDetail {
         remediation_note: "r".to_string(),
         created_at: "2025-01-01T00:00:00Z".to_string(),
         github_credentials: vec![],
+        observed_execution: vec![],
     }
 }

@@ -32,8 +32,8 @@ pub use diff::{
 pub use findings::{
     finding_navigation_ids, findings_list_guidance, findings_list_state, BoundaryView, Currentness,
     EvidenceView, ExplainedPath, FindingDetail, FindingList, FindingQueryService, FindingSummary,
-    FindingsListState, Freshness, GitHubCredentialView, PathStep, ReasonView, RemediationView,
-    ResourceView, ScanBrief,
+    FindingsListState, Freshness, GitHubCredentialView, ObservedExecutionView, PathStep,
+    ReasonView, RemediationView, ResourceView, ScanBrief,
 };
 pub use graph_diff::{GraphDelta, GraphDiff, GraphSubject, GraphSubjectDiff};
 pub use history::{HistoryService, ScanHistory, ScanSummary};

@@ -92,3 +92,6 @@ mod sprint039_cli_test;
 
 #[path = "integration/sprint040_cli_test.rs"]
 mod sprint040_cli_test;
+
+#[path = "integration/sprint041_cli_test.rs"]
+mod sprint041_cli_test;

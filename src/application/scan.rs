@@ -6,6 +6,7 @@ use crate::analysis::{
     analyze_with_scan_status, AnalysisLimits, AnalysisResult, AnalysisStatus, CandidateDisposition,
 };
 use crate::application::compare_contract::COMPARISON_CONTRACT_VERSION;
+use crate::application::findings::ObservedExecutionView;
 use crate::discovery;
 use crate::discovery::coverage::{CoverageEntry, CoverageState};
 use crate::discovery::runtime::{
@@ -94,6 +95,11 @@ pub struct ScanResult {
     /// state, and unknown-reason codes). Empty when no GitHub credential was
     /// observed so the golden path renders nothing.
     pub github_credentials: Vec<crate::application::GitHubCredentialView>,
+    /// Populated only when the opt-in runtime step observed execution and the
+    /// golden-path `can_execute` edge was actually promoted (SPRINT-041 §1.4).
+    /// Every value is read from the same persisted runtime evidence the
+    /// promotion used; default and non-promoting scans keep it `None`.
+    pub runtime_observation: Option<ObservedExecutionView>,
 }
 
 /// Runs bounded local discovery in an initialized workspace.
@@ -369,6 +375,34 @@ fn runtime_observation(kind: &str, status: &str) -> String {
             "OpenCode agent attempted Bash but no execution was observed (status: {status})"
         ),
     }
+}
+
+/// Deterministic SPRINT-041 §1.4 view of the runtime observation that promoted
+/// the golden-path edge.
+///
+/// Every value is read from the persisted evidence: the canonical relationship
+/// key (the evidence subject), the evidence's own persisted `classification`,
+/// its persisted freshness, and its id. `None` is returned when any required
+/// persisted value is absent or the classification is not one of the two
+/// runtime bases, so a basis is never invented.
+fn observed_execution_view(evidence: &Evidence) -> Option<ObservedExecutionView> {
+    let classification = evidence
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("classification"))
+        .and_then(serde_json::Value::as_str)?;
+    let basis = match classification {
+        "observed_execution" => "OBSERVED_EXECUTION",
+        "attempted_not_executed" => "ATTEMPTED_NOT_EXECUTED",
+        _ => return None,
+    };
+    let freshness = evidence.freshness.clone()?;
+    Some(ObservedExecutionView {
+        relationship_key: evidence.subject.clone(),
+        basis: basis.to_string(),
+        freshness,
+        evidence_id: evidence.id.clone(),
+    })
 }
 
 impl ScanService {
@@ -796,6 +830,25 @@ impl ScanService {
                 }
             }
         }
+
+        // SPRINT-041 §1.4: surface the runtime observation from the same
+        // persisted evidence the scan recorded. A promoted observation is
+        // "observed execution". An unpromoted observation surfaces ONLY when the
+        // agent attempted Bash without an execution being observed; a stale
+        // observation of a real execution stays silent here so an old fact is
+        // never read as a current claim (SPRINT-040 §1.8). A `None` keeps the
+        // default scan byte-for-byte unchanged.
+        let runtime_observation = {
+            let view = runtime
+                .as_ref()
+                .and_then(|plan| plan.evidence.as_ref())
+                .and_then(observed_execution_view);
+            if runtime_relationship.is_some() {
+                view
+            } else {
+                view.filter(|view| view.basis == "ATTEMPTED_NOT_EXECUTED")
+            }
+        };
 
         let mut github_mcp_observed = false;
         let mut influence_strength = None;
@@ -1521,6 +1574,7 @@ impl ScanService {
             unresolved_candidate_count: analysis.unresolved_candidate_count as u64,
             diagnostics_detail: Some(diagnostics_detail),
             github_credentials,
+            runtime_observation,
         })
     }
 }
@@ -2864,6 +2918,14 @@ mod runtime_tests {
         );
         assert!(!linked_evidence_ids(&result).contains(&evidence.id));
         assert!(evidence.observation.contains("attempted"));
+        // SPRINT-041 §1.4: an attempt without execution is surfaced as such at
+        // the scan level (it never promotes the edge and never claims execution).
+        let observation = result
+            .runtime_observation
+            .expect("an attempt is surfaced honestly");
+        assert_eq!(observation.basis, "ATTEMPTED_NOT_EXECUTED");
+        assert_eq!(observation.relationship_key, GOLDEN_BASH_RELATIONSHIP_KEY);
+        assert_eq!(observation.evidence_id, evidence.id);
     }
 
     #[test]
@@ -2886,6 +2948,9 @@ mod runtime_tests {
         assert_eq!(evidence.freshness.as_deref(), Some("STALE"));
         assert_eq!(evidence.captured_at.timestamp_millis(), newest);
         assert!(!linked_evidence_ids(&result).contains(&evidence.id));
+        // SPRINT-041 §1.4: a stale observation of a real execution is not
+        // surfaced as a current claim.
+        assert!(result.runtime_observation.is_none());
     }
 
     #[test]
