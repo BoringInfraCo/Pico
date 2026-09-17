@@ -104,3 +104,6 @@ mod sprint042_mcp_test;
 
 #[path = "integration/sprint042_cli_test.rs"]
 mod sprint042_cli_test;
+
+#[path = "integration/sprint044_measurements.rs"]
+mod sprint044_measurements;

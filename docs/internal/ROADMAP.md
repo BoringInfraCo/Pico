@@ -576,6 +576,7 @@ The central claim is:
 - Support a deliberately small trigger set such as relevant configuration changes, agent runtime-mode changes, MCP connection/capability changes, credential exposure changes, and supported execution/approval events.
 - Correlate runtime observations with the existing security graph and evidence model.
 - Distinguish configured capability, available capability, attempted use, approved use, denied use, and completed consequential action where safely observable.
+  *Adjudicated 2026-09-16 (§24 item 4, recorded in SPRINT-044 §2.4): Pico implements four of these — configured capability, attempted use, approved use (`NOT_AVAILABLE`), and completed consequential action. "Available capability" is represented by configured/effective capability resolution and the observability survey's `Observable` level rather than a separate label; "denied use" is folded into `ApprovedUse → NOT_AVAILABLE` because denial is not observable from dependable local state (S039). This is an explicit canon decision, not silent drift.*
 - Preserve event provenance, time ordering, freshness, and scan/observation boundaries.
 - Provide local status and change notification surfaces appropriate for individual developers and small teams.
 - Define resource, CPU, I/O, privacy, and retention budgets for continuous operation.
@@ -1027,7 +1028,7 @@ v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
 v0.4  Security memory              ADVANCE with open caveats (S024–S036 DONE; independent v0.4 + carried v0.3 gates carried, §23)
-v0.5  Continuous observation       IN PROGRESS / EXTEND (§24: S037–S043 delivered; measurement, downtime visibility, observation-data lifecycle, and dogfood outstanding)
+v0.5  Continuous observation       EXTEND (§24 decision; S037–S043 delivered; S044 closed measurement/visibility/lifecycle/canon items, §25. Open: real dogfood + comprehension)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
@@ -1533,4 +1534,42 @@ Required closeout before v0.5 may advance again:
 Until then, v0.5 remains IN PROGRESS and no v0.6 scope is authorized. Slices
 S037–S043 are delivered and trustworthy within their stated limits; the phase
 is not adjudicated as complete.
+```
+
+---
+
+# 25. v0.5 Closeout Progress (S044) and Remaining Gate
+
+Recorded 2026-09-16 after S044. This is a progress note, **not** a new
+advancement decision: the §24 decision remains `EXTEND`.
+
+```text
+Closed by S044 (implementable without a human):
+- Item 1 MEASURE: recorded values, not assertions — idle observation cost
+  (21.3 µs median over 11 paths), detection latency (620.6 ms median at a 1 s
+  interval; poll-bound), runtime ingest (138.8 ms vs a 3000 ms cap), log trim
+  (5.8 ms median), plus declared-vs-observed budget adherence.
+  Evidence: docs/internal/dogfood/evidence-v0.5-measurements.md.
+- Item 2 VISIBILITY: `pico status` now distinguishes `watching` /
+  `NOT OBSERVING` / `no watch record` from a rate-limited continuity record
+  (no pid, no process detection). Silence is no longer indistinguishable from
+  safety.
+- Item 3 LIFECYCLE: `.pico/watch.jsonl` is bounded — the observer trims itself
+  at the cap (amortized) and `pico prune` trims and reports it; deletion is
+  documented and safe because absence is never treated as evidence of safety.
+- Item 4 CANON DECISION: §9's distinctions wording amended (four distinctions;
+  rationale recorded in SPRINT-044 §2.4).
+
+Still open (human-required):
+- Item 5 DOGFOOD: no real (non-synthetic) run yet shows a runtime observation
+  changing a security decision or remediation priority. All S044 measurements
+  are synthetic-store figures.
+- Item 6 COMPREHENSION: no v0.5 protocol exists; the carried v0.3 and v0.4
+  independent gates remain NOT RUN.
+
+Partial exits still not fully met: §9 #1 accuracy (latency now measured,
+accuracy still fixture-level only) and #4 overhead (runtime/idle/trim budgets now
+measured; CPU, I/O, memory, and sustained-operation figures remain unmeasured).
+
+Decision unchanged: EXTEND. v0.6 is not authorized.
 ```

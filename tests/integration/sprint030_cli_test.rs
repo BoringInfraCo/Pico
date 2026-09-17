@@ -574,7 +574,10 @@ fn below_window_prune_is_a_no_op() {
          Policy: keep 10 COMPLETE scans\n\
          Nothing pruned: history is within the window.\n\
          Retained: 3 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING\n\
-         Health: ok\n"
+         Health: ok\n\
+         Observation log: 0 lines, 0 removed (bounded at 1000 events)\n\
+         The observation log is bounded; deleting .pico/watch.jsonl is safe.\n\
+         Pico never treats a missing log as evidence of safety.\n"
     );
 
     assert_eq!(
@@ -644,7 +647,10 @@ fn window_exceeded_prunes_oldest_units_idempotently() {
          \x20\x20scan_02 (COMPLETE): 1 observations, 1 evidence, 1 findings, 1 attack paths, 1 analyses, 1 diagnostics, 1 relationship evidence links\n\
          Totals: 2 observations, 2 evidence, 2 findings, 2 attack paths, 2 analyses, 2 diagnostics, 2 relationship evidence links\n\
          Retained: 10 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING\n\
-         Health after prune: ok\n"
+         Health after prune: ok\n\
+         Observation log: 0 lines, 0 removed (bounded at 1000 events)\n\
+         The observation log is bounded; deleting .pico/watch.jsonl is safe.\n\
+         Pico never treats a missing log as evidence of safety.\n"
     );
 
     // Re-running below the new window is an explicit no-op success.
@@ -658,7 +664,10 @@ fn window_exceeded_prunes_oldest_units_idempotently() {
          Policy: keep 10 COMPLETE scans\n\
          Nothing pruned: history is within the window.\n\
          Retained: 10 COMPLETE, 0 PARTIAL, 0 FAILED, 0 RUNNING\n\
-         Health: ok\n"
+         Health: ok\n\
+         Observation log: 0 lines, 0 removed (bounded at 1000 events)\n\
+         The observation log is bounded; deleting .pico/watch.jsonl is safe.\n\
+         Pico never treats a missing log as evidence of safety.\n"
     );
     assert_eq!(
         content_digest(workspace.path()),

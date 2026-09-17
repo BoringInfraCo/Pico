@@ -5,6 +5,7 @@
 //! passed through `terminal_safe` so untrusted text cannot spoof the layout.
 
 use crate::application::diff::{FindingLifecycleChange, FindingRatingDelta};
+use crate::application::watch_log::{TrimReport, WATCH_LOG_MAX_EVENTS};
 use crate::application::{
     findings_list_guidance, findings_list_state, DiffFinding, FindingDetail, FindingDiff,
     FindingDiffResult, FindingList, FindingSummary, FindingsListState, GraphSubject,
@@ -851,21 +852,36 @@ pub fn render_prune_report(report: &PruneReport) -> String {
         out.push_str("Nothing pruned: history is within the window.\n");
         out.push_str(&retained_state_line(&report.retained));
         out.push_str(&health_line("Health", report.post_health_ok));
-        return out;
+    } else {
+        out.push_str(&format!("Pruned: {} scans\n", report.pruned.len()));
+        for unit in &report.pruned {
+            out.push_str(&format!(
+                "  {} ({}): {}\n",
+                terminal_safe(&unit.scan_id),
+                terminal_safe(&unit.status),
+                unit_counts_line(&unit.counts)
+            ));
+        }
+        out.push_str(&format!("Totals: {}\n", unit_counts_line(&report.totals.0)));
+        out.push_str(&retained_state_line(&report.retained));
+        out.push_str(&health_line("Health after prune", report.post_health_ok));
     }
-    out.push_str(&format!("Pruned: {} scans\n", report.pruned.len()));
-    for unit in &report.pruned {
-        out.push_str(&format!(
-            "  {} ({}): {}\n",
-            terminal_safe(&unit.scan_id),
-            terminal_safe(&unit.status),
-            unit_counts_line(&unit.counts)
-        ));
-    }
-    out.push_str(&format!("Totals: {}\n", unit_counts_line(&report.totals.0)));
-    out.push_str(&retained_state_line(&report.retained));
-    out.push_str(&health_line("Health after prune", report.post_health_ok));
+    out.push_str(&observation_log_block(&report.watch_log));
     out
+}
+
+/// The observation-log lifecycle block (SPRINT-044.md §2.2): the removed line
+/// count plus the documented deletion contract. The log is a bounded sidecar
+/// (`.pico/watch.jsonl`); deleting it is safe because Pico never treats a
+/// missing log as evidence of safety. Deterministic and terminal-safe: plain
+/// integers and frozen copy only.
+fn observation_log_block(trim: &TrimReport) -> String {
+    format!(
+        "Observation log: {} lines, {} removed (bounded at {} events)\n\
+         The observation log is bounded; deleting .pico/watch.jsonl is safe.\n\
+         Pico never treats a missing log as evidence of safety.\n",
+        trim.before, trim.removed, WATCH_LOG_MAX_EVENTS
+    )
 }
 
 /// The seven-count deletion summary shared by the per-scan lines and totals.
@@ -1757,5 +1773,58 @@ mod tests {
             "raw ESC must never render:\n{injected}"
         );
         assert!(injected.contains("\\x1B"));
+    }
+
+    fn prune_report_with(trim: TrimReport) -> PruneReport {
+        PruneReport {
+            keep: 10,
+            pruned: vec![],
+            totals: crate::application::PruneTotals::default(),
+            retained: RetentionCounts::default(),
+            pre_health_ok: true,
+            post_health_ok: true,
+            nothing_pruned: true,
+            watch_log: trim,
+        }
+    }
+
+    #[test]
+    fn prune_report_documents_the_bounded_observation_log() {
+        let out = render_prune_report(&prune_report_with(TrimReport {
+            before: 1200,
+            after: 1000,
+            removed: 200,
+        }));
+        assert!(
+            out.contains("Observation log: 1200 lines, 200 removed (bounded at 1000 events)\n"),
+            "expected the trim counts:\n{out}"
+        );
+        assert!(
+            out.contains("deleting .pico/watch.jsonl is safe"),
+            "expected the deletion guidance:\n{out}"
+        );
+        assert!(
+            out.contains("never treats a missing log as evidence of safety"),
+            "expected the honesty statement:\n{out}"
+        );
+        assert_eq!(
+            out,
+            render_prune_report(&prune_report_with(TrimReport {
+                before: 1200,
+                after: 1000,
+                removed: 200,
+            })),
+            "rendering stays deterministic"
+        );
+    }
+
+    #[test]
+    fn prune_report_renders_absent_log_as_zeroed_and_bounded() {
+        let out = render_prune_report(&prune_report_with(TrimReport::default()));
+        assert!(
+            out.contains("Observation log: 0 lines, 0 removed (bounded at 1000 events)\n"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("deleting .pico/watch.jsonl is safe"));
     }
 }

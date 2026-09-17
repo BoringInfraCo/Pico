@@ -185,6 +185,7 @@ fn render_status_report(report: &crate::application::status::StatusReport) -> St
             );
         }
     }
+    out.push_str(&render_observation(&report.observation));
     out.push_str(&format!(
         "Watch events (retained log tail): {} total, {} URGENT, {} INFO{}\n",
         report.watch_total,
@@ -224,6 +225,25 @@ fn render_status_report(report: &crate::application::status::StatusReport) -> St
     ));
     out.push_str("This is not an all-clear: Pico reports what it observed, not safety.\n");
     out
+}
+
+/// One additive observation-continuity line (SPRINT-044 §2.1). Frozen
+/// wording; an absent or malformed record can only ever render the honest
+/// "no watch record" state, never "watching".
+fn render_observation(observation: &crate::application::status::Observation) -> String {
+    use crate::application::status::ObservationState;
+    use crate::shared::terminal_safe;
+
+    let age = terminal_safe(observation.age.as_deref().unwrap_or("unknown"));
+    match observation.state {
+        ObservationState::Watching => format!("Observation: watching (last check {age})\n"),
+        ObservationState::NotObserving => format!(
+            "Observation: NOT OBSERVING (last check {age}); changes since then may be unobserved\n"
+        ),
+        ObservationState::NoRecord => {
+            "Observation: no watch record in this workspace (observer has not run)\n".to_string()
+        }
+    }
 }
 
 /// Renders `pico runtime` (SPRINT-039.md §2.3). Thin view over the runtime
@@ -736,5 +756,53 @@ mod tests {
             super::render_observed_execution(Some(&attempted)),
             "Attempted (not executed): can_execute via runtime evidence (FRESH)\n"
         );
+    }
+
+    #[test]
+    fn render_status_report_carries_every_line_and_the_observation_verdict() {
+        use crate::application::status::{Observation, ObservationState, StatusReport};
+
+        let mut report = StatusReport {
+            last_complete_scan_id: Some("scan_1".to_string()),
+            last_complete_age: "3h ago".to_string(),
+            stale: false,
+            watch_log_present: true,
+            watch_total: 2,
+            watch_urgent: 1,
+            watch_info: 0,
+            last_urgent_ts: Some("2026-09-16T00:00:00Z".to_string()),
+            last_urgent_reasons: vec!["finding_appeared".to_string()],
+            next_step: "run `pico findings`".to_string(),
+            observation: Observation {
+                state: ObservationState::Watching,
+                age: Some("4s ago".to_string()),
+            },
+        };
+        let rendered = super::render_status_report(&report);
+        assert!(rendered.starts_with("Pico status\n"));
+        assert!(rendered.contains("Last COMPLETE scan: scan_1 (3h ago)\n"));
+        assert!(rendered.contains("Observation: watching (last check 4s ago)\n"));
+        assert!(rendered.contains("Watch events (retained log tail): 2 total, 1 URGENT, 0 INFO\n"));
+        assert!(rendered.contains("Last URGENT: 2026-09-16T00:00:00Z (finding_appeared)\n"));
+        assert!(rendered.contains("Next step: run `pico findings`\n"));
+        assert!(rendered
+            .contains("This is not an all-clear: Pico reports what it observed, not safety.\n"));
+
+        report.observation = Observation {
+            state: ObservationState::NotObserving,
+            age: Some("12m ago".to_string()),
+        };
+        let rendered = super::render_status_report(&report);
+        assert!(rendered.contains(
+            "Observation: NOT OBSERVING (last check 12m ago); changes since then may be unobserved\n"
+        ));
+
+        report.observation = Observation {
+            state: ObservationState::NoRecord,
+            age: None,
+        };
+        let rendered = super::render_status_report(&report);
+        assert!(rendered
+            .contains("Observation: no watch record in this workspace (observer has not run)\n"));
     }
 }

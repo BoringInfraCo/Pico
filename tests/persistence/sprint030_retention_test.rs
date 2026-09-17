@@ -6,6 +6,9 @@
 //! in `src/application/retention.rs` (the engine is `pub(crate)`).
 
 use chrono::{DateTime, TimeZone, Utc};
+use pico::application::watch_log::{
+    len as watch_log_len, trim as watch_log_trim, WATCH_LOG_MAX_EVENTS, WATCH_LOG_TRIM_TARGET,
+};
 use pico::application::{
     plan_retention, DanglingRef, DoctorService, PruneService, RetentionWindow, UnitCounts,
     KEEP_COMPLETE_DEFAULT,
@@ -639,4 +642,189 @@ fn doctor_service_reports_injected_dangling_reference() {
             unresolved_count: 1,
         }
     );
+}
+
+// ---------------------------------------------------------------------------
+// SPRINT-044 §2.2 — observation-log lifecycle during prune
+// ---------------------------------------------------------------------------
+
+fn watch_log_path(workspace: &std::path::Path) -> std::path::PathBuf {
+    workspace.join(".pico").join("watch.jsonl")
+}
+
+/// Write `lines` whole JSONL lines (seq 0..lines) to the observation log.
+fn write_watch_log(workspace: &std::path::Path, lines: usize) {
+    use std::io::Write;
+    let mut file = std::fs::File::create(watch_log_path(workspace)).unwrap();
+    for i in 0..lines {
+        writeln!(file, r#"{{"v":1,"seq":{i}}}"#).unwrap();
+    }
+}
+
+#[test]
+fn prune_trims_observation_log_to_cap_and_preserves_scan_retention() {
+    let workspace = tempfile::tempdir().unwrap();
+    let db = workspace_db(workspace.path());
+    for i in 1..=4 {
+        seed_unit(
+            &db,
+            &format!("scan_{i:02}"),
+            ts(i),
+            Some(ts(i)),
+            ScanStatus::Complete,
+        );
+    }
+    let log_path = watch_log_path(workspace.path());
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&log_path).unwrap();
+        for i in 0..1200 {
+            writeln!(file, r#"{{"v":1,"seq":{i}}}"#).unwrap();
+        }
+        // A torn trailing line must be dropped, not kept corrupt.
+        file.write_all(b"torn-tail").unwrap();
+    }
+    let conn = db.connection();
+    assert_eq!(watch_log_len(&log_path).unwrap(), 1200);
+
+    let report = PruneService::run(workspace.path(), Some(2)).unwrap();
+
+    // Scan-unit retention is exactly as before SPRINT-044.
+    assert_eq!(report.keep, 2);
+    assert!(!report.nothing_pruned);
+    let pruned_ids: Vec<&str> = report.pruned.iter().map(|u| u.scan_id.as_str()).collect();
+    assert_eq!(pruned_ids, ["scan_01", "scan_02"], "prune oldest-first");
+    assert_eq!(report.retained.complete, 2);
+    assert_eq!(
+        report.totals.0,
+        UnitCounts {
+            observations: 2,
+            evidence: 2,
+            findings: 2,
+            attack_paths: 2,
+            scan_analyses: 2,
+            scan_diagnostics: 2,
+            relationship_evidence: 2,
+        }
+    );
+    assert_eq!(count_rows(conn, "findings"), 2);
+
+    // The sidecar log is trimmed to the cap; the torn tail is not a line.
+    assert_eq!(report.watch_log.before, 1200, "torn tail is not counted");
+    assert_eq!(report.watch_log.after, WATCH_LOG_MAX_EVENTS);
+    assert_eq!(
+        report.watch_log.removed,
+        1200 - WATCH_LOG_MAX_EVENTS,
+        "removed count is reported"
+    );
+    assert_eq!(watch_log_len(&log_path).unwrap(), WATCH_LOG_MAX_EVENTS);
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    let lines: Vec<&str> = contents.lines().collect();
+    assert_eq!(lines.len(), WATCH_LOG_MAX_EVENTS);
+    assert!(lines[0].contains(r#""seq":200"#), "oldest kept line first");
+    assert!(
+        lines[lines.len() - 1].contains(r#""seq":1199"#),
+        "newest kept line last"
+    );
+    assert!(!contents.contains("torn-tail"));
+
+    // A second prune is a no-op for both scans and the log.
+    let again = PruneService::run(workspace.path(), Some(2)).unwrap();
+    assert!(again.nothing_pruned);
+    assert!(again.pruned.is_empty());
+    assert_eq!(again.watch_log.removed, 0);
+    assert_eq!(watch_log_len(&log_path).unwrap(), WATCH_LOG_MAX_EVENTS);
+}
+
+#[test]
+fn prune_trims_log_even_when_scan_history_is_within_the_window() {
+    let workspace = tempfile::tempdir().unwrap();
+    let db = workspace_db(workspace.path());
+    seed_unit(
+        &db,
+        "scan_keep_old",
+        ts(1),
+        Some(ts(1)),
+        ScanStatus::Complete,
+    );
+    seed_unit(
+        &db,
+        "scan_keep_new",
+        ts(2),
+        Some(ts(2)),
+        ScanStatus::Complete,
+    );
+    write_watch_log(workspace.path(), 1100);
+
+    let report = PruneService::run(workspace.path(), None).unwrap();
+    assert!(report.nothing_pruned, "the scan window is untouched");
+    assert_eq!(report.watch_log.before, 1100);
+    assert_eq!(report.watch_log.removed, 100);
+    assert_eq!(report.watch_log.after, WATCH_LOG_MAX_EVENTS);
+    assert_eq!(
+        watch_log_len(&watch_log_path(workspace.path())).unwrap(),
+        WATCH_LOG_MAX_EVENTS
+    );
+}
+
+#[test]
+fn watch_log_trim_never_touches_the_database_or_creates_a_missing_log() {
+    let workspace = tempfile::tempdir().unwrap();
+    let db = workspace_db(workspace.path());
+    seed_unit(&db, "scan_only", ts(1), Some(ts(1)), ScanStatus::Complete);
+    let db_path = workspace.path().join(".pico").join("pico.db");
+    let db_before = std::fs::read(&db_path).unwrap();
+    let findings_before = count_rows(db.connection(), "findings");
+
+    write_watch_log(workspace.path(), 1500);
+    let report = watch_log_trim(&watch_log_path(workspace.path()), WATCH_LOG_MAX_EVENTS).unwrap();
+    assert_eq!(report.removed, 500);
+    assert_eq!(
+        std::fs::read(&db_path).unwrap(),
+        db_before,
+        "trimming the sidecar log must not touch the database (no fabricated disappearance)"
+    );
+    assert_eq!(count_rows(db.connection(), "findings"), findings_before);
+
+    let absent = workspace.path().join(".pico").join("missing.jsonl");
+    assert_eq!(
+        watch_log_trim(&absent, WATCH_LOG_MAX_EVENTS).unwrap(),
+        pico::application::watch_log::TrimReport::default()
+    );
+    assert!(!absent.exists(), "an absent log must never be created");
+}
+
+#[test]
+fn bounded_growth_long_event_series_never_exceeds_the_cap() {
+    use std::io::Write;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let log_path = watch_log_path(workspace.path());
+    std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+    let mut trims = 0u64;
+
+    for i in 0..5000u64 {
+        // Append through the path (the frozen `.pico/watch.jsonl` append
+        // contract) so a trim's rename is observed by the next append.
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        writeln!(file, r#"{{"v":1,"seq":{i}}}"#).unwrap();
+        drop(file);
+
+        if watch_log_len(&log_path).unwrap() > WATCH_LOG_MAX_EVENTS {
+            let report = watch_log_trim(&log_path, WATCH_LOG_TRIM_TARGET).unwrap();
+            assert!(report.removed > 0);
+            trims += 1;
+        }
+        assert!(
+            watch_log_len(&log_path).unwrap() <= WATCH_LOG_MAX_EVENTS,
+            "the log must never exceed the cap after a trim"
+        );
+    }
+
+    assert!(trims > 0, "the synthetic series must have exercised trims");
+    assert!(watch_log_len(&log_path).unwrap() <= WATCH_LOG_MAX_EVENTS);
 }

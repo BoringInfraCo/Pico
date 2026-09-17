@@ -18,6 +18,7 @@ pub mod runtime;
 pub mod scan;
 pub mod status;
 pub mod watch;
+pub mod watch_log;
 
 pub use cause::FindingCause;
 pub use compare_contract::{

@@ -206,6 +206,27 @@ fn db_digest(env: &Env) -> String {
     format!("{:x}", Sha256::digest(&bytes))
 }
 
+fn watch_state_path(env: &Env) -> PathBuf {
+    env.workspace.path().join(".pico/watch.state.json")
+}
+
+fn write_watch_state(env: &Env, json: &str) {
+    fs::write(watch_state_path(env), json).unwrap();
+}
+
+fn dir_listing(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+fn rfc3339(instant: chrono::DateTime<chrono::Utc>) -> String {
+    instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 fn assert_secret_free(label: &str, text: &str) {
     assert!(
         !text.contains(SECRET_SENTINEL),
@@ -359,6 +380,27 @@ fn s038_watch_triggered_event_is_surfaced_by_status() {
     let startup = wait_for_stdout(&watched, "opencode.json", Duration::from_secs(30));
     assert_secret_free("watch startup stdout", &startup);
 
+    // SPRINT-044 §2.1: the continuity record appears while idle (first
+    // heartbeat), with the frozen shape and no process signals.
+    let state_path = watch_state_path(&env);
+    assert!(
+        wait_until(Duration::from_secs(30), || state_path.exists()),
+        "watch must write .pico/watch.state.json while idle"
+    );
+    let idle_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(idle_state["v"], 1);
+    assert_eq!(idle_state["interval_secs"], 1);
+    assert!(
+        idle_state["last_check_at"]
+            .as_str()
+            .and_then(|ts| ts.parse::<chrono::DateTime<chrono::FixedOffset>>().ok())
+            .is_some(),
+        "last_check_at must be RFC3339: {idle_state}"
+    );
+    assert!(idle_state.get("pid").is_none());
+    assert!(idle_state.get("process").is_none());
+
     // The one adversarial mutation: allow → deny.
     fs::write(env.workspace.path().join("opencode.json"), DENY).unwrap();
 
@@ -369,6 +411,24 @@ fn s038_watch_triggered_event_is_surfaced_by_status() {
     assert_secret_free("watch stderr", &watch_stderr);
     assert_eq!(events.len(), 1, "expected one event");
 
+    // An event always refreshes the continuity record: valid JSON, atomic
+    // (no temp file), and no pid/process field.
+    let event_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(event_state["v"], 1);
+    assert_eq!(event_state["interval_secs"], 1);
+    assert!(
+        event_state["events_total"].as_u64().unwrap() >= 1,
+        "an event must write the continuity record: {event_state}"
+    );
+    assert!(
+        !env.workspace
+            .path()
+            .join(".pico/watch.state.json.tmp")
+            .exists(),
+        "the atomic write must leave no temp file"
+    );
+
     let event: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
     let scan_id = event["scan_id"].as_str().unwrap().to_string();
     let ts = event["ts"].as_str().unwrap().to_string();
@@ -377,9 +437,11 @@ fn s038_watch_triggered_event_is_surfaced_by_status() {
     let expected_urgent = u64::from(event["notice"].as_str() == Some("urgent"));
     let expected_info = u64::from(event["notice"].as_str() == Some("info"));
 
-    // Read-only proof: digest + log length equal across `status`.
+    // Read-only proof: digest + log length + continuity bytes equal across
+    // `status`.
     let digest_before = db_digest(&env);
     let jsonl_len_before = fs::read(watch_jsonl_path(&env)).unwrap().len();
+    let state_bytes_before = fs::read(&state_path).unwrap();
     let out = run_pico(&env, &["status"]);
     assert!(out.status.success());
     assert_eq!(db_digest(&env), digest_before, "status must be read-only");
@@ -388,6 +450,11 @@ fn s038_watch_triggered_event_is_surfaced_by_status() {
         jsonl_len_before,
         "status must not append to the watch log"
     );
+    assert_eq!(
+        fs::read(&state_path).unwrap(),
+        state_bytes_before,
+        "status must not modify the continuity record"
+    );
 
     let status = stdout_text(&out);
     assert_secret_free("triggered status", &status);
@@ -395,6 +462,10 @@ fn s038_watch_triggered_event_is_surfaced_by_status() {
     assert!(
         status.contains(&format!("Last COMPLETE scan: {scan_id} (")),
         "status must surface the triggered COMPLETE scan; got:\n{status}"
+    );
+    assert!(
+        status.contains("Observation: watching (last check "),
+        "a fresh continuity record must read as watching; got:\n{status}"
     );
     assert_eq!(
         tail_counts(&status),
@@ -418,5 +489,109 @@ fn s038_watch_triggered_event_is_surfaced_by_status() {
     assert_secret_free(
         "watch.jsonl",
         &fs::read_to_string(watch_jsonl_path(&env)).unwrap(),
+    );
+}
+
+/// SPRINT-044 §2.1: `pico status` distinguishes watching / NOT OBSERVING /
+/// no record from a synthetic continuity record, read-only and without ever
+/// creating or modifying `.pico/watch.state.json`.
+#[test]
+fn s044_status_reports_observation_continuity_without_writing() {
+    let env = setup();
+    let pico_dir = env.workspace.path().join(".pico");
+    let state_path = watch_state_path(&env);
+
+    // Absent → honest no-record; status must not create the file or any other.
+    let listing_before = dir_listing(&pico_dir);
+    let out = run_pico(&env, &["status"]);
+    assert!(out.status.success());
+    let status = stdout_text(&out);
+    assert_secret_free("observation status", &status);
+    assert!(
+        status.contains("Observation: no watch record in this workspace (observer has not run)"),
+        "absent record must be explicit; got:\n{status}"
+    );
+    assert!(
+        !state_path.exists(),
+        "status must never create watch.state.json"
+    );
+    assert_eq!(
+        dir_listing(&pico_dir),
+        listing_before,
+        "read-only status must not add state files"
+    );
+    // Every pre-existing status line is preserved, plus the honesty line.
+    assert!(status.starts_with("Pico status\n"));
+    assert!(status.contains("Last COMPLETE scan:"));
+    assert!(status.contains("Watch events (retained log tail):"));
+    assert!(status.contains("Last URGENT:"));
+    assert!(status.contains("Next step:"));
+    assert!(status.contains(NOT_AN_ALL_CLEAR));
+
+    // Fresh record → watching; status leaves the bytes exactly unchanged.
+    let fresh = format!(
+        r#"{{"v":1,"interval_secs":2,"last_check_at":"{}","events_total":3}}"#,
+        rfc3339(chrono::Utc::now())
+    );
+    write_watch_state(&env, &fresh);
+    let bytes_before = fs::read(&state_path).unwrap();
+    let out = run_pico(&env, &["status"]);
+    assert!(out.status.success());
+    let status = stdout_text(&out);
+    assert!(
+        status.contains("Observation: watching (last check "),
+        "a fresh record must read as watching; got:\n{status}"
+    );
+    assert!(
+        !status.contains("NOT OBSERVING"),
+        "a fresh record must not read as stale; got:\n{status}"
+    );
+    assert_eq!(
+        fs::read(&state_path).unwrap(),
+        bytes_before,
+        "status must be read-only around the continuity record"
+    );
+
+    // Stale record → NOT OBSERVING with the frozen warning suffix.
+    let stale_ts = rfc3339(chrono::Utc::now() - chrono::Duration::hours(2));
+    write_watch_state(
+        &env,
+        &format!(r#"{{"v":1,"interval_secs":2,"last_check_at":"{stale_ts}","events_total":3}}"#),
+    );
+    let out = run_pico(&env, &["status"]);
+    assert!(out.status.success());
+    let status = stdout_text(&out);
+    assert!(
+        status.contains("Observation: NOT OBSERVING (last check "),
+        "a stale record must read as NOT OBSERVING; got:\n{status}"
+    );
+    assert!(
+        status.contains("); changes since then may be unobserved"),
+        "the NOT OBSERVING line must carry the warning; got:\n{status}"
+    );
+
+    // Malformed / wrong-version / missing-field records are never "watching".
+    for bad in [
+        "{ not json",
+        r#"{"v":2,"interval_secs":2,"last_check_at":"2026-09-16T00:00:00Z","events_total":1}"#,
+        r#"{"v":1,"last_check_at":"2026-09-16T00:00:00Z","events_total":1}"#,
+    ] {
+        write_watch_state(&env, bad);
+        let out = run_pico(&env, &["status"]);
+        assert!(out.status.success());
+        let status = stdout_text(&out);
+        assert!(
+            status
+                .contains("Observation: no watch record in this workspace (observer has not run)"),
+            "malformed record must read as no record; got:\n{status}"
+        );
+        assert!(
+            !status.contains("Observation: watching"),
+            "malformed record must never read as watching; got:\n{status}"
+        );
+    }
+    assert_secret_free(
+        "final observation status",
+        &stdout_text(&run_pico(&env, &["status"])),
     );
 }

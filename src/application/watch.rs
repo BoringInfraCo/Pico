@@ -8,18 +8,27 @@
 //!
 //! No daemon, no notifications, no content capture, no new dependencies.
 //! Read-only until v0.7: the watcher never mutates the target environment;
-//! the only writes are `.pico/watch.jsonl` appends plus normal scan
-//! persistence. `PARTIAL`/`FAILED` scans are freshness context, never diff
-//! operands (Invariant 9).
+//! the only writes are `.pico/watch.jsonl` appends, the `.pico/watch.state.json`
+//! continuity record, plus normal scan persistence. `PARTIAL`/`FAILED` scans
+//! are freshness context, never diff operands (Invariant 9).
+//!
+//! SPRINT-044 §2.1 adds the continuity record: evidence *of observation*, not
+//! process introspection. It is written atomically (temp file in `.pico/` +
+//! rename), at most once per [`HEARTBEAT_SECS`] while idle and always when an
+//! event is recorded. It carries no pid or process field; `pico status` reads
+//! it to tell "watching" from "NOT OBSERVING" from "no record" (S038's
+//! no-pidfile rule is preserved).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::application::diff::{DiffService, FindingDiff, FindingDiffResult};
 use crate::application::scan::ScanService;
+use crate::application::watch_log;
 use crate::domain::{ScanStatus, ScanTrigger};
 use crate::persistence::{require_schema_version, Database};
 use crate::shared::PicoError;
@@ -340,6 +349,7 @@ pub fn run(
     println!("Pico watch: events append to .pico/watch.jsonl; stop with Ctrl-C.");
 
     let mut report = WatchReport::default();
+    let mut state_written_at: Option<DateTime<Utc>> = None;
     let mut before = snapshot(&watch_set);
     loop {
         if budget_reached(&report, cfg.max_events) {
@@ -350,10 +360,25 @@ pub fn run(
         let changed = detect_changes(&before, &after);
         if changed.is_empty() {
             before = after;
+            // Idle continuity heartbeat: at most one record write per
+            // HEARTBEAT_SECS so `pico status` can tell silence from safety.
+            let now = Utc::now();
+            if heartbeat_due(state_written_at, now) {
+                write_continuity(workspace, cfg.interval_secs, report.events.len(), now)?;
+                state_written_at = Some(now);
+            }
             continue;
         }
         // Primary pass for this change batch.
         if let Some(fresh) = scan_and_record(workspace, home, &watch_set, &changed, &mut report)? {
+            // An event was recorded: always refresh the continuity record, and
+            // keep the observation log bounded (SPRINT-044 §2.2). Trimming is
+            // amortized: it only rewrites once the cap is exceeded, down to the
+            // lower watermark, so a long run cannot grow the log without bound.
+            trim_log_if_needed(workspace)?;
+            let now = Utc::now();
+            write_continuity(workspace, cfg.interval_secs, report.events.len(), now)?;
+            state_written_at = Some(now);
             before = fresh;
             // Files changed again mid-scan: exactly one follow-up pass, then
             // re-baseline. Anything newer is picked up next interval (or next
@@ -367,16 +392,126 @@ pub fn run(
                 if let Some(fresh) =
                     scan_and_record(workspace, home, &watch_set, &raced_changed, &mut report)?
                 {
+                    trim_log_if_needed(workspace)?;
+                    let now = Utc::now();
+                    write_continuity(workspace, cfg.interval_secs, report.events.len(), now)?;
+                    state_written_at = Some(now);
                     before = fresh;
                 }
+            }
+        } else {
+            // A change was detected but no event could be recorded (for example
+            // a failing scan). The observer is still alive: refresh the
+            // heartbeat (rate-limited) so `pico status` does not report a live
+            // watcher as NOT OBSERVING, and re-baseline to the observed state so
+            // the next interval compares against reality rather than looping on
+            // the same change.
+            before = after;
+            let now = Utc::now();
+            if heartbeat_due(state_written_at, now) {
+                write_continuity(workspace, cfg.interval_secs, report.events.len(), now)?;
+                state_written_at = Some(now);
             }
         }
     }
     Ok(report)
 }
 
+/// Keep `.pico/watch.jsonl` bounded (SPRINT-044 §2.2): once the log exceeds
+/// `WATCH_LOG_MAX_EVENTS`, trim to `WATCH_LOG_TRIM_TARGET`. Hysteresis makes the
+/// rewrite amortized (~every 500 events) rather than per event.
+fn trim_log_if_needed(workspace: &Path) -> Result<(), PicoError> {
+    let path = workspace.join(".pico").join("watch.jsonl");
+    if watch_log::len(&path)? > watch_log::WATCH_LOG_MAX_EVENTS {
+        watch_log::trim(&path, watch_log::WATCH_LOG_TRIM_TARGET)?;
+    }
+    Ok(())
+}
+
 fn budget_reached(report: &WatchReport, max_events: Option<u64>) -> bool {
     max_events.is_some_and(|max| report.events.len() as u64 >= max)
+}
+
+/// Idle heartbeat cadence for `.pico/watch.state.json` (SPRINT-044 §2.1):
+/// while idle the continuity record is rewritten at most this often.
+pub const HEARTBEAT_SECS: u64 = 15;
+
+/// `.pico/watch.state.json` continuity record (SPRINT-044 §2.1). This is
+/// evidence *of observation*, never process introspection: it carries no pid
+/// or process field. Field declaration order is the frozen v1 shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WatchState {
+    pub v: u32,
+    pub interval_secs: u64,
+    pub last_check_at: String,
+    pub events_total: u64,
+}
+
+impl WatchState {
+    /// The frozen `"v":1` record for one completed check.
+    pub fn new(interval_secs: u64, last_check_at: String, events_total: u64) -> Self {
+        WatchState {
+            v: 1,
+            interval_secs,
+            last_check_at,
+            events_total,
+        }
+    }
+}
+
+/// Current instant in the same second-precision RFC3339/UTC form used by
+/// `watch.jsonl` events.
+fn now_rfc3339() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+/// Atomic continuity write: serialize, write a temp file inside `.pico/`, then
+/// rename over `.pico/watch.state.json`. The target directory already exists
+/// (watch requires `pico init`); the temp file is removed if the rename fails
+/// so only a complete record is ever visible.
+fn write_state(workspace: &Path, state: &WatchState) -> Result<(), PicoError> {
+    let dir = workspace.join(".pico");
+    let path = dir.join("watch.state.json");
+    let temp = dir.join("watch.state.json.tmp");
+    let json = serde_json::to_string(state)
+        .map_err(|error| PicoError::scan(format!("watch state serialization failed: {error}")))?;
+    std::fs::write(&temp, json.as_bytes())
+        .map_err(|error| PicoError::io(format!("cannot write {}: {error}", temp.display())))?;
+    if let Err(error) = std::fs::rename(&temp, &path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(PicoError::io(format!(
+            "cannot replace {}: {error}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Write the continuity record for a completed check at `now`.
+fn write_continuity(
+    workspace: &Path,
+    interval_secs: u64,
+    events_total: usize,
+    now: DateTime<Utc>,
+) -> Result<(), PicoError> {
+    let state = WatchState::new(
+        interval_secs,
+        now.to_rfc3339_opts(SecondsFormat::Secs, true),
+        events_total as u64,
+    );
+    write_state(workspace, &state)
+}
+
+/// True when the idle heartbeat is due: at most one write per
+/// [`HEARTBEAT_SECS`]. `last` is the previous continuity write time; `None`
+/// (no write yet this run) is always due.
+fn heartbeat_due(last: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    match last {
+        None => true,
+        Some(last) => {
+            now.signed_duration_since(last) >= chrono::Duration::seconds(HEARTBEAT_SECS as i64)
+        }
+    }
 }
 
 /// One trigger cycle: run the unchanged bounded pipeline with
@@ -467,7 +602,7 @@ fn scan_and_record(
     let (notice, reason_codes) = classify(&facts);
     let reasons: Vec<String> = reason_codes.iter().map(|code| code.to_string()).collect();
     let event = WatchEvent::new(
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        now_rfc3339(),
         changed_rel,
         result.scan_id.clone(),
         result.status,
@@ -1044,6 +1179,14 @@ mod tests {
             !workspace.path().join(".pico").join("watch.jsonl").exists(),
             "zero budget must append no events"
         );
+        assert!(
+            !workspace
+                .path()
+                .join(".pico")
+                .join("watch.state.json")
+                .exists(),
+            "zero budget must not write a continuity record"
+        );
     }
 
     #[test]
@@ -1083,5 +1226,128 @@ mod tests {
         );
         let json = serde_json::to_string(&event).unwrap();
         assert!(!json.contains(SENTINEL), "events carry paths and IDs only");
+    }
+
+    // SPRINT-044 §2.1: continuity-record shape, atomic write, heartbeat gate.
+    #[test]
+    fn watch_state_json_shape_is_frozen_without_process_fields() {
+        let state = WatchState::new(2, "2026-09-16T00:00:00Z".to_string(), 3);
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(
+            json,
+            r#"{"v":1,"interval_secs":2,"last_check_at":"2026-09-16T00:00:00Z","events_total":3}"#
+        );
+        // Exactly the four frozen fields: no pid, no process detection.
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            ["v", "interval_secs", "last_check_at", "events_total"],
+            "the record is evidence of observation, not process introspection"
+        );
+    }
+
+    #[test]
+    fn write_state_is_atomic_valid_json_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let pico = dir.path().join(".pico");
+        std::fs::create_dir_all(&pico).unwrap();
+        let path = pico.join("watch.state.json");
+        let temp = pico.join("watch.state.json.tmp");
+
+        write_state(dir.path(), &WatchState::new(2, "t0".to_string(), 1)).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed["v"], 1);
+        assert!(!temp.exists(), "temp file must be renamed away");
+
+        // Atomic replace is idempotent and never leaves the temp behind.
+        write_state(dir.path(), &WatchState::new(5, "t1".to_string(), 9)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""interval_secs":5"#));
+        assert!(text.contains(r#""events_total":9"#));
+        assert!(!temp.exists());
+    }
+
+    #[test]
+    fn heartbeat_gate_fires_at_most_once_per_heartbeat_secs() {
+        let now = Utc::now();
+        assert!(heartbeat_due(None, now), "first idle check writes");
+        assert!(!heartbeat_due(
+            Some(now - chrono::Duration::seconds(14)),
+            now
+        ));
+        assert!(heartbeat_due(
+            Some(now - chrono::Duration::seconds(15)),
+            now
+        ));
+        assert!(heartbeat_due(
+            Some(now - chrono::Duration::seconds(31)),
+            now
+        ));
+    }
+
+    // SPRINT-044 §2.2: the observer itself keeps its log bounded, so a long run
+    // cannot grow `.pico/watch.jsonl` without bound between prunes.
+    #[test]
+    fn watch_trims_its_own_log_once_the_cap_is_exceeded() {
+        let dir = tempfile::tempdir().unwrap();
+        let pico = dir.path().join(".pico");
+        std::fs::create_dir_all(&pico).unwrap();
+        let log = pico.join("watch.jsonl");
+        let line = |n: usize| format!("{{\"v\":1,\"n\":{n}}}\n");
+
+        // Under the cap: untouched.
+        let under = watch_log::WATCH_LOG_MAX_EVENTS;
+        std::fs::write(&log, (0..under).map(line).collect::<String>()).unwrap();
+        trim_log_if_needed(dir.path()).unwrap();
+        assert_eq!(
+            watch_log::len(&log).unwrap(),
+            under,
+            "under cap: no rewrite"
+        );
+
+        // Over the cap: trimmed to the watermark, newest lines kept in order.
+        let over = watch_log::WATCH_LOG_MAX_EVENTS + 1;
+        std::fs::write(&log, (0..over).map(line).collect::<String>()).unwrap();
+        trim_log_if_needed(dir.path()).unwrap();
+        let kept = watch_log::len(&log).unwrap();
+        assert_eq!(
+            kept,
+            watch_log::WATCH_LOG_TRIM_TARGET,
+            "the cap is enforced by the observer itself"
+        );
+        let text = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines.last().copied(),
+            Some(line(over - 1).trim_end()),
+            "the newest event always survives its own trim"
+        );
+
+        // A long synthetic series never exceeds the cap after each trim.
+        for n in 0..(watch_log::WATCH_LOG_TRIM_TARGET * 3) {
+            let mut existing = std::fs::read_to_string(&log).unwrap();
+            existing.push_str(&line(over + n));
+            std::fs::write(&log, existing).unwrap();
+            trim_log_if_needed(dir.path()).unwrap();
+            assert!(
+                watch_log::len(&log).unwrap() <= watch_log::WATCH_LOG_MAX_EVENTS,
+                "the log must never grow past the cap"
+            );
+        }
+
+        // Absent log: no file is created by the bound check.
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir2.path().join(".pico")).unwrap();
+        let absent = dir2.path().join(".pico").join("watch.jsonl");
+        trim_log_if_needed(dir2.path()).unwrap();
+        assert!(!absent.exists(), "an absent log is never created");
+        assert_eq!(watch_log::len(&absent).unwrap(), 0);
     }
 }

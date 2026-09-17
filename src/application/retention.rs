@@ -26,6 +26,7 @@ use std::path::Path;
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use serde::Serialize;
 
+use crate::application::watch_log::{self, TrimReport, WATCH_LOG_MAX_EVENTS};
 use crate::domain::{Scan, ScanStatus};
 use crate::persistence::db::schema_version;
 use crate::persistence::{require_schema_version, Database, ScanRepo, SUPPORTED_SCHEMA_VERSION};
@@ -585,6 +586,11 @@ pub struct PruneReport {
     /// True exactly when the workspace was below the window and nothing was
     /// deleted (a no-op is a success, never an error).
     pub nothing_pruned: bool,
+    /// Observation-log line counts after the trim (SPRINT-044.md §2.2). The
+    /// sidecar `.pico/watch.jsonl` is trimmed to [`WATCH_LOG_MAX_EVENTS`]
+    /// after the database prune succeeds; an absent log yields a zeroed
+    /// report and is never created.
+    pub watch_log: TrimReport,
 }
 
 /// `pico prune` application service (SPRINT-030.md §5.4, corrected by
@@ -665,15 +671,19 @@ impl PruneService {
         //     The transaction performed only reads, so it rolls back.
         if plan.prune_complete.is_empty() && plan.prune_incomplete.is_empty() {
             let _ = tx.rollback();
-            return Ok(PruneReport {
-                keep: window.keep,
-                pruned: Vec::new(),
-                totals: PruneTotals::default(),
-                retained: retained_counts(&scans, &plan),
-                pre_health_ok: true,
-                post_health_ok: true,
-                nothing_pruned: true,
-            });
+            return trim_watch_log(
+                workspace,
+                PruneReport {
+                    keep: window.keep,
+                    pruned: Vec::new(),
+                    totals: PruneTotals::default(),
+                    retained: retained_counts(&scans, &plan),
+                    pre_health_ok: true,
+                    post_health_ok: true,
+                    nothing_pruned: true,
+                    watch_log: TrimReport::default(),
+                },
+            );
         }
 
         // 5f. Delete the planned units in the frozen order, all-or-nothing.
@@ -724,16 +734,34 @@ impl PruneService {
             totals.scan_diagnostics += report.counts.scan_diagnostics;
             totals.relationship_evidence += report.counts.relationship_evidence;
         }
-        Ok(PruneReport {
-            keep: window.keep,
-            pruned,
-            totals: PruneTotals(totals),
-            retained: retained_counts(&scans, &plan),
-            pre_health_ok: true,
-            post_health_ok: true,
-            nothing_pruned: false,
-        })
+        trim_watch_log(
+            workspace,
+            PruneReport {
+                keep: window.keep,
+                pruned,
+                totals: PruneTotals(totals),
+                retained: retained_counts(&scans, &plan),
+                pre_health_ok: true,
+                post_health_ok: true,
+                nothing_pruned: false,
+                watch_log: TrimReport::default(),
+            },
+        )
     }
+}
+
+/// Trim the sidecar observation log after the database prune has succeeded
+/// (SPRINT-044.md §2.2).
+///
+/// The log is not part of the SQLite unit and is therefore trimmed OUTSIDE
+/// the prune transaction, ordered strictly AFTER a successful database prune:
+/// a failed DB prune returns before this runs, so it can never mutate the log.
+/// A trim failure propagates as an error (never a silent success). An absent
+/// log yields a zeroed report and no file is created.
+fn trim_watch_log(workspace: &Path, mut report: PruneReport) -> Result<PruneReport, PicoError> {
+    let path = workspace.join(".pico").join("watch.jsonl");
+    report.watch_log = watch_log::trim(&path, WATCH_LOG_MAX_EVENTS)?;
+    Ok(report)
 }
 
 /// Retention state after a prune: the kept COMPLETE scans plus every kept
