@@ -420,6 +420,11 @@ struct SafeFindingSummary {
     attack_path_count: u64,
     affected_sink_count: u64,
     fingerprint: String,
+    /// Observed runtime execution basis mirrored from the application
+    /// `FindingSummary.observed_execution` (SPRINT-042 §2.3). Always present;
+    /// the array is empty when nothing was observed. Mirrors the application DTO
+    /// one-for-one via the same `SafeObservedExecution` used by `SafeDetail`.
+    observed_execution: Vec<SafeObservedExecution>,
 }
 
 impl SafeFindingSummary {
@@ -434,6 +439,11 @@ impl SafeFindingSummary {
             attack_path_count: summary.attack_path_count,
             affected_sink_count: summary.affected_sink_count,
             fingerprint: terminal_safe(&summary.fingerprint),
+            observed_execution: summary
+                .observed_execution
+                .iter()
+                .map(SafeObservedExecution::new)
+                .collect(),
         }
     }
 }
@@ -871,9 +881,11 @@ fn safe_strings(values: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SafeExplainedPath, SafeGitHubCredentialView, SafeObservedExecution, SafeScanDiagnostics,
+        SafeExplainedPath, SafeFindingSummary, SafeGitHubCredentialView, SafeObservedExecution,
+        SafeScanDiagnostics,
     };
-    use crate::application::ExplainedPath;
+    use crate::application::findings::ObservedExecutionView;
+    use crate::application::{ExplainedPath, FindingSummary};
     use crate::findings::diagnostics::{
         ConfidenceNote, ProviderDiagnostic, RuntimeDiagnostic, ScanDiagnostics, SuppressedReason,
     };
@@ -1112,7 +1124,6 @@ mod tests {
     /// equal to the application DTO and the whole-payload golden equality holds.
     #[test]
     fn safe_observed_execution_serializes_with_exact_dto_fields() {
-        use crate::application::findings::ObservedExecutionView;
         let observed = ObservedExecutionView {
             relationship_key: "agent:opencode|can_execute|shell:bash".to_string(),
             basis: "OBSERVED_EXECUTION".to_string(),
@@ -1142,7 +1153,6 @@ mod tests {
     /// mirror carries no raw control bytes.
     #[test]
     fn safe_observed_execution_sanitizes_strings() {
-        use crate::application::findings::ObservedExecutionView;
         let observed = ObservedExecutionView {
             relationship_key: "agent:opencode\u{1b}[31m|can_execute|shell:bash".to_string(),
             basis: "ATTEMPTED_NOT_EXECUTED".to_string(),
@@ -1406,6 +1416,133 @@ mod tests {
         assert_eq!(
             array[1]["permission_state"],
             serde_json::json!("GLOBAL_API_KEY")
+        );
+    }
+
+    /// A `FindingSummary` carrying the given observation basis entries, with the
+    /// eight other fields held fixed so parity assertions isolate the S042 field.
+    fn finding_summary(observed_execution: Vec<ObservedExecutionView>) -> FindingSummary {
+        FindingSummary {
+            id: "finding-1".to_string(),
+            finding_class: "UNTRUSTED_TO_PRODUCTION".to_string(),
+            status: "OPEN".to_string(),
+            title: "External content reaches production".to_string(),
+            severity: "CRITICAL".to_string(),
+            confidence: "HIGH".to_string(),
+            attack_path_count: 1,
+            affected_sink_count: 1,
+            fingerprint: "sha256:finding-1".to_string(),
+            observed_execution,
+        }
+    }
+
+    fn observed(
+        relationship_key: &str,
+        basis: &str,
+        freshness: &str,
+        evidence_id: &str,
+    ) -> ObservedExecutionView {
+        ObservedExecutionView {
+            relationship_key: relationship_key.to_string(),
+            basis: basis.to_string(),
+            freshness: freshness.to_string(),
+            evidence_id: evidence_id.to_string(),
+        }
+    }
+
+    /// Asserts the MCP `SafeFindingSummary` mirror carries the observation basis
+    /// with the exact application-DTO field names and values (SPRINT-042 §2.3),
+    /// so the `list_findings` payload's per-Finding `observed_execution` array is
+    /// field-for-field equal to the application `FindingSummary` the CLI renders
+    /// from and the whole-payload golden equality holds.
+    #[test]
+    fn safe_finding_summary_serializes_observed_execution_with_exact_dto_fields() {
+        let summary = finding_summary(vec![
+            observed(
+                "agent:opencode|can_execute|shell:bash",
+                "OBSERVED_EXECUTION",
+                "FRESH",
+                "ev-runtime-1",
+            ),
+            observed(
+                "agent:opencode|can_execute|shell:bash",
+                "ATTEMPTED_NOT_EXECUTED",
+                "AGING",
+                "ev-runtime-2",
+            ),
+        ]);
+        let safe = SafeFindingSummary::new(&summary);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        let dto = serde_json::to_value(&summary).expect("serializable");
+        assert_eq!(
+            value, dto,
+            "MCP finding-summary projection must serialize identically to the application DTO"
+        );
+        assert_eq!(
+            value["observed_execution"],
+            serde_json::json!([
+                {
+                    "relationship_key": "agent:opencode|can_execute|shell:bash",
+                    "basis": "OBSERVED_EXECUTION",
+                    "freshness": "FRESH",
+                    "evidence_id": "ev-runtime-1",
+                },
+                {
+                    "relationship_key": "agent:opencode|can_execute|shell:bash",
+                    "basis": "ATTEMPTED_NOT_EXECUTED",
+                    "freshness": "AGING",
+                    "evidence_id": "ev-runtime-2",
+                },
+            ])
+        );
+    }
+
+    /// Asserts the observation basis is always present on the MCP summary, even
+    /// when empty (SPRINT-042 §2.1/§2.3): the key serializes as `[]`, never an
+    /// omitted field, so a reader cannot mistake omission for absence of
+    /// observation and the golden equality with the application DTO holds.
+    #[test]
+    fn safe_finding_summary_always_serializes_empty_observed_execution() {
+        let summary = finding_summary(Vec::new());
+        let safe = SafeFindingSummary::new(&summary);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        assert!(
+            value.get("observed_execution").is_some(),
+            "observed_execution must be present even when empty"
+        );
+        assert_eq!(value["observed_execution"], serde_json::json!([]));
+        assert_eq!(value, serde_json::to_value(&summary).unwrap());
+    }
+
+    /// Asserts the MCP summary mirror is terminal-safe: control bytes in any of
+    /// the mirrored observation strings are escaped, and the serialized mirror
+    /// carries no raw control bytes (SPRINT-042 §2.3).
+    #[test]
+    fn safe_finding_summary_sanitizes_observed_execution_strings() {
+        let summary = finding_summary(vec![observed(
+            "agent:opencode\u{1b}[31m|can_execute|shell:bash",
+            "OBSERVED_EXECUTION",
+            "FRESH\nsecond",
+            "ev\u{1b}[0m",
+        )]);
+        let safe = SafeFindingSummary::new(&summary);
+        let value = serde_json::to_value(&safe).expect("serializable");
+        let text = serde_json::to_string(&value).expect("serializable");
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\n'),
+            "serialized mirror must contain no raw control bytes: {text}"
+        );
+        assert!(value["observed_execution"][0]["relationship_key"]
+            .as_str()
+            .unwrap()
+            .contains("\\x1B"));
+        assert!(value["observed_execution"][0]["freshness"]
+            .as_str()
+            .unwrap()
+            .contains("\\x0A"));
+        assert_eq!(
+            value["observed_execution"][0]["basis"],
+            serde_json::json!("OBSERVED_EXECUTION")
         );
     }
 }

@@ -118,6 +118,12 @@ fn push_summary(out: &mut String, summary: &FindingSummary) {
         "Fingerprint: {}\n",
         terminal_safe(&summary.fingerprint)
     ));
+    // One line per observation-basis entry (SPRINT-042 §2.2); omitted entirely
+    // when empty, so a Finding without runtime evidence gets no marker line.
+    for entry in &summary.observed_execution {
+        out.push_str(&observation_basis_sentence(entry));
+        out.push('\n');
+    }
 }
 
 /// Renders `pico finding <id>` for one persisted Finding.
@@ -533,22 +539,38 @@ fn render_observation_basis(entries: &[ObservedExecutionView]) -> String {
     let mut out = String::new();
     out.push_str("Observation basis\n");
     for entry in entries {
-        let label = match entry.basis.as_str() {
-            "ATTEMPTED_NOT_EXECUTED" => "Attempted (not executed)",
-            _ => "Observed execution",
-        };
-        out.push_str(&format!(
-            "  {}: {} via runtime evidence ({})\n",
-            label,
-            terminal_safe(relationship_kind(&entry.relationship_key)),
-            terminal_safe(&entry.freshness),
-        ));
+        out.push_str("  ");
+        out.push_str(&observation_basis_sentence(entry));
+        out.push('\n');
         out.push_str(&format!(
             "  Evidence: {}\n",
             terminal_safe(&entry.evidence_id)
         ));
     }
     out
+}
+
+/// The frozen observation-basis label for one persisted basis value
+/// (SPRINT-041 §1.3, shared with the list by SPRINT-042 §2.2). This is the one
+/// place the `Observed execution:` / `Attempted (not executed):` wording exists,
+/// so the detail and list renderers can never drift or hardcode a label.
+fn observation_basis_label(basis: &str) -> &'static str {
+    match basis {
+        "ATTEMPTED_NOT_EXECUTED" => "Attempted (not executed)",
+        _ => "Observed execution",
+    }
+}
+
+/// The frozen observation-basis sentence for one entry, without indentation:
+/// `Observed execution: can_execute via runtime evidence (FRESH)` (or the
+/// attempt form). Shared by the Finding detail section and the Finding list.
+fn observation_basis_sentence(entry: &ObservedExecutionView) -> String {
+    format!(
+        "{}: {} via runtime evidence ({})",
+        observation_basis_label(&entry.basis),
+        terminal_safe(relationship_kind(&entry.relationship_key)),
+        terminal_safe(&entry.freshness),
+    )
 }
 
 /// Extracts the capability segment of a canonical relationship key of the exact
@@ -1444,6 +1466,43 @@ mod tests {
         }
     }
 
+    fn summary_with(observed: Vec<ObservedExecutionView>) -> FindingSummary {
+        FindingSummary {
+            id: "finding_x".to_string(),
+            finding_class: "UNTRUSTED_TO_PRODUCTION".to_string(),
+            status: "OPEN".to_string(),
+            title: "Synthetic".to_string(),
+            severity: "HIGH".to_string(),
+            confidence: "HIGH".to_string(),
+            attack_path_count: 1,
+            affected_sink_count: 1,
+            fingerprint: "sha256:x".to_string(),
+            observed_execution: observed,
+        }
+    }
+
+    fn list_with(summaries: Vec<FindingSummary>) -> FindingList {
+        FindingList {
+            selected_scan: Some(crate::application::ScanBrief {
+                id: "scan_x".to_string(),
+                status: "COMPLETE".to_string(),
+                completed_at: Some("2025-01-01T00:00:00Z".to_string()),
+            }),
+            newest_scan_attempt: None,
+            freshness: crate::application::Freshness::LatestComplete,
+            freshness_warning: None,
+            findings: summaries,
+            diagnostics: None,
+            github_credentials: vec![],
+        }
+    }
+
+    fn push_list(summary: &FindingSummary) -> String {
+        let mut out = String::new();
+        push_summary(&mut out, summary);
+        out
+    }
+
     #[test]
     fn observed_execution_renders_the_frozen_wording() {
         let section = render_observation_basis(&[observed_view(
@@ -1531,5 +1590,172 @@ mod tests {
             weakest < basis && basis < evidence,
             "the section must sit after Weakest evidence and before Evidence"
         );
+    }
+
+    #[test]
+    fn list_renders_exactly_one_line_per_observed_entry() {
+        let out = push_list(&summary_with(vec![
+            observed_view(
+                "agent:opencode|can_execute|shell:bash",
+                "OBSERVED_EXECUTION",
+                "FRESH",
+                "ev_runtime",
+            ),
+            observed_view(
+                "agent:claude|can_execute|shell:bash",
+                "ATTEMPTED_NOT_EXECUTED",
+                "AGING",
+                "ev_attempt",
+            ),
+        ]));
+        assert_eq!(
+            out.matches(" via runtime evidence (").count(),
+            2,
+            "one line per entry:\n{out}"
+        );
+        assert!(out.contains("Observed execution: can_execute via runtime evidence (FRESH)\n"));
+        assert!(
+            out.contains("Attempted (not executed): can_execute via runtime evidence (AGING)\n")
+        );
+        assert!(
+            !out.contains("Evidence: ev_runtime"),
+            "the list carries one line per entry, not the detail's Evidence line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn list_omits_all_observation_lines_when_empty() {
+        let out = push_list(&summary_with(vec![]));
+        assert!(!out.contains("Observed execution:"));
+        assert!(!out.contains("Attempted (not executed):"));
+        let rendered = render_findings_list(&list_with(vec![summary_with(vec![])]));
+        assert!(
+            !rendered.contains("Observed execution:"),
+            "a finding without runtime evidence must not render a list marker:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn list_label_follows_the_persisted_basis_not_a_hardcoded_label() {
+        let out = push_list(&summary_with(vec![
+            observed_view(
+                "agent:opencode|can_execute|shell:bash",
+                "OBSERVED_EXECUTION",
+                "FRESH",
+                "e1",
+            ),
+            observed_view(
+                "agent:opencode|can_execute|shell:bash",
+                "ATTEMPTED_NOT_EXECUTED",
+                "FRESH",
+                "e2",
+            ),
+        ]));
+        let lines: Vec<&str> = out
+            .lines()
+            .filter(|line| line.ends_with("via runtime evidence (FRESH)"))
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                "Observed execution: can_execute via runtime evidence (FRESH)",
+                "Attempted (not executed): can_execute via runtime evidence (FRESH)",
+            ],
+            "the label must follow each entry's basis:\n{out}"
+        );
+    }
+
+    #[test]
+    fn list_and_detail_render_the_same_observation_sentence() {
+        let entries = vec![
+            observed_view("a|b|c", "OBSERVED_EXECUTION", "FRESH", "e1"),
+            observed_view("can_execute", "ATTEMPTED_NOT_EXECUTED", "STALE", "e2"),
+        ];
+        let list_out = push_list(&summary_with(entries.clone()));
+        let detail_section = render_observation_basis(&entries);
+        for entry in &entries {
+            let sentence = format!("{}\n", observation_basis_sentence(entry));
+            assert!(
+                list_out.contains(&sentence),
+                "list missing {sentence:?}:\n{list_out}"
+            );
+            assert!(
+                detail_section.contains(&format!("  {sentence}")),
+                "detail missing {sentence:?}:\n{detail_section}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_kind_extraction_uses_the_a_b_c_middle_with_full_key_fallback() {
+        let exact = push_list(&summary_with(vec![observed_view(
+            "a|can_execute|c",
+            "OBSERVED_EXECUTION",
+            "FRESH",
+            "e1",
+        )]));
+        assert!(exact.contains("Observed execution: can_execute via runtime evidence (FRESH)"));
+        let fallback = push_list(&summary_with(vec![observed_view(
+            "can_execute",
+            "OBSERVED_EXECUTION",
+            "FRESH",
+            "e1",
+        )]));
+        assert!(fallback.contains("Observed execution: can_execute via runtime evidence (FRESH)"));
+        let four = push_list(&summary_with(vec![observed_view(
+            "a|b|c|d",
+            "OBSERVED_EXECUTION",
+            "FRESH",
+            "e1",
+        )]));
+        assert!(four.contains("Observed execution: a|b|c|d via runtime evidence (FRESH)"));
+    }
+
+    #[test]
+    fn repeated_list_renders_are_byte_identical() {
+        let list = list_with(vec![summary_with(vec![observed_view(
+            "agent:opencode|can_execute|shell:bash",
+            "OBSERVED_EXECUTION",
+            "FRESH",
+            "ev_runtime",
+        )])]);
+        assert_eq!(render_findings_list(&list), render_findings_list(&list));
+    }
+
+    #[test]
+    fn list_observation_lines_are_terminal_safe() {
+        let out = push_list(&summary_with(vec![observed_view(
+            "a|can\nexecute|c",
+            "OBSERVED_EXECUTION",
+            "FRESH",
+            "ev_runtime",
+        )]));
+        assert!(
+            !out.contains("\nSENTINEL"),
+            "a control character must not spoof a new line:\n{out}"
+        );
+        assert!(
+            out.contains("can\\x0Aexecute"),
+            "control chars are escaped:\n{out}"
+        );
+        assert_eq!(
+            out.lines()
+                .filter(|line| line.starts_with("Observed execution:"))
+                .count(),
+            1,
+            "the entry stays one line:\n{out}"
+        );
+
+        let injected = push_list(&summary_with(vec![observed_view(
+            "a|b|c",
+            "OBSERVED_EXECUTION",
+            "FRESH\u{1B}[31m",
+            "ev_runtime",
+        )]));
+        assert!(
+            !injected.contains('\u{1B}'),
+            "raw ESC must never render:\n{injected}"
+        );
+        assert!(injected.contains("\\x1B"));
     }
 }

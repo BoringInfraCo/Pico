@@ -99,7 +99,7 @@ pub enum Freshness {
 }
 
 /// One deterministic Finding summary in `pico findings` order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FindingSummary {
     pub id: String,
     pub finding_class: String,
@@ -110,6 +110,13 @@ pub struct FindingSummary {
     pub attack_path_count: u64,
     pub affected_sink_count: u64,
     pub fingerprint: String,
+    /// Observation basis derived from this Finding's linked runtime evidence
+    /// (SPRINT-042 §2.1). SAME rule and SAME type as
+    /// `FindingDetail.observed_execution` (S041 §1.2); always present and empty
+    /// when the Finding carries no `DIRECT` `opencode_runtime_observer` evidence
+    /// with a recognized observed state, so the list can never imply that an
+    /// inferred capability was observed.
+    pub observed_execution: Vec<ObservedExecutionView>,
 }
 
 /// Whether a detail view describes the latest complete state or history.
@@ -1928,11 +1935,21 @@ fn summarize_scan(conn: &Connection, scan_id: &str) -> Result<Vec<FindingSummary
             "scan {scan_id} exceeds the supported Finding budget of {MAX_FINDINGS_PER_SCAN}"
         )));
     }
+    // Resolve the scan's evidence once into an id map (SPRINT-042 §2.1). Linked
+    // evidence is then an indexed lookup rather than one query per Finding.
+    let evidence_by_id: BTreeMap<String, Evidence> = EvidenceRepo::new(conn)
+        .get_for_scan(scan_id)?
+        .into_iter()
+        .map(|item| (item.id.clone(), item))
+        .collect();
+    let finding_repo = FindingRepo::new(conn);
     let mut parsed = Vec::with_capacity(records.len());
     for record in &records {
         validate_finding_header(record)?;
         check_finding_provenance(conn, record)?;
         let linked = linked_paths(conn, record)?;
+        let linked_evidence = finding_repo.list_evidence(&record.id)?;
+        let observed_execution = summary_observed_execution(&evidence_by_id, &linked_evidence)?;
         let mut sinks = BTreeSet::new();
         for path in &linked {
             sinks.insert(path.sink_resource_id.clone());
@@ -1952,6 +1969,7 @@ fn summarize_scan(conn: &Connection, scan_id: &str) -> Result<Vec<FindingSummary
                 attack_path_count: linked.len() as u64,
                 affected_sink_count: sinks.len() as u64,
                 fingerprint: bounded_string("finding fingerprint", &record.fingerprint)?,
+                observed_execution,
             },
         ));
     }
@@ -1965,6 +1983,24 @@ fn summarize_scan(conn: &Connection, scan_id: &str) -> Result<Vec<FindingSummary
             .then(left.id.cmp(&right.id))
     });
     Ok(parsed.into_iter().map(|(_, summary)| summary).collect())
+}
+
+/// Derive a Finding summary's observation basis from the scan-scoped evidence
+/// map (SPRINT-042 §2.1), reusing the SAME S041 rule and DTO as the detail view.
+///
+/// The Finding's linked evidence rows are resolved in persisted order; a Finding
+/// whose links carry no `DIRECT` `opencode_runtime_observer` evidence yields an
+/// empty vec. A linked row absent from the scan's evidence (which same-scan
+/// provenance already rules out) is skipped rather than guessed.
+fn summary_observed_execution(
+    evidence_by_id: &BTreeMap<String, Evidence>,
+    linked: &[FindingEvidenceRecord],
+) -> Result<Vec<ObservedExecutionView>, PicoError> {
+    let resolved: Vec<Evidence> = linked
+        .iter()
+        .filter_map(|row| evidence_by_id.get(&row.evidence_id).cloned())
+        .collect();
+    observed_execution_views(&resolved)
 }
 
 fn enforce_dto_budget<T: Serialize>(value: &T) -> Result<(), PicoError> {
@@ -2178,6 +2214,85 @@ mod tests {
                 .map(|v| v.evidence_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["ev_1", "ev_2"]
+        );
+    }
+
+    fn summary_link(evidence_id: &str, position: u32) -> FindingEvidenceRecord {
+        FindingEvidenceRecord {
+            finding_id: "finding_1".to_string(),
+            evidence_id: evidence_id.to_string(),
+            position,
+            support_role: "SUPPORTING".to_string(),
+        }
+    }
+
+    #[test]
+    fn summary_observed_execution_populates_from_linked_runtime_evidence() {
+        let config = runtime_item(
+            EvidenceClass::Derived,
+            "opencode_effective_permission",
+            GOLDEN_KEY,
+            None,
+            "effective Bash permission: allow",
+            Some("FRESH"),
+            "ev_config",
+        );
+        let runtime = runtime_item(
+            EvidenceClass::Direct,
+            RUNTIME_OBSERVER_SOURCE_TYPE,
+            GOLDEN_KEY,
+            Some(OBSERVED_EXECUTION_CLASSIFICATION),
+            "OpenCode agent invoked Bash in this workspace (status: completed)",
+            Some("FRESH"),
+            "ev_runtime",
+        );
+        let evidence_by_id: BTreeMap<String, Evidence> = [config, runtime]
+            .into_iter()
+            .map(|item| (item.id.clone(), item))
+            .collect();
+        let links = [summary_link("ev_config", 0), summary_link("ev_runtime", 1)];
+
+        let views = summary_observed_execution(&evidence_by_id, &links).unwrap();
+        assert_eq!(
+            views,
+            vec![ObservedExecutionView {
+                relationship_key: GOLDEN_KEY.to_string(),
+                basis: "OBSERVED_EXECUTION".to_string(),
+                freshness: "FRESH".to_string(),
+                evidence_id: "ev_runtime".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn summary_observed_execution_is_empty_without_runtime_evidence() {
+        let config = runtime_item(
+            EvidenceClass::Derived,
+            "opencode_effective_permission",
+            GOLDEN_KEY,
+            None,
+            "effective Bash permission: allow",
+            Some("FRESH"),
+            "ev_config",
+        );
+        let evidence_by_id: BTreeMap<String, Evidence> = [config]
+            .into_iter()
+            .map(|item| (item.id.clone(), item))
+            .collect();
+
+        assert!(
+            summary_observed_execution(&evidence_by_id, &[summary_link("ev_config", 0)])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(summary_observed_execution(&evidence_by_id, &[])
+            .unwrap()
+            .is_empty());
+        // A linked id absent from the scan map is skipped, never guessed.
+        assert!(
+            summary_observed_execution(&evidence_by_id, &[summary_link("ev_missing", 0)])
+                .unwrap()
+                .is_empty()
         );
     }
 }
