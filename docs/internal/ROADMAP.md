@@ -1,7 +1,7 @@
 # Pico — Product Roadmap
 
 **File:** `ROADMAP.md`  
-**Status:** Implemented through v0.4 (advancement records §§20–23; ADVANCE with open caveats: independent v0.4 + carried v0.3 comprehension gates carried into v0.5); v0.5 in progress (S037 `pico watch`); v0.3 exit review pending
+**Status:** Implemented through v0.4 (advancement records §§20–23; ADVANCE with open caveats); v0.5 reviewed and decided **EXTEND** (§24: S037–S043 delivered, closeout required); v0.3 exit review pending
 **Date:** August 18, 2026  
 **Stage:** Post-architecture, implementation in progress (v0.1–v0.3 shipped; v0.4 in progress; see §§20–22)  
 **Depends on:** `PRODUCT_DEFINITION.md`, `TECHNICAL.md`, `ARCHITECTURE.md`
@@ -1027,7 +1027,7 @@ v0.2  Evidence and Authority Depth COMPLETE   (SPRINT-013..019; ADVANCE, §21)
 v0.3  Earned Expansion             COMPLETE   (SPRINT-020..023; ADVANCE, §22)
       v0.3 exit review             PENDING    (independent comprehension gate)
 v0.4  Security memory              ADVANCE with open caveats (S024–S036 DONE; independent v0.4 + carried v0.3 gates carried, §23)
-v0.5  Continuous observation       IN PROGRESS (S037 `pico watch`; S038 notices + `pico status`; S039 `pico runtime` survey; S040 opt-in `pico scan --runtime` content-free runtime evidence ingestion; S041 observed-execution explanation; S042 observation basis on finding summaries; S043 Claude Code observability probe — parsing deferred)
+v0.5  Continuous observation       IN PROGRESS / EXTEND (§24: S037–S043 delivered; measurement, downtime visibility, observation-data lifecycle, and dogfood outstanding)
 ```
 
 The v0.1 implementation plan referenced below was realized as Sprint 001 and
@@ -1388,4 +1388,149 @@ v0.5 slice 1 (S037 `pico watch`, FILESYSTEM_CHANGE) reuses the proven
 scan/diff engine unchanged and the reserved ARCHITECTURE §8.2 trigger
 slot; it adds no analysis, notification, runtime-event, or enforcement
 semantics. v0.5 must earn comprehension on `watch` output itself.
+```
+
+---
+
+# 24. v0.5 Phase-Exit Review and Decision Record
+
+Recorded 2026-09-16 after S037–S043. Format per §17. Reviewed against
+ROADMAP §9 exit criteria, §9 Scope/Non-goals, and §13/§14 gates. The review
+was conducted as an adversarial evidence audit: every verdict below cites the
+artifact that supports it, and every gap states what is missing.
+
+```text
+Phase: v0.5 — Continuous and Runtime Observation
+
+Decision: EXTEND
+
+Product claim proven:
+Pico can observe a bounded, config-file-driven runtime transition locally,
+and — with explicit opt-in — ingest content-free runtime metadata that joins
+the existing security graph and upgrades one capability edge from configured
+(DERIVED) to observed (CONFIRMED), with freshness derived from the fact's own
+time, honest refusal where semantics are not locally available, and no daemon,
+content capture, mutation, or second risk engine. Proven by fixtures,
+synthetic stores, and manual runs in disposable workspaces. NOT proven against
+a real developer decision.
+
+Exit criteria met (§9):
+- #2 Runtime evidence joins the same normalized graph without a second risk
+  engine (S040: existing evidence/relationship tables, schema stays v6, no new
+  scoring path).
+- #3 Pico clearly distinguishes observed execution from inferred capability
+  across scan summary, finding detail, finding list, and MCP (S041/S042;
+  DIRECT + opencode_runtime_observer is the only source that may produce it).
+- #5 Sensitive-content and secret canaries are absent from retained events,
+  logs, and outputs (sweeps in every S037–S043 suite).
+- #8 Manual scans remain authoritative and work with observation disabled
+  (default-scan byte-identity proven in-process and cross-revision).
+- §13 gates GREEN for evidence, read-only, determinism, boundary, local-first,
+  and compatibility (see the per-gate test list in the sprint docs).
+
+Exit criteria not met (§9):
+- #1 "measured latency and accuracy": NOT MEASURED. The only latency figure is
+  a design default (poll `--interval-secs 2`); there is no benchmark and no
+  accuracy corpus. Detection correctness is fixture-level only.
+- #4 "overhead stays within explicit local budgets": budgets are DECLARED
+  constants (7-day window, 10k rows, 3 s wall clock, one stat per interval) and
+  cap-enforcement is tested, but no CPU, I/O, wall-clock, or memory adherence
+  measurement exists.
+- #6 "missed events, observer downtime … visible": unsupported runtime states
+  ARE visible (coverage Unknown + rendered diagnostic). Observer DOWNTIME IS
+  NOT: no process detection by design (SPRINT-038 §2.3), so downtime is only
+  inferable from a >24 h staleness heuristic and never stated. Silence is not
+  surfaced as "not currently observing".
+- #7 "…how to disable or delete": what/why/where are documented (`watch
+  --help`, `pico runtime` notes, `pico status`). There is NO deletion or
+  retention path for `.pico/watch.jsonl` — it grows unbounded, and `pico prune`
+  does not touch it.
+- #9 "dogfood demonstrates that runtime observation changes at least one
+  security decision or remediation priority": NOT MET. No v0.5 dogfood exists;
+  `docs/internal/dogfood/` contains no watch/runtime captures, and all v0.5
+  evidence is synthetic or fixture-based.
+
+Additional §9 Scope gaps:
+- Trigger set is far narrower than §9 states: only FILESYSTEM_CHANGE is
+  implemented. Runtime-mode, MCP-capability, and credential-exposure changes
+  are covered only indirectly (config mtime); execution/approval events are
+  deliberately not triggers because approval/denial is not reliably observable
+  locally (S039). RUNTIME_EVENT/AGENT_REQUEST/SCHEDULED/CI remain reserved.
+- Of §9's six distinctions, "available capability" and "denied use" have no
+  representation in code; approved and denied are folded into one
+  NOT_AVAILABLE. This is honest but narrower than the documented scope.
+- Observation-data retention is undefined: `.pico/watch.jsonl` is unbounded,
+  which contradicts the §9 "retention budgets for continuous operation" scope.
+
+What users demonstrated:
+Nothing. Zero independent participants. No user has been observed using
+`watch`, `status`, `runtime`, or `scan --runtime`. Usefulness is unproven.
+
+What the evidence demonstrated:
+S037–S043 fixture and synthetic-store proof of the technical claim, including
+read-only/no-sidecar digests, content-free allowlisted extraction, fail-closed
+schema gating, and byte-stable outputs. Manual verification ran only in
+disposable workspaces with synthetic stores — never against the real 13 GB
+OpenCode store or a real Claude transcript set.
+
+Known false positives: none observed (vacuous — there is no corpus).
+Known false negatives: none observed (vacuous — there is no corpus).
+Known UNKNOWN states: approval/denial not locally observable (NOT_AVAILABLE);
+Claude Code transcript format unverifiable and parsing deferred; WAL staleness
+under immutable=1; offline provider authority.
+
+Self-security results:
+Zero secret leakage across all v0.5 sweeps; read-only digests and no-sidecar
+proofs for every new surface; provider allowlists intact; no mutation of the
+target environment; no daemon, no hook installation, no telemetry; no LLM in
+the truth path; `Cargo.toml`/`Cargo.lock` unchanged (the wall-clock bound uses
+an interrupt-handle watchdog rather than enabling rusqlite's `hooks` feature).
+
+Compatibility limits:
+Runtime ingestion supports one agent (OpenCode), one tool name (bash), and one
+store migration range (38); unsupported schemas fail closed with a rendered
+diagnostic. Claude Code observability is probe-only. `watch`/`status`/`runtime`
+are not exposed over MCP (a documented per-sprint non-goal), so an agent
+interface cannot see change notices.
+
+What was learned:
+The theory held: only enforced controls block paths, and the honest answer to
+"can Pico observe approval and execution semantics?" is NO for approval/denial
+and content-free-yes for one execution signal. Reading a third-party store
+safely is achievable without any dependency change and without content, and
+rendering-only enrichment can explain more without moving finding identity.
+The binding constraints are now evidentiary, not technical: nothing is
+measured, nothing is dogfooded, and silence is not yet distinguishable from
+safety.
+
+Why EXTEND rather than ADVANCE:
+v0.6 (multi-agent defense) compounds uncertainty at every hop and explicitly
+depends on "validated runtime semantics for supported agent interactions". v0.5
+has demonstrated the mechanics but has not measured latency/overhead, has not
+made observer downtime visible, has no observation-data lifecycle, has no real
+dogfood, and has never closed a human comprehension gate (the carried v0.3 and
+v0.4 gates remain NOT RUN, and no v0.5 protocol exists). ADVANCE would require
+asserting measured performance, observed user value, and comprehension that the
+evidence does not support. Per §17, the default is not ADVANCE.
+
+Required closeout before v0.5 may advance again:
+1. MEASURE: record detection latency vs poll interval, per-iteration local
+   overhead, and budget adherence as values, not assertions.
+2. VISIBILITY: surface an explicit "not currently observing / events may have
+   been missed" state in `pico status` (no daemon required — e.g. a last-seen
+   marker or scan/observation gap), so silence is never read as safety.
+3. LIFECYCLE: define retention/prune and a documented deletion path for
+   `.pico/watch.jsonl`, with a bounded-growth test.
+4. CANON DECISION: either implement the §9 distinctions "available capability"
+   and "denied use", or amend §9's wording to the four distinctions Pico can
+   honestly support. This is an explicit canon decision, not silent drift.
+5. DOGFOOD: at least one real (non-synthetic) run in which a runtime
+   observation changes a security decision or remediation priority that static
+   scanning alone could not resolve, recorded under `docs/internal/dogfood/`.
+6. COMPREHENSION: administer an independent v0.5 protocol and record the
+   carried v0.3/v0.4 gate results explicitly rather than inferring closure.
+
+Until then, v0.5 remains IN PROGRESS and no v0.6 scope is authorized. Slices
+S037–S043 are delivered and trustworthy within their stated limits; the phase
+is not adjudicated as complete.
 ```
